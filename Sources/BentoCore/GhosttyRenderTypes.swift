@@ -21,6 +21,37 @@ public struct GhosttyRGB: Equatable, Hashable, Sendable {
     }
 }
 
+/// Semantic-content tag for a single cell. Mirrors
+/// `GhosttyCellSemanticContent` from
+/// `External/ghostty-vt-install/include/ghostty/vt/screen.h`:
+///   0 = OUTPUT, 1 = INPUT, 2 = PROMPT.
+///
+/// Set by libghostty's OSC 133 (semantic prompt) handling — see
+/// `scripts/bento-shell-integration.{zsh,bash,fish}` for the markers
+/// the shell emits. Cells default to `.output`, which means "not
+/// part of a prompt or user input" — i.e. command output (or just
+/// idle cells before any integration runs). The renderer uses this
+/// to draw a 1-px separator between command blocks (output → prompt
+/// transitions). When no shell integration is sourced, every cell is
+/// `.output` and no separators ever draw — the right behavior for
+/// shells that don't know about OSC 133.
+public enum GhosttySemanticContent: UInt8, Sendable, Equatable, Hashable {
+    case output = 0
+    case input = 1
+    case prompt = 2
+
+    /// Map a raw `GhosttyCellSemanticContent` value to the Swift enum.
+    /// Unknown values fall back to `.output` because that's the libghostty
+    /// default for an uninitialized / never-tagged cell.
+    public static func from(raw: Int) -> GhosttySemanticContent {
+        switch raw {
+        case 1: return .input
+        case 2: return .prompt
+        default: return .output
+        }
+    }
+}
+
 /// Underline visual style. Mirrors `GhosttySgrUnderline` from
 /// `External/ghostty-vt-install/include/ghostty/vt/sgr.h`:
 ///   0 = NONE, 1 = SINGLE, 2 = DOUBLE, 3 = CURLY,
@@ -101,6 +132,10 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
     /// model so the future interactive-hyperlink feature has a place to
     /// land without a second contract change.
     public let hyperlinkURI: String?
+    /// OSC 133 semantic-content tag — `.output`, `.input`, or `.prompt`.
+    /// Defaults to `.output`. Used by the renderer to detect command-block
+    /// boundaries (output → prompt) and draw a subtle separator line.
+    public let semanticContent: GhosttySemanticContent
 
     public init(
         text: String,
@@ -118,7 +153,8 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
         overline: Bool = false,
         underlineStyle: GhosttyUnderlineStyle? = nil,
         underlineColor: GhosttyRGB? = nil,
-        hyperlinkURI: String? = nil
+        hyperlinkURI: String? = nil,
+        semanticContent: GhosttySemanticContent = .output
     ) {
         self.text = text
         self.foreground = foreground
@@ -144,6 +180,7 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
         self.overline = overline
         self.underlineColor = underlineColor
         self.hyperlinkURI = hyperlinkURI
+        self.semanticContent = semanticContent
     }
 
     /// Convenience: a fully-default empty cell. Useful for tests and as

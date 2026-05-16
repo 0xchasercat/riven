@@ -152,17 +152,40 @@ struct STTextEditorRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = NSColor(hex: theme.chrome.panel.hex)
+        scrollView.backgroundColor = EditorChrome.editorBackground(theme)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
+        // Use manual insets so the editor body breathes vertically and the
+        // STTextView gutter (which only auto-offsets when this flag is on)
+        // stays flush with the text rather than floating mid-scroller.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(
+            top: EditorChrome.verticalPadding,
+            left: 0,
+            bottom: EditorChrome.verticalPadding,
+            right: 0
+        )
+        scrollView.scrollerInsets = NSEdgeInsets(
+            top: -EditorChrome.verticalPadding,
+            left: 0,
+            bottom: -EditorChrome.verticalPadding,
+            right: 0
+        )
 
         let textView = EditorTextView()
-        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.font = EditorChrome.editorFont
         textView.textColor = NSColor(hex: theme.chrome.text.hex)
         textView.insertionPointColor = NSColor(hex: theme.chrome.activeBorder.hex)
-        textView.backgroundColor = NSColor(hex: theme.chrome.panel.hex)
+        textView.backgroundColor = EditorChrome.editorBackground(theme)
         textView.isEditable = true
         textView.isSelectable = true
+        // Horizontal breathing room inside the text container so glyphs
+        // don't crowd the gutter or the right edge.
+        textView.textContainer.lineFragmentPadding = EditorChrome.horizontalPadding
+        textView.highlightSelectedLine = true
+        textView.selectedLineHighlightColor = EditorChrome.currentLineColor(theme)
+        textView.showsLineNumbers = true
+        EditorChrome.styleGutter(textView.gutterView, theme: theme)
         textView.textDelegate = context.coordinator
         textView.onSaveRequested = { [weak coordinator = context.coordinator] in
             coordinator?.save()
@@ -182,12 +205,19 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         // current across view re-evaluations.
         context.coordinator.updateSaveResultHandler(onSaveResult)
 
-        scrollView.backgroundColor = NSColor(hex: theme.chrome.panel.hex)
+        scrollView.backgroundColor = EditorChrome.editorBackground(theme)
         guard let textView = scrollView.documentView as? EditorTextView else { return }
-        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.font = EditorChrome.editorFont
         textView.textColor = NSColor(hex: theme.chrome.text.hex)
         textView.insertionPointColor = NSColor(hex: theme.chrome.activeBorder.hex)
-        textView.backgroundColor = NSColor(hex: theme.chrome.panel.hex)
+        textView.backgroundColor = EditorChrome.editorBackground(theme)
+        textView.textContainer.lineFragmentPadding = EditorChrome.horizontalPadding
+        textView.highlightSelectedLine = true
+        textView.selectedLineHighlightColor = EditorChrome.currentLineColor(theme)
+        // Idempotent: setter no-ops when already true, otherwise creates
+        // the gutter so theme switches mid-session still pick up styling.
+        textView.showsLineNumbers = true
+        EditorChrome.styleGutter(textView.gutterView, theme: theme)
 
         // Reconcile URL transitions. Re-asserting the same URL preserves
         // any unsaved edits (alpha policy); switching to a different URL
@@ -351,4 +381,118 @@ enum CodePreview {
         }
     }
     """
+}
+
+/// Visual constants and small color derivations that make the editor pane
+/// read as a distinct surface from the terminal. Centralised here so the
+/// `makeNSView` / `updateNSView` paths stay in lock-step and theme switches
+/// re-derive the same shades.
+enum EditorChrome {
+    /// 13 pt monospaced. Bento favors SF Mono when available, otherwise
+    /// falls back to Menlo. Avoids `monospacedSystemFont`'s slightly
+    /// rounded glyphs to better signal "code editor" vs. terminal output
+    /// (which already uses the same size — distinction comes from gutter,
+    /// current-line highlight, and insets, not type size).
+    static var editorFont: NSFont {
+        if let sfMono = NSFont(name: "SF Mono", size: 13) {
+            return sfMono
+        }
+        if let menlo = NSFont(name: "Menlo", size: 13) {
+            return menlo
+        }
+        return NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    }
+
+    /// Horizontal text-container padding. Applied via
+    /// `NSTextContainer.lineFragmentPadding` so the cursor & glyphs sit
+    /// ~12 pt off both edges without disturbing layout-manager metrics.
+    static let horizontalPadding: CGFloat = 12
+
+    /// Vertical breathing room. Lives on the enclosing `NSScrollView` as
+    /// `contentInsets` because the STTextView gutter is a floating
+    /// subview and stays glued to the document view's top edge.
+    static let verticalPadding: CGFloat = 8
+
+    /// Editor body background. Blends `panel` (80%) with `background`
+    /// (20%) so the editor reads as a different surface than the terminal
+    /// at a glance, without introducing a new theme key. The blend lands
+    /// slightly darker on `bento`/`carbon`/`tokyo` (all dark themes) and
+    /// slightly lighter on `paper`, which is the natural read in both
+    /// directions.
+    static func editorBackground(_ theme: ThemeSpec) -> NSColor {
+        blend(
+            NSColor(hex: theme.chrome.panel.hex),
+            with: NSColor(hex: theme.chrome.background.hex),
+            ratio: 0.20
+        )
+    }
+
+    /// Gutter background. Pushes one extra step toward `background` so
+    /// the gutter reads as a recessed strip relative to the editor body.
+    static func gutterBackground(_ theme: ThemeSpec) -> NSColor {
+        blend(
+            editorBackground(theme),
+            with: NSColor(hex: theme.chrome.background.hex),
+            ratio: 0.45
+        )
+    }
+
+    /// Current-line highlight. `activeBorder` at ~8% alpha — present
+    /// enough to find the caret on a row scan, never loud enough to
+    /// distract while typing.
+    static func currentLineColor(_ theme: ThemeSpec) -> NSColor {
+        NSColor(hex: theme.chrome.activeBorder.hex).withAlphaComponent(0.08)
+    }
+
+    /// Configures the STTextView-owned gutter. Safe to call repeatedly:
+    /// every property assignment is idempotent. Called once after the
+    /// gutter is auto-created and again on every `updateNSView` so theme
+    /// changes propagate without rebuilding the text view.
+    ///
+    /// `@MainActor` because several STGutterView properties (notably
+    /// `highlightSelectedLine`) are themselves actor-isolated; the call
+    /// sites in `makeNSView`/`updateNSView` already run on the main
+    /// actor under SwiftUI's `NSViewRepresentable` contract.
+    @MainActor
+    static func styleGutter(_ gutter: STGutterView?, theme: ThemeSpec) {
+        guard let gutter else { return }
+        // ~40 pt minimum reads as a deliberate strip even on short files;
+        // STTextView will still grow it for 4+ digit line numbers.
+        gutter.minimumThickness = 40
+        // Right-align numbers with ~6 pt of breathing room from the body
+        // edge. STGutterLineNumberCell honors `trailing` as right padding.
+        gutter.insets = STRulerInsets(leading: 8, trailing: 6)
+        gutter.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        gutter.textColor = NSColor(hex: theme.chrome.dimText.hex)
+        gutter.selectedLineTextColor = NSColor(hex: theme.chrome.text.hex)
+        gutter.highlightSelectedLine = false
+        gutter.selectedLineHighlightColor = currentLineColor(theme)
+        // STGutterView.backgroundColor is internal, but the only thing it
+        // drives (besides toggling a fallback NSVisualEffectView when nil)
+        // is `layer?.backgroundColor`. STTextView seeds gutter with a
+        // non-nil background from `textView.backgroundColor` before this
+        // runs, so the visual-effect fallback path isn't active and we
+        // can safely tint the layer directly to recess the strip a step
+        // below the editor body.
+        gutter.wantsLayer = true
+        gutter.layer?.backgroundColor = gutterBackground(theme).cgColor
+        gutter.drawSeparator = true
+        gutter.separatorColor = NSColor(hex: theme.chrome.border.hex)
+    }
+
+    /// Linear blend in the device RGB space. `ratio` is the contribution
+    /// of `other`; `0.0` returns `base`, `1.0` returns `other`. Falls back
+    /// to `base` if either color can't bridge to `deviceRGB` (defensive —
+    /// the hex initializer above always produces a calibratedRGB color so
+    /// the fallback is mostly belt-and-suspenders).
+    private static func blend(_ base: NSColor, with other: NSColor, ratio: CGFloat) -> NSColor {
+        guard
+            let a = base.usingColorSpace(.deviceRGB),
+            let b = other.usingColorSpace(.deviceRGB)
+        else { return base }
+        let r = a.redComponent * (1 - ratio) + b.redComponent * ratio
+        let g = a.greenComponent * (1 - ratio) + b.greenComponent * ratio
+        let bl = a.blueComponent * (1 - ratio) + b.blueComponent * ratio
+        return NSColor(deviceRed: r, green: g, blue: bl, alpha: 1)
+    }
 }

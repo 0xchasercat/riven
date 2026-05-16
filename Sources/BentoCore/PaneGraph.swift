@@ -141,9 +141,17 @@ public struct PaneGraph: Hashable, Codable, Sendable {
         default:
             childKind = .terminal(TerminalPane(command: nil, cwd: inheritedCWD))
         }
+        // Use a stable, kind-derived name rather than copying the parent's
+        // (which may have been mutated to something file-specific elsewhere).
+        let childName: String
+        switch childKind {
+        case .workspace: childName = "workspace"
+        case .terminal: childName = "shell"
+        case .editor: childName = "editor"
+        }
         let child = PaneDescriptor(
             id: childID,
-            name: "\(parent.name) copy",
+            name: childName,
             kind: childKind,
             isFocused: true
         )

@@ -64,19 +64,32 @@ enum GhosttyRenderer {
         var cursorColor: NSColor
         var fontSize: CGFloat
         var fontName: String?
+        /// Color used to draw the 1-px separator line at command-block
+        /// boundaries (OSC 133 output → prompt transitions). Should be
+        /// `theme.chrome.border` at low alpha so the line is subtle.
+        /// When the shell has no integration sourced, no cells are
+        /// tagged as `.prompt` so the separator never draws.
+        var blockSeparator: NSColor
 
         init(
             defaultForeground: NSColor,
             defaultBackground: NSColor,
             cursorColor: NSColor,
             fontSize: CGFloat,
-            fontName: String? = nil
+            fontName: String? = nil,
+            blockSeparator: NSColor? = nil
         ) {
             self.defaultForeground = defaultForeground
             self.defaultBackground = defaultBackground
             self.cursorColor = cursorColor
             self.fontSize = fontSize
             self.fontName = fontName
+            // Default: the renderer's foreground at very low alpha. Callers
+            // that have a theme.chrome.border value should pass it through
+            // (also at low alpha) — this default just keeps things sensible
+            // for callers that don't know about block separators yet.
+            self.blockSeparator = blockSeparator
+                ?? defaultForeground.withAlphaComponent(0.18)
         }
     }
 
@@ -140,10 +153,14 @@ enum GhosttyRenderer {
         // allocations.
         var colorCache = ColorCache()
 
-        // 2 + 3 + 4. Per-row passes.
+        // 2 + 3 + 4. Per-row passes. We pre-coalesce all rows once so the
+        // separator pass (which compares row N's leading semantic against
+        // row N-1's trailing semantic) doesn't have to re-coalesce.
         ctx.textMatrix = .identity
+        let perRowRuns: [[StyledRun]] = frame.cells.map { TerminalRunCoalescer.runs(in: $0) }
+
         for (rowIdx, row) in frame.cells.enumerated() {
-            let runs = TerminalRunCoalescer.runs(in: row)
+            let runs = perRowRuns[rowIdx]
             let yTop = CGFloat(rowIdx) * cellHeight
 
             // Pass 1: backgrounds. Skip runs whose effective background
@@ -165,6 +182,36 @@ enum GhosttyRenderer {
                 )
                 ctx.setFillColor(bg.cgColor)
                 ctx.fill(rect)
+            }
+
+            // Pass 1.5: block separator (OSC 133 output → prompt).
+            //
+            // Draw a 1-px line along the TOP edge of row N when the row's
+            // leading non-blank semantic is `.prompt` AND the previous
+            // row's trailing non-blank semantic is `.output`. The line
+            // sits between backgrounds and glyphs so cell backgrounds
+            // don't paint over it. Width spans the full terminal so the
+            // visual rhythm matches the row grid.
+            //
+            // No-shell-integration case is implicit: every cell defaults
+            // to `.output` and `leadingSemantic` never returns `.prompt`,
+            // so nothing draws.
+            if rowIdx > 0,
+               let leading = leadingSemantic(runs: runs, cells: row),
+               leading == .prompt,
+               let trailing = trailingSemantic(
+                   runs: perRowRuns[rowIdx - 1],
+                   cells: frame.cells[rowIdx - 1]
+               ),
+               trailing == .output {
+                let sepRect = NSRect(
+                    x: 0,
+                    y: yTop,
+                    width: bounds.width,
+                    height: 1
+                )
+                ctx.setFillColor(configuration.blockSeparator.cgColor)
+                ctx.fill(sepRect)
             }
 
             // Pass 2: glyphs. Build one CTLine per run. Skip empty-text
@@ -278,6 +325,58 @@ enum GhosttyRenderer {
             baseFont: baseFont,
             colorCache: &colorCache
         )
+    }
+
+    // MARK: - Block-separator detection
+
+    /// The semantic-content tag of the row's first non-blank cell, or
+    /// nil if the row is entirely blank. Used to detect output → prompt
+    /// transitions for the block separator. We walk the cell array rather
+    /// than the runs because a blank cell still carries a semantic tag,
+    /// and runs are coalesced by tag — but we want the visually-first
+    /// printable cell to decide a row's character.
+    ///
+    /// "Blank" here means an empty grapheme or a literal space with no
+    /// background color override: those cells are usually just padding
+    /// between commands and shouldn't drive the boundary.
+    private static func leadingSemantic(
+        runs: [StyledRun],
+        cells: [GhosttyResolvedCell]
+    ) -> GhosttySemanticContent? {
+        for cell in cells {
+            if cellIsPrintable(cell) {
+                return cell.semanticContent
+            }
+        }
+        // Fall back to runs: if every cell was "blank" but a run still
+        // exists with a prompt/input tag (e.g. a colored-background
+        // prompt block with spaces), honor the first run's tag.
+        return runs.first?.semanticContent
+    }
+
+    /// The semantic-content tag of the row's last non-blank cell. Mirror
+    /// of `leadingSemantic` but walking backwards.
+    private static func trailingSemantic(
+        runs: [StyledRun],
+        cells: [GhosttyResolvedCell]
+    ) -> GhosttySemanticContent? {
+        for cell in cells.reversed() {
+            if cellIsPrintable(cell) {
+                return cell.semanticContent
+            }
+        }
+        return runs.last?.semanticContent
+    }
+
+    /// Cell counts as printable for boundary detection when it has visible
+    /// text or a non-default background. Wide tails follow their leading
+    /// cell so we deliberately skip them — the wide cell already decided
+    /// the boundary for both columns.
+    private static func cellIsPrintable(_ cell: GhosttyResolvedCell) -> Bool {
+        if cell.isWideTail { return false }
+        if cell.background != nil { return true }
+        let trimmed = cell.text.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty
     }
 
     // MARK: - Color resolution

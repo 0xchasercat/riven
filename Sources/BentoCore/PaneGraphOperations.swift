@@ -65,9 +65,19 @@ public extension PaneGraph {
         default:
             childKind = .terminal(TerminalPane(command: nil, cwd: inheritedCWD))
         }
+        // Use a stable name based on the new pane's kind rather than copying
+        // the parent's name. This avoids "README.md copy" appearing on a
+        // split terminal when the parent's name had been mutated by some
+        // file-open code path.
+        let childName: String
+        switch childKind {
+        case .workspace: childName = "workspace"
+        case .terminal: childName = "shell"
+        case .editor: childName = "editor"
+        }
         let child = PaneDescriptor(
             id: PaneID(),
-            name: "\(parent.name) copy",
+            name: childName,
             kind: childKind,
             isFocused: true
         )

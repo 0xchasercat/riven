@@ -42,7 +42,7 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         let hosting = NSHostingController(rootView: BentoRootView().environmentObject(controller))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Bento"
-        window.setContentSize(NSSize(width: 1200, height: 760))
+        window.setContentSize(NSSize(width: 1600, height: 1000))
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)

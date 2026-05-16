@@ -173,10 +173,14 @@ public actor WorkspaceController {
     }
 
     private func defaultPaneGraph(for projectRoot: URL) -> PaneGraph {
+        // New projects open into a single `.workspace` leaf so the user
+        // gets the integrated [sidebar | terminal | editor-on-open] layout
+        // by default. Legacy `.terminal` / `.editor` cases still load from
+        // older snapshots; new graphs use `.workspace` exclusively.
         let pane = PaneDescriptor(
             id: PaneID("workspace-root"),
-            name: "shell",
-            kind: .terminal(TerminalPane(command: nil, cwd: projectRoot.path)),
+            name: "workspace",
+            kind: .workspace(WorkspaceGroup(initialCwd: projectRoot.path)),
             isFocused: true
         )
         return PaneGraph(root: pane)

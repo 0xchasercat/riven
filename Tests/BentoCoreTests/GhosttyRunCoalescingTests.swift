@@ -27,7 +27,8 @@ struct GhosttyRunCoalescingTests {
         overline: Bool = false,
         underlineStyle: GhosttyUnderlineStyle? = nil,
         underlineColor: GhosttyRGB? = nil,
-        hyperlinkURI: String? = nil
+        hyperlinkURI: String? = nil,
+        semanticContent: GhosttySemanticContent = .output
     ) -> GhosttyResolvedCell {
         GhosttyResolvedCell(
             text: text,
@@ -45,7 +46,8 @@ struct GhosttyRunCoalescingTests {
             overline: overline,
             underlineStyle: underlineStyle,
             underlineColor: underlineColor,
-            hyperlinkURI: hyperlinkURI
+            hyperlinkURI: hyperlinkURI,
+            semanticContent: semanticContent
         )
     }
 
@@ -419,6 +421,39 @@ struct GhosttyRunCoalescingTests {
         #expect(runs[1].hyperlinkURI == "https://example.com/b")
         #expect(runs[2].text == "d")
         #expect(runs[2].hyperlinkURI == nil)
+    }
+
+    @Test("two adjacent cells with different semantic content produce two runs")
+    func semanticContentChangeBreaksRun() {
+        // OSC 133 tags must split runs: the renderer relies on runs not
+        // spanning a semantic transition so per-row block-boundary
+        // detection can also work on the coalesced output. Two `$` cells
+        // tagged `.prompt` should coalesce; the moment we hit an
+        // `.input` cell (typed by the user), a fresh run must start.
+        // Identical fg/bg/style across all three cells — only the
+        // semantic tag differs, which on its own must be enough to
+        // break the run.
+        let row = [
+            cell("$", semanticContent: .prompt),
+            cell(" ", semanticContent: .prompt),
+            cell("l", semanticContent: .input),
+            cell("s", semanticContent: .input),
+            cell("\u{0}", semanticContent: .output),
+            cell("o", semanticContent: .output),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 3)
+        #expect(runs[0].semanticContent == .prompt)
+        #expect(runs[0].text == "$ ")
+        #expect(runs[0].startColumn == 0)
+        #expect(runs[0].endColumn == 2)
+        #expect(runs[1].semanticContent == .input)
+        #expect(runs[1].text == "ls")
+        #expect(runs[1].startColumn == 2)
+        #expect(runs[1].endColumn == 4)
+        #expect(runs[2].semanticContent == .output)
+        #expect(runs[2].startColumn == 4)
+        #expect(runs[2].endColumn == 6)
     }
 
     @Test("the single-underline convenience flag still works for legacy callsites")

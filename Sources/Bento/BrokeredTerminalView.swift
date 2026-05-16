@@ -88,11 +88,23 @@ public final class BrokeredTerminalView: NSView {
     private let paneID: PaneID
     private let agentClient: AgentClient
 
+    /// Fired when the shell's reported current working directory changes
+    /// (via OSC 7). Called on the main actor. See `lastReportedCwd` below
+    /// for the dedupe behaviour.
+    public var onCwdChanged: (String) -> Void
+
     // MARK: - Internal state
 
     private let bridge = GhosttyBridge()
     private var session: GhosttySessionHandle?
     private var subscriptionTask: Task<Void, Never>?
+
+    /// Last cwd value we surfaced via `onCwdChanged`. We only fire the
+    /// callback when the new value is non-nil *and* differs from this. A
+    /// `nil` read from `readCurrentCwd` means "no OSC 7 received yet" —
+    /// we leave the previous value in place rather than resetting the
+    /// sidebar to nothing.
+    private var lastReportedCwd: String?
 
     private var cellWidth: CGFloat = 8
     private var cellHeight: CGFloat = 16
@@ -114,12 +126,14 @@ public final class BrokeredTerminalView: NSView {
         paneID: PaneID = PaneID(),
         shell: ShellSpec = ShellSpec(),
         configuration: Configuration = Configuration(),
-        agentClient: AgentClient
+        agentClient: AgentClient,
+        onCwdChanged: @escaping (String) -> Void = { _ in }
     ) {
         self.paneID = paneID
         self.shellSpec = shell
         self.configuration = configuration
         self.agentClient = agentClient
+        self.onCwdChanged = onCwdChanged
         self.font = Self.resolveFont(name: configuration.fontName, size: configuration.fontSize)
         super.init(frame: frame)
         self.wantsLayer = true
@@ -308,6 +322,32 @@ public final class BrokeredTerminalView: NSView {
         needsDisplay = true
     }
 
+    /// Pull the shell's OSC 7 cwd from the Ghostty bridge and, if it
+    /// genuinely changed since the last report, fire `onCwdChanged`.
+    ///
+    /// Dedupe contract:
+    ///   - `nil` (no OSC 7 received yet) means "no change", not "reset
+    ///     to nothing" — keep the previously reported value in place so
+    ///     the sidebar doesn't go blank before the shell prints its
+    ///     first prompt.
+    ///   - We only fire when the new non-nil value differs from
+    ///     `lastReportedCwd`. Hammering the callback every frame would
+    ///     thrash the workspace controller's persistence + the
+    ///     sidebar's file-tree scan.
+    ///
+    /// Called from `draw(_:)` so we already hold the main actor. The
+    /// callback runs synchronously inside the draw pass; the orchestrator
+    /// is responsible for any deferred work it needs (e.g. dispatching
+    /// model mutations off the render).
+    private func reportCwdIfChanged(on session: GhosttySessionHandle) {
+        guard let newCwd = try? bridge.readCurrentCwd(session),
+              !newCwd.isEmpty,
+              newCwd != lastReportedCwd
+        else { return }
+        lastReportedCwd = newCwd
+        onCwdChanged(newCwd)
+    }
+
     private func teardown() {
         subscriptionTask?.cancel()
         subscriptionTask = nil
@@ -369,6 +409,11 @@ public final class BrokeredTerminalView: NSView {
         let frame: GhosttyRenderFrame
         if let session, let live = try? bridge.snapshotFrame(session) {
             frame = live
+            // Piggy-back on the snapshot to read the shell's OSC 7 cwd.
+            // The read is cheap (a single libghostty call returning a
+            // borrowed pointer copied into Swift) and only matters when
+            // it actually changes — see `reportCwdIfChanged` for dedupe.
+            reportCwdIfChanged(on: session)
         } else {
             frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
         }

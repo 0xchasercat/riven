@@ -20,19 +20,26 @@ struct TerminalPaneView: NSViewRepresentable {
     let cwd: String
     let command: String?
     let agentClient: AgentClient
+    /// Forwarded to `BrokeredTerminalView.onCwdChanged` on each render.
+    /// SwiftUI rebuilds this struct on every parent update, so we
+    /// re-bind the latest closure into the cached `NSView` inside
+    /// `updateNSView` rather than only at `makeNSView` time.
+    let onCwdChanged: (String) -> Void
 
     init(
         theme: ThemeSpec,
         paneID: PaneID = PaneID(),
         cwd: String = NSHomeDirectory(),
         command: String? = nil,
-        agentClient: AgentClient
+        agentClient: AgentClient,
+        onCwdChanged: @escaping (String) -> Void = { _ in }
     ) {
         self.theme = theme
         self.paneID = paneID
         self.cwd = cwd
         self.command = command
         self.agentClient = agentClient
+        self.onCwdChanged = onCwdChanged
     }
 
     func makeNSView(context: Context) -> BrokeredTerminalView {
@@ -54,7 +61,8 @@ struct TerminalPaneView: NSViewRepresentable {
             paneID: paneID,
             shell: shell,
             configuration: configuration(for: theme),
-            agentClient: agentClient
+            agentClient: agentClient,
+            onCwdChanged: onCwdChanged
         )
         // Make the terminal first-responder once it actually has a window.
         DispatchQueue.main.async { [weak view] in
@@ -65,6 +73,11 @@ struct TerminalPaneView: NSViewRepresentable {
 
     func updateNSView(_ nsView: BrokeredTerminalView, context: Context) {
         nsView.configure(configuration(for: theme))
+        // Re-bind the cwd callback so the closure captured here always
+        // reflects the latest SwiftUI environment. Without this, a stale
+        // closure from `makeNSView` would persist across orchestrator
+        // updates.
+        nsView.onCwdChanged = onCwdChanged
     }
 
     private func configuration(for theme: ThemeSpec) -> BrokeredTerminalView.Configuration {

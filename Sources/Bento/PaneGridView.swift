@@ -305,24 +305,64 @@ private struct PaneTreeBuilder {
         case let .leaf(id):
             return makeLeaf(id: id)
         case let .split(direction, first, second):
-            return makeSplit(direction: direction, first: build(node: first), second: build(node: second))
+            return makeSplit(
+                direction: direction,
+                first: build(node: first),
+                second: build(node: second),
+                autosaveName: Self.autosaveName(for: .split(direction, first, second))
+            )
         }
     }
 
-    private func makeSplit(direction: SplitDirection, first: NSView, second: NSView) -> NSSplitView {
+    /// Collect the leaf paneIDs under `node`, sort them, and join with `-`.
+    /// Used to build a deterministic `autosaveName` for an `NSSplitView`:
+    /// any time the same set of leaves coexists under one split, NSSplitView
+    /// can restore the divider position from `UserDefaults`.
+    static func autosaveName(for node: PaneNode) -> String {
+        let ids = leafIDs(of: node).map(\.rawValue).sorted()
+        return "bento-split-\(ids.joined(separator: "-"))"
+    }
+
+    private static func leafIDs(of node: PaneNode) -> [PaneID] {
+        switch node {
+        case let .leaf(id):
+            return [id]
+        case let .split(_, first, second):
+            return leafIDs(of: first) + leafIDs(of: second)
+        }
+    }
+
+    private func makeSplit(
+        direction: SplitDirection,
+        first: NSView,
+        second: NSView,
+        autosaveName: String
+    ) -> NSSplitView {
         let split = BentoSplitView()
         split.isVertical = (direction == .right) // .right == side-by-side == vertical divider
         split.dividerStyle = .thin
         split.translatesAutoresizingMaskIntoConstraints = false
+        // Setting `autosaveName` lets NSSplitView persist the divider
+        // position under `UserDefaults` (key: "NSSplitView Subview Frames
+        // <autosaveName>") across pane-graph rebuilds AND across app
+        // launches. Must be set before subviews are added so the first
+        // layout reads from the saved value.
+        split.autosaveName = autosaveName
         split.addArrangedSubview(first)
         split.addArrangedSubview(second)
-        // Default to a 50/50 split. NSSplitView restores the divider when
-        // the user drags it, but a freshly built tree starts even.
-        DispatchQueue.main.async { [weak split] in
-            guard let split, split.arrangedSubviews.count == 2 else { return }
-            let total = split.isVertical ? split.bounds.width : split.bounds.height
-            if total > 0 {
-                split.setPosition((total - split.dividerThickness) / 2, ofDividerAt: 0)
+        // Default to a 50/50 split, but ONLY when there's no autosaved
+        // divider position. NSSplitView restores from autosave automatically;
+        // calling `setPosition` here would fight that on every rebuild.
+        let hasSavedPosition = UserDefaults.standard.object(
+            forKey: "NSSplitView Subview Frames \(autosaveName)"
+        ) != nil
+        if !hasSavedPosition {
+            DispatchQueue.main.async { [weak split] in
+                guard let split, split.arrangedSubviews.count == 2 else { return }
+                let total = split.isVertical ? split.bounds.width : split.bounds.height
+                if total > 0 {
+                    split.setPosition((total - split.dividerThickness) / 2, ofDividerAt: 0)
+                }
             }
         }
         return split

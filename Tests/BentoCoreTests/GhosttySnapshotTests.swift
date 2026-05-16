@@ -306,6 +306,116 @@ struct GhosttySnapshotTests {
         }
     }
 
+    // MARK: - OSC 133 semantic content
+
+    @Test("cells default to .output before any OSC 133 marker is fed")
+    func semanticContentDefaultsToOutput() throws {
+        let (bridge, session) = try makeSession()
+        defer { try? bridge.close(session) }
+
+        try bridge.feed(Data("hi".utf8), to: session)
+
+        let frame = try bridge.snapshotFrame(session)
+        // Without any OSC 133 markers the entire grid is `.output` (the
+        // libghostty default for never-tagged cells). This is what
+        // shells without integration sourced look like — and matches
+        // the contract that the renderer draws zero separators in
+        // that case.
+        for row in frame.cells {
+            for cell in row {
+                #expect(cell.semanticContent == .output)
+            }
+        }
+    }
+
+    @Test("OSC 133 A + B + C + D markers tag prompt / input / output cells")
+    func semanticContentFromOsc133() throws {
+        let (bridge, session) = try makeSession(cols: 40, rows: 6)
+        defer { try? bridge.close(session) }
+
+        // Simulate a single command cycle the way bento-shell-integration
+        // emits it:
+        //   - OSC 133;A : prompt start
+        //   - "$ "       : prompt body
+        //   - OSC 133;B  : prompt end, user input begins
+        //   - "echo hi"  : user input
+        //   - OSC 133;C  : command starts, output follows
+        //   - "\r\nhi"   : output text on a new row
+        //   - OSC 133;D  : command ends
+        let esc = "\u{1B}"
+        let st = "\u{07}" // BEL works as ST terminator for OSC sequences
+        var bytes = ""
+        bytes += "\(esc)]133;A\(st)"
+        bytes += "$ "
+        bytes += "\(esc)]133;B\(st)"
+        bytes += "echo hi"
+        bytes += "\(esc)]133;C\(st)"
+        bytes += "\r\nhi"
+        bytes += "\(esc)]133;D\(st)"
+        try bridge.feed(Data(bytes.utf8), to: session)
+
+        let frame = try bridge.snapshotFrame(session)
+
+        // Row 0: "$ " is prompt, "echo hi" is user input.
+        let row0 = frame.cells[0]
+        #expect(row0[0].text == "$")
+        #expect(row0[0].semanticContent == .prompt,
+                "row0 col0 expected .prompt for the '$'")
+        #expect(row0[1].text == " ")
+        #expect(row0[1].semanticContent == .prompt,
+                "row0 col1 expected .prompt for the prompt-trailing space")
+        let echoLetters = ["e", "c", "h", "o"]
+        for (i, ch) in echoLetters.enumerated() {
+            let cell = row0[2 + i]
+            #expect(cell.text == ch, "row0 col\(2+i) text")
+            #expect(cell.semanticContent == .input,
+                    "row0 col\(2+i) expected .input for user-typed letter")
+        }
+
+        // Row 1: "hi" is command output.
+        let row1 = frame.cells[1]
+        #expect(row1[0].text == "h")
+        #expect(row1[0].semanticContent == .output,
+                "row1 col0 expected .output for command output 'h'")
+        #expect(row1[1].text == "i")
+        #expect(row1[1].semanticContent == .output,
+                "row1 col1 expected .output for command output 'i'")
+    }
+
+    @Test("a fresh OSC 133;A on a later row re-tags subsequent cells as .prompt")
+    func semanticContentTransitionsOnNewPrompt() throws {
+        let (bridge, session) = try makeSession(cols: 20, rows: 6)
+        defer { try? bridge.close(session) }
+
+        // Output, then a new prompt on the next row — the boundary the
+        // renderer's separator hangs off.
+        let esc = "\u{1B}"
+        let st = "\u{07}"
+        var bytes = ""
+        bytes += "\(esc)]133;C\(st)"
+        bytes += "output-line"
+        bytes += "\r\n"
+        bytes += "\(esc)]133;A\(st)"
+        bytes += "$ "
+        try bridge.feed(Data(bytes.utf8), to: session)
+
+        let frame = try bridge.snapshotFrame(session)
+
+        // Row 0: the eleven-letter "output-line" all tagged .output.
+        let outputChars = Array("output-line")
+        for (i, ch) in outputChars.enumerated() {
+            let cell = frame.cells[0][i]
+            #expect(cell.text == String(ch), "row0 col\(i) text")
+            #expect(cell.semanticContent == .output,
+                    "row0 col\(i) expected .output")
+        }
+
+        // Row 1: "$ " tagged .prompt.
+        #expect(frame.cells[1][0].text == "$")
+        #expect(frame.cells[1][0].semanticContent == .prompt,
+                "row1 col0 expected .prompt after OSC 133;A")
+    }
+
     @Test("the cursor position reported in the snapshot tracks ghostty_terminal_get(CURSOR_X/Y)")
     func cursorPositionMatchesTerminal() throws {
         let (bridge, session) = try makeSession()

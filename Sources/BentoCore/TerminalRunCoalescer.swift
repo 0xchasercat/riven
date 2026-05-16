@@ -59,6 +59,12 @@ public struct StyledRun: Equatable, Sendable {
     /// the field is here so future interactive-hyperlink work doesn't
     /// have to widen the type.
     public var hyperlinkURI: String?
+    /// OSC 133 semantic-content tag for every cell in this run.
+    /// A run never spans across a semantic transition: the coalescer
+    /// starts a fresh run whenever the tag changes. The renderer uses
+    /// this to detect output → prompt transitions at the row level
+    /// (a row's first non-blank run carries the row's "leading" tag).
+    public var semanticContent: GhosttySemanticContent
     /// Inclusive start column.
     public var startColumn: Int
     /// Exclusive end column. `endColumn - startColumn` is the number of
@@ -83,6 +89,7 @@ public struct StyledRun: Equatable, Sendable {
         underlineStyle: GhosttyUnderlineStyle? = nil,
         underlineColor: GhosttyRGB? = nil,
         hyperlinkURI: String? = nil,
+        semanticContent: GhosttySemanticContent = .output,
         startColumn: Int,
         endColumn: Int
     ) {
@@ -107,6 +114,7 @@ public struct StyledRun: Equatable, Sendable {
         self.invisible = invisible
         self.overline = overline
         self.hyperlinkURI = hyperlinkURI
+        self.semanticContent = semanticContent
         self.startColumn = startColumn
         self.endColumn = endColumn
     }
@@ -165,7 +173,8 @@ public enum TerminalRunCoalescer {
                run.blink == cell.blink,
                run.invisible == cell.invisible,
                run.overline == cell.overline,
-               run.hyperlinkURI == cell.hyperlinkURI {
+               run.hyperlinkURI == cell.hyperlinkURI,
+               run.semanticContent == cell.semanticContent {
                 run.text.append(cell.text)
                 run.endColumn = column + 1
                 current = run
@@ -188,6 +197,7 @@ public enum TerminalRunCoalescer {
                     underlineStyle: cell.underlineStyle,
                     underlineColor: cell.underlineColor,
                     hyperlinkURI: cell.hyperlinkURI,
+                    semanticContent: cell.semanticContent,
                     startColumn: column,
                     endColumn: column + 1
                 )

@@ -68,7 +68,8 @@ struct WorkspaceGroupView: View {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
         .background(Color(hex: theme.chrome.border.hex))
     }
@@ -88,6 +89,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let fileMap: PaneFileMap
     let agentClient: AgentClient
     let onOpenFile: (URL) -> Void
+    let onCwdChanged: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -102,7 +104,8 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
         return view
     }
@@ -115,7 +118,8 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
     }
 
@@ -175,7 +179,8 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
-        onOpenFile: @escaping (URL) -> Void
+        onOpenFile: @escaping (URL) -> Void,
+        onCwdChanged: @escaping (String) -> Void
     ) {
         // If the pane identity changes, throw away cached hosts so we
         // don't reattach the previous pane's terminal/editor here.
@@ -198,7 +203,8 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 fileMap: fileMap,
                 agentClient: agentClient,
-                onOpenFile: onOpenFile
+                onOpenFile: onOpenFile,
+                onCwdChanged: onCwdChanged
             )
         } else {
             // Cheap path: just refresh the bound SwiftUI roots so theme /
@@ -209,7 +215,8 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 fileMap: fileMap,
                 agentClient: agentClient,
-                onOpenFile: onOpenFile
+                onOpenFile: onOpenFile,
+                onCwdChanged: onCwdChanged
             )
         }
 
@@ -225,7 +232,8 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
-        onOpenFile: @escaping (URL) -> Void
+        onOpenFile: @escaping (URL) -> Void,
+        onCwdChanged: @escaping (String) -> Void
     ) {
         // Strip old subviews. The hosting controllers themselves live on
         // the coordinator so their underlying NSViews can be re-inserted
@@ -250,7 +258,8 @@ private final class WorkspaceContainerView: NSView {
             theme: theme,
             paneID: paneID,
             workspace: workspace,
-            agentClient: agentClient
+            agentClient: agentClient,
+            onCwdChanged: onCwdChanged
         )
         let terminalPane = NSView()
         terminalPane.translatesAutoresizingMaskIntoConstraints = false
@@ -363,13 +372,20 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
-        onOpenFile: @escaping (URL) -> Void
+        onOpenFile: @escaping (URL) -> Void,
+        onCwdChanged: @escaping (String) -> Void
     ) {
         coordinator?.sidebarHost?.rootView = AnyView(
             sidebarView(theme: theme, workspace: workspace, onOpenFile: onOpenFile)
         )
         coordinator?.terminalHost?.rootView = AnyView(
-            terminalView(theme: theme, paneID: paneID, workspace: workspace, agentClient: agentClient)
+            terminalView(
+                theme: theme,
+                paneID: paneID,
+                workspace: workspace,
+                agentClient: agentClient,
+                onCwdChanged: onCwdChanged
+            )
         )
         if workspace.openEditorPath != nil {
             coordinator?.editorHost?.rootView = AnyView(
@@ -400,9 +416,18 @@ private final class WorkspaceContainerView: NSView {
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
-        agentClient: AgentClient
+        agentClient: AgentClient,
+        onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
-        let root = AnyView(terminalView(theme: theme, paneID: paneID, workspace: workspace, agentClient: agentClient))
+        let root = AnyView(
+            terminalView(
+                theme: theme,
+                paneID: paneID,
+                workspace: workspace,
+                agentClient: agentClient,
+                onCwdChanged: onCwdChanged
+            )
+        )
         if let existing = coordinator?.terminalHost {
             existing.rootView = root
             return existing
@@ -449,7 +474,8 @@ private final class WorkspaceContainerView: NSView {
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
-        agentClient: AgentClient
+        agentClient: AgentClient,
+        onCwdChanged: @escaping (String) -> Void
     ) -> some View {
         // The broker keys panes by `paneID` and survives across UI
         // rebuilds, so `cwd` only matters at first spawn. We pass
@@ -460,7 +486,8 @@ private final class WorkspaceContainerView: NSView {
             paneID: paneID,
             cwd: workspace.currentCwd,
             command: workspace.terminalCommand,
-            agentClient: agentClient
+            agentClient: agentClient,
+            onCwdChanged: onCwdChanged
         )
     }
 

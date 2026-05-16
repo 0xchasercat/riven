@@ -494,6 +494,19 @@ public struct GhosttyBridge: Sendable {
         // model has a slot ready for the future interactive feature.
         let hyperlinkURI: String? = nil
 
+        // Semantic content (OSC 133 tag). The render-state row-cells API
+        // doesn't expose this directly, but `ghostty_cell_get` on the raw
+        // cell value does. One additional C call per cell — see screen.h:
+        // GHOSTTY_CELL_DATA_SEMANTIC_CONTENT returns a
+        // `GhosttyCellSemanticContent *` (an int-backed enum). If the
+        // call fails for any reason we fall back to `.output`, which is
+        // libghostty's own default for never-tagged cells.
+        var semanticRaw: GhosttyCellSemanticContent = GHOSTTY_CELL_SEMANTIC_OUTPUT
+        let semanticResult = ghostty_cell_get(rawCell, GHOSTTY_CELL_DATA_SEMANTIC_CONTENT, &semanticRaw)
+        let semanticContent: GhosttySemanticContent = (semanticResult == GHOSTTY_SUCCESS)
+            ? GhosttySemanticContent.from(raw: Int(semanticRaw.rawValue))
+            : .output
+
         return GhosttyResolvedCell(
             text: text,
             foreground: foreground,
@@ -510,7 +523,8 @@ public struct GhosttyBridge: Sendable {
             overline: style.overline,
             underlineStyle: underlineStyle,
             underlineColor: underlineColor,
-            hyperlinkURI: hyperlinkURI
+            hyperlinkURI: hyperlinkURI,
+            semanticContent: semanticContent
         )
     }
 }

@@ -126,11 +126,18 @@ struct WorkspaceResurrectionTests {
         #expect(state.paneGraph.panes.count == 1)
         let onlyPane = state.paneGraph.pane(state.paneGraph.focusedPaneID)
         #expect(onlyPane?.isFocused == true)
-        if let terminal = onlyPane?.terminal {
-            #expect(terminal.cwd == project.standardizedFileURL.path)
-            #expect(terminal.command == nil)
+        // The default new-project pane is now a workspace group
+        // (sidebar + terminal + on-demand editor), seeded with the
+        // project's path as its initial cwd. Legacy snapshots that
+        // contain `.terminal` leaves still load — see the snapshot
+        // restoration test above for that path.
+        if let workspace = onlyPane?.workspace {
+            #expect(workspace.initialCwd == project.standardizedFileURL.path)
+            #expect(workspace.currentCwd == project.standardizedFileURL.path)
+            #expect(workspace.terminalCommand == nil)
+            #expect(workspace.openEditorPath == nil)
         } else {
-            Issue.record("expected default pane to be a terminal")
+            Issue.record("expected default pane to be a workspace group")
         }
     }
 
