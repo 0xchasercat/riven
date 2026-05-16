@@ -1,5 +1,6 @@
 import AppKit
 import BentoCore
+import Combine
 import SwiftUI
 
 @main
@@ -8,6 +9,7 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var rootController: BentoRootController?
     private var agentLauncher: AgentLauncher?
+    private var titleSubscription: AnyCancellable?
 
     static func main() {
         let app = NSApplication.shared
@@ -47,7 +49,7 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
 
         let hosting = NSHostingController(rootView: BentoRootView().environmentObject(controller))
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Bento"
+        window.title = Self.windowTitle(for: controller.state)
         window.setContentSize(NSSize(width: 1600, height: 1000))
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -56,6 +58,44 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+
+        // Reflect the focused workspace in the window title. Even with
+        // titleVisibility = .hidden the title still shows in Mission
+        // Control / Stage Manager / Cmd+Tab previews, and many users
+        // toggle title visibility on. Keep both the WorkspaceTabBar
+        // (interactive switcher) and the title (passive cue).
+        titleSubscription = controller.$state
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak window] state in
+                MainActor.assumeIsolated {
+                    window?.title = Self.windowTitle(for: state)
+                    _ = self // keep the closure capture alive
+                }
+            }
+    }
+
+    /// Build the window title from the focused workspace. Falls back to
+    /// "Bento" before the controller has settled on a real state. If the
+    /// graph has more than one workspace tab, suffixes the count so the
+    /// user can tell at a glance how many parallel boxes are open.
+    private static func windowTitle(for state: WorkspaceState) -> String {
+        let leaves = state.paneGraph.leaves()
+        guard let focused = leaves.first(where: { $0.id == state.paneGraph.focusedPaneID })
+            ?? leaves.first
+        else { return "Bento" }
+
+        let base: String
+        if let ws = focused.workspace {
+            let last = URL(fileURLWithPath: ws.currentCwd).lastPathComponent
+            base = last.isEmpty ? "workspace" : last
+        } else {
+            base = focused.name.isEmpty ? "Bento" : focused.name
+        }
+
+        if leaves.count > 1 {
+            return "\(base) · \(leaves.count) workspaces"
+        }
+        return base
     }
 
     func applicationWillTerminate(_ notification: Notification) {
