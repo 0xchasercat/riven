@@ -397,6 +397,12 @@ public final class BrokeredTerminalView: NSView {
             Task {
                 do {
                     try await client.resize(paneID: id, columns: columns, rows: rowsCopy)
+                } catch let AgentClient.ClientError.server(err) where err.code == "unknown_pane" {
+                    // Transient: `createPane` is still in flight. The next
+                    // layout pass / live-resize end will retry with the
+                    // current dimensions and succeed once the broker
+                    // catches up. Swallow silently — surfacing this as a
+                    // log line is just noise.
                 } catch {
                     NSLog("BrokeredTerminalView: resize failed: \(error)")
                 }

@@ -206,7 +206,13 @@ final class BentoPaneContainerView: NSView {
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
-        let newContent = builder.build(node: graph.rootNode)
+        // One workspace per screen: render ONLY the focused leaf full-width.
+        // The pane graph still holds every workspace as a leaf (the top
+        // WorkspaceTabBar uses graph.leaves() to populate tab chips), but
+        // the user only ever sees one at a time. Splits / side-by-side
+        // layouts are explicitly out of scope — they fought the "1 screen
+        // = 1 workspace" mental model and made the chrome feel squeezed.
+        let newContent = builder.build(node: .leaf(graph.focusedPaneID))
 
         // Prune hosting controllers for panes that no longer exist.
         let liveIDs = Set(graph.leaves().map(\.id))
