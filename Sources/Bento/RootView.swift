@@ -73,6 +73,9 @@ struct BentoRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in
             controller.closeFocusedEditor()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in
+            controller.toggleFocusedSidebar()
+        }
     }
 
     private var toolbar: some View {

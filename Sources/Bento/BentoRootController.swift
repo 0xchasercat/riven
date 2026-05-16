@@ -147,11 +147,17 @@ final class BentoRootController: ObservableObject {
         try await workspace.search(query)
     }
 
-    /// Add a brand-new workspace tab rooted at the project's cwd and
-    /// focus it. Wired to Cmd+T / Cmd+N. Top-level "tabs" are pane-graph
-    /// leaves; the UI renders one at a time full-width (no squeeze).
+    /// Add a brand-new workspace tab and focus it. Wired to Cmd+T and
+    /// Cmd+N. Cmd+N is the "zero-ceremony" path — it defaults to the
+    /// user's home directory, so users who don't care about projects
+    /// just drop into `~`. Cmd+T mirrors the same behaviour for now.
     func openNewTab() {
-        let cwd = URL(fileURLWithPath: state.projectRoot).path
+        openNewTab(at: NSHomeDirectory())
+    }
+
+    /// Add a new workspace tab rooted at `cwd` and focus it. Used by
+    /// menu items and the tab-strip `+` button.
+    func openNewTab(at cwd: String) {
         let newPane = PaneDescriptor(
             id: PaneID(),
             name: "workspace",
@@ -164,6 +170,18 @@ final class BentoRootController: ObservableObject {
             newPane: newPane
         )
         recordPaneGraph(graph)
+    }
+
+    /// Toggle the focused workspace's sidebar between collapsed and
+    /// expanded. Used by the sidebar header's toggle button.
+    func toggleFocusedSidebar() {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace else {
+            return
+        }
+        workspace.sidebarState = (workspace.sidebarState == .expanded) ? .collapsed : .expanded
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
     /// Close a workspace tab. If it's the last tab the call is a no-op

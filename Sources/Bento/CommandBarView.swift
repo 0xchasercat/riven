@@ -175,27 +175,26 @@ private enum CommandBarMetrics {
     /// Horizontal inset inside the scroll view. The HStack already pads
     /// the bar; we don't want the text to drift further off the prompt.
     static let textInsetX: CGFloat = 0
-    /// Vertical inset inside the scroll view. 8 pt top + 8 pt bottom
-    /// centers single-line text in the resting bar height and keeps the
-    /// cursor off the top/bottom edge during multi-line growth.
-    static let textInsetY: CGFloat = BentoSpacing.s
+    /// Vertical inset inside the scroll view. Generous breathing room
+    /// above and below text — the bar should feel spacious, not cramped.
+    static let textInsetY: CGFloat = BentoSpacing.l
 
     /// Approximate per-line growth used for the cap calculation. SF Mono
-    /// at `BentoType.body` measures roughly 14 pt of advance per line.
-    static let lineHeight: CGFloat = 14
+    /// at the bar's size measures ~20 pt of advance per line.
+    static let lineHeight: CGFloat = 20
 
-    /// Resting input height at a single line of text. ~32 pt: 14 pt for
-    /// the glyph row plus 16 pt of vertical inset above and below.
+    /// Resting input height at a single line of text. ~72 pt: line height
+    /// plus 32 pt of vertical inset above and below. Warp-spacious — the
+    /// bar reads as a deliberate input zone, not a thin strip.
     static let singleLineInputHeight: CGFloat = lineHeight + textInsetY * 2
 
-    /// Cap so the bar can't swallow the terminal grid. ~140 pt: room for
-    /// roughly nine wrapped lines at the body type size before scrolling
-    /// kicks in.
-    static let maxInputHeight: CGFloat = 140
+    /// Cap so the bar can't swallow the terminal grid, but generous —
+    /// ~10 wrapped lines of multi-line composition before scrolling.
+    static let maxInputHeight: CGFloat = 240
 
-    /// Font size for the input + placeholder. Matches `BentoType.body`
-    /// so the input feels related to the rest of the chrome typography.
-    static let fontSize: CGFloat = BentoType.body
+    /// Font size for the input + placeholder. Bumped from body to subhead
+    /// so the input reads as the primary writing surface.
+    static let fontSize: CGFloat = BentoType.subhead
 
     /// Width reserved for the leading prompt glyph. Big enough for the
     /// chevron at body weight without crowding the cursor.
@@ -203,7 +202,11 @@ private enum CommandBarMetrics {
 
     /// Width reserved for the trailing return-key affordance, including
     /// its right-side breathing room.
-    static let submitWidth: CGFloat = 24
+    static let submitWidth: CGFloat = 28
+
+    /// Horizontal padding inside the bar (between bar edge and prompt /
+    /// submit affordance). Spacious.
+    static let horizontalPadding: CGFloat = BentoSpacing.l
 }
 
 // MARK: - AppKit bridge

@@ -116,4 +116,5 @@ extension Notification.Name {
     static let bentoNewTab = Notification.Name("BentoNewTab")
     static let bentoCloseTab = Notification.Name("BentoCloseTab")
     static let bentoCloseEditor = Notification.Name("BentoCloseEditor")
+    static let bentoToggleSidebar = Notification.Name("BentoToggleSidebar")
 }

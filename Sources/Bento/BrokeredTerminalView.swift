@@ -205,10 +205,16 @@ public final class BrokeredTerminalView: NSView {
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        // Only START on window-attach. We deliberately do NOT teardown on
+        // window-detach, because SwiftUI's NSHostingController briefly
+        // moves views out of the window during ordinary updates (e.g.
+        // when the workspace re-renders for a cwd change). Tearing down +
+        // re-starting on every update would force the broker to replay
+        // its entire ring buffer into a fresh Ghostty session each time,
+        // producing visible prompt-stacking at the top of the grid.
+        // The session is cleaned up properly in `deinit`.
         if window != nil {
             startIfNeeded()
-        } else {
-            teardown()
         }
     }
 

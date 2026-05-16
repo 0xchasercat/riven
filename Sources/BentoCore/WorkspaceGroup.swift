@@ -14,21 +14,30 @@ import Foundation
 /// user clicked a file in the sidebar).
 public struct WorkspaceGroup: Hashable, Codable, Sendable {
     public var initialCwd: String
+    /// Updated as the shell emits OSC 7. Useful for status/breadcrumb
+    /// surfaces; deliberately NOT used to drive the sidebar (sidebar is
+    /// pinned to `initialCwd` — the workspace's root — so `cd /tmp` in
+    /// the shell doesn't rip the file viewer out from under the user).
     public var currentCwd: String
     public var terminalCommand: String?
     public var openEditorPath: String?
     public var sidebarWidth: CGFloat
     public var editorWidth: CGFloat
     public var focusedSubpane: WorkspaceSubpane
+    /// Sidebar visibility. `.collapsed` (default) shows top-level
+    /// directory names only at a narrow width; `.expanded` shows the
+    /// full nested tree at the configured `sidebarWidth`.
+    public var sidebarState: WorkspaceSidebarState
 
     public init(
         initialCwd: String,
         currentCwd: String? = nil,
         terminalCommand: String? = nil,
         openEditorPath: String? = nil,
-        sidebarWidth: CGFloat = 200,
+        sidebarWidth: CGFloat = 220,
         editorWidth: CGFloat = 480,
-        focusedSubpane: WorkspaceSubpane = .terminal
+        focusedSubpane: WorkspaceSubpane = .terminal,
+        sidebarState: WorkspaceSidebarState = .collapsed
     ) {
         self.initialCwd = initialCwd
         self.currentCwd = currentCwd ?? initialCwd
@@ -37,7 +46,15 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         self.sidebarWidth = sidebarWidth
         self.editorWidth = editorWidth
         self.focusedSubpane = focusedSubpane
+        self.sidebarState = sidebarState
     }
+}
+
+public enum WorkspaceSidebarState: String, Codable, Sendable {
+    /// Narrow strip showing top-level directory names only.
+    case collapsed
+    /// Full nested tree at `sidebarWidth`.
+    case expanded
 }
 
 /// Which subpane inside a `WorkspaceGroup` has keyboard focus. Persisted

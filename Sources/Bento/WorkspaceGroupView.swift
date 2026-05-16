@@ -171,6 +171,7 @@ private final class WorkspaceContainerView: NSView {
 
     private var currentWorkspace: WorkspaceGroup?
     private var hasEditorColumn: Bool = false
+    private var lastSidebarState: WorkspaceSidebarState?
     private var pendingSidebarPosition: CGFloat?
     private var pendingEditorPosition: CGFloat?
 
@@ -208,6 +209,19 @@ private final class WorkspaceContainerView: NSView {
             || hasEditorColumn != (workspace.openEditorPath != nil)
 
         layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
+
+        // Sidebar-state changes don't need a full tree rebuild — the
+        // tree is intact, we just want the divider to snap to the new
+        // collapsed/expanded width. Queue a position update.
+        if lastSidebarState != workspace.sidebarState {
+            pendingSidebarPosition = workspace.sidebarState == .collapsed
+                ? 140
+                : workspace.sidebarWidth
+            lastSidebarState = workspace.sidebarState
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPendingDividers()
+            }
+        }
 
         if needsRebuild {
             rebuildTree(
@@ -329,7 +343,12 @@ private final class WorkspaceContainerView: NSView {
         outer.addArrangedSubview(sidebarPane)
         outer.addArrangedSubview(right)
         outerSplit = outer
-        pendingSidebarPosition = workspace.sidebarWidth
+        // Collapsed sidebar = narrow strip (~140 pt — enough for top-level
+        // names without burning real estate). Expanded = the user's saved
+        // width. Both are applied via setPosition after layout.
+        pendingSidebarPosition = workspace.sidebarState == .collapsed
+            ? 140
+            : workspace.sidebarWidth
 
         // Pin outer split to fill self.
         outer.translatesAutoresizingMaskIntoConstraints = false
@@ -353,7 +372,10 @@ private final class WorkspaceContainerView: NSView {
            let sidebarPos = pendingSidebarPosition,
            outer.arrangedSubviews.count == 2,
            outer.bounds.width > 0 {
-            let target = max(160, min(sidebarPos, outer.bounds.width - 240))
+            // Allow a narrow minimum (~100) so the collapsed strip can
+            // actually sit at ~140 pt. The previous min of 160 forced the
+            // divider open even when the user collapsed.
+            let target = max(100, min(sidebarPos, outer.bounds.width - 240))
             outer.setPosition(target, ofDividerAt: 0)
             pendingSidebarPosition = nil
         }
@@ -483,8 +505,12 @@ private final class WorkspaceContainerView: NSView {
     ) -> some View {
         WorkspaceSidebarView(
             theme: theme,
-            currentCwd: workspace.currentCwd,
+            // Sidebar is pinned to the workspace's root — it does NOT
+            // follow OSC 7. `cd` in the shell still updates the status
+            // breadcrumb but doesn't yank the file viewer to a new path.
+            currentCwd: workspace.initialCwd,
             activePath: workspace.openEditorPath,
+            isCollapsed: workspace.sidebarState == .collapsed,
             onOpenFile: onOpenFile
         )
     }
@@ -664,6 +690,7 @@ private struct WorkspaceSidebarView: View {
     let theme: ThemeSpec
     let currentCwd: String
     let activePath: String?
+    let isCollapsed: Bool
     let onOpenFile: (URL) -> Void
 
     @State private var tree: ProjectFileTree?
@@ -695,6 +722,18 @@ private struct WorkspaceSidebarView: View {
         if let tree {
             if tree.children.isEmpty {
                 emptyState
+            } else if isCollapsed {
+                // Collapsed: top-level entries only, no expand chevrons,
+                // tighter rows. Enough visual context to know what's in
+                // the workspace without burning horizontal real estate.
+                ForEach(tree.children) { node in
+                    CollapsedSidebarRow(
+                        node: node,
+                        theme: theme,
+                        activePath: activePath,
+                        onOpenFile: onOpenFile
+                    )
+                }
             } else {
                 ForEach(tree.children) { node in
                     WorkspaceFileRow(
@@ -730,21 +769,27 @@ private struct WorkspaceSidebarView: View {
         .padding(.vertical, BentoSpacing.l)
     }
 
-    /// 32 pt sticky-feeling header — `FILES` on the left, a middle-
-    /// truncated breadcrumb of the workspace cwd on the right. Drawn
-    /// outside the ScrollView so it stays fixed when the file list scrolls.
+    /// 36 pt sticky-feeling header. When expanded: `FILES` label + cwd
+    /// breadcrumb + toggle. When collapsed: just a toggle button so the
+    /// narrow strip stays usable. Toggle posts `bentoToggleSidebar` and
+    /// the controller flips the workspace's `sidebarState`.
     private var header: some View {
         HStack(spacing: BentoSpacing.s) {
-            SectionLabel(theme: theme, "FILES")
-            Spacer(minLength: BentoSpacing.s)
-            Text(breadcrumb(for: currentCwd))
-                .font(BentoType.mono(BentoType.small))
-                .foregroundStyle(Color(hex: theme.chrome.accent.hex).opacity(0.85))
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if !isCollapsed {
+                SectionLabel(theme: theme, "FILES")
+                Spacer(minLength: BentoSpacing.s)
+                Text(breadcrumb(for: currentCwd))
+                    .font(BentoType.mono(BentoType.small))
+                    .foregroundStyle(Color(hex: theme.chrome.accent.hex).opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Spacer(minLength: 0)
+            }
+            SidebarToggleButton(theme: theme, isCollapsed: isCollapsed)
         }
-        .padding(.horizontal, BentoSpacing.m)
-        .frame(height: 32)
+        .padding(.horizontal, BentoSpacing.s)
+        .frame(height: 36)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -780,6 +825,108 @@ private struct WorkspaceSidebarView: View {
                 self.loadError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
+    }
+}
+
+// MARK: - Sidebar toggle button
+
+/// Chevron button at the top of the workspace sidebar that flips between
+/// collapsed (narrow strip) and expanded (full tree). Posts a notification
+/// the controller listens for — keeps the SwiftUI tree free of yet
+/// another callback parameter to thread.
+private struct SidebarToggleButton: View {
+    let theme: ThemeSpec
+    let isCollapsed: Bool
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            NotificationCenter.default.post(name: .bentoToggleSidebar, object: nil)
+        } label: {
+            Text(isCollapsed ? "›" : "‹")
+                .font(BentoType.chrome(15, weight: .semibold))
+                .foregroundStyle(Color(hex: isHovered
+                    ? theme.chrome.text.hex
+                    : theme.chrome.tertiaryText.hex))
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(Color(hex: theme.chrome.accentSoft.hex)
+                            .opacity(isHovered ? 1 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+        .animation(BentoMotion.hover, value: isHovered)
+    }
+}
+
+// MARK: - Collapsed sidebar row
+
+/// Row used in the collapsed sidebar state. Shows the first letter (or
+/// first 4 chars) of the directory/file name, vertically centered. Clicking
+/// a file still opens it; clicking a directory expands the sidebar.
+private struct CollapsedSidebarRow: View {
+    let node: ProjectFileTree
+    let theme: ThemeSpec
+    let activePath: String?
+    let onOpenFile: (URL) -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            switch node.kind {
+            case .file:
+                onOpenFile(URL(fileURLWithPath: node.path))
+            case .directory:
+                // Expand the sidebar so the user can drill in. Posting the
+                // toggle treats the collapsed click as a request to see more.
+                NotificationCenter.default.post(name: .bentoToggleSidebar, object: nil)
+            }
+        } label: {
+            HStack(spacing: BentoSpacing.xs) {
+                Text(node.kind == .directory ? "▸" : " ")
+                    .font(BentoType.mono(BentoType.caption))
+                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                Text(node.name)
+                    .font(BentoType.mono(BentoType.caption,
+                        weight: node.kind == .directory ? .semibold : .regular))
+                    .foregroundStyle(Color(hex: isActive
+                        ? theme.chrome.accent.hex
+                        : theme.chrome.dimText.hex))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, BentoSpacing.xs)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                    .fill(rowBackground)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .animation(BentoMotion.hover, value: isHovered)
+    }
+
+    private var isActive: Bool {
+        guard let activePath else { return false }
+        return activePath == node.path
+    }
+
+    private var rowBackground: Color {
+        if isActive || isHovered {
+            return Color(hex: theme.chrome.accentSoft.hex)
+        }
+        return Color.clear
     }
 }
 
