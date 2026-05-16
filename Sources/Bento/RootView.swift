@@ -27,7 +27,7 @@ struct BentoRootView: View {
                     focusedID: controller.state.paneGraph.focusedPaneID,
                     onSelect: { controller.focusTab($0) },
                     onClose: { controller.closeTab($0) },
-                    onAdd: { controller.openNewTab() }
+                    onAdd: { controller.openNewWorkspace() }
                 )
                 toolbar
                 PaneGridView(
@@ -65,7 +65,10 @@ struct BentoRootView: View {
             searchQuery = ""
         }
         .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in
-            controller.openNewTab()
+            controller.openNewInnerTab()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in
+            controller.openNewWorkspace()
         }
         .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in
             controller.closeTab(controller.state.paneGraph.focusedPaneID)
@@ -75,6 +78,16 @@ struct BentoRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in
             controller.toggleFocusedSidebar()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoFocusInnerTab)) { note in
+            if let id = note.object as? TabID {
+                controller.focusInnerTab(id)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseInnerTab)) { note in
+            if let id = note.object as? TabID {
+                controller.closeInnerTab(id)
+            }
         }
     }
 
@@ -103,7 +116,7 @@ struct BentoRootView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("⌘K palette · ⌘T new tab")
+            Text("⌘K palette · ⌘T new tab · ⌘N new workspace")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
         }

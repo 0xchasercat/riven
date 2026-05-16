@@ -233,21 +233,18 @@ actor PaneState {
         self.persister = persister
     }
 
-    /// Add a subscriber and return the replay payload for it. Replay prefers
-    /// the on-disk scrollback tail (which is the canonical history including
-    /// bytes from previous broker generations); falls back to the in-memory
-    /// ring buffer when there's no persister or no on-disk file yet.
+    /// Add a subscriber and return the replay payload — strictly the
+    /// in-memory ring buffer for THIS broker generation.
+    ///
+    /// We deliberately do NOT replay the on-disk scrollback here. The disk
+    /// file is the union of every shell session this pane has ever had —
+    /// re-feeding it into a fresh Ghostty terminal on subscribe would
+    /// re-render every historical prompt every time the UI re-attached,
+    /// which is what the user was seeing as "prompts stacked at the top."
+    /// The disk file is still maintained for scrollback search; it just
+    /// isn't auto-replayed into a live renderer.
     func addSubscriber(_ sink: ConnectionSink) -> Data {
         subscribers[ObjectIdentifier(sink)] = sink
-        if let persister {
-            // Drain *all* pending bytes (any pane) before sampling the tail
-            // so we don't ship a replay that's missing the most recent few
-            // hundred milliseconds of output.
-            persister.flushNow()
-            if let tail = try? persister.store.tail(paneID, bytes: persister.onDiskCapBytes), !tail.isEmpty {
-                return tail
-            }
-        }
         return ringBuffer.snapshot()
     }
 

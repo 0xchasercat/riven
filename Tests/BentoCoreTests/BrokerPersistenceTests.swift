@@ -128,15 +128,20 @@ struct BrokerPersistenceTests {
                 "most-recent suffix (with sentinel) must survive truncation")
     }
 
-    /// Disk replay + live bytes are in chronological order with no duplication:
+    /// Replaying a re-created pane returns only the LIVE post-restart
+    /// bytes — not the on-disk history. We made this trade-off after the
+    /// UX showed the old behaviour ("disk replay on every reattach") was
+    /// visibly stacking prompts at the top of the terminal on every
+    /// SwiftUI re-render. The on-disk scrollback is still maintained
+    /// (unified search uses it), it just isn't auto-fed into a fresh
+    /// terminal grid on subscribe.
     ///
     /// 1. Pane prints `BEFORE-RESTART` then sleeps.
     /// 2. SIGTERM broker (flush).
-    /// 3. New broker. Subscribe — replay must contain `BEFORE-RESTART`.
-    /// 4. Re-create the same pane and have it print `AFTER-RESTART`.
-    /// 5. The next subscriber sees `BEFORE-RESTART` *then* `AFTER-RESTART`,
-    ///    each exactly once.
-    @Test("ring buffer + disk replay are in order without duplication")
+    /// 3. New broker. Re-create the same paneID with `AFTER-RESTART`.
+    /// 4. Subscribe — replay contains only `AFTER-RESTART` (live), and
+    ///    contains it exactly once.
+    @Test("re-created live pane replay shows only new bytes, no duplicates")
     func replayInOrderWithoutDuplication() async throws {
         let scrollbackRoot = uniqueScrollbackRoot()
         defer { try? FileManager.default.removeItem(at: scrollbackRoot) }
@@ -162,7 +167,8 @@ struct BrokerPersistenceTests {
         }
 
         // Generation 2: new broker, new PTY for the same paneID, write
-        // AFTER-RESTART. Subscribe and assert ordering and uniqueness.
+        // AFTER-RESTART. The new live PTY should NOT re-feed the disk
+        // history into the replay — that was the duplication source.
         let harness2 = try await AgentHarness.start(socketURL: socketURL, scrollbackRoot: scrollbackRoot)
         defer { harness2.stop() }
 
@@ -170,9 +176,6 @@ struct BrokerPersistenceTests {
         try await client2.connect()
         defer { Task { await client2.close() } }
 
-        // Re-create the pane (a new PTY with the same id; the broker doesn't
-        // re-spawn for us automatically — by design — so the client owns the
-        // resurrection policy).
         _ = try await client2.createPane(
             paneID: pane,
             command: "/bin/zsh",
@@ -182,21 +185,11 @@ struct BrokerPersistenceTests {
         let stream = try await client2.subscribe(paneID: pane)
         let collected = try await collect(stream: stream, until: "AFTER-RESTART", timeout: .seconds(5))
 
-        // Both markers must be present.
-        #expect(collected.contains("BEFORE-RESTART"))
+        // AFTER-RESTART must be present (live bytes still stream).
         #expect(collected.contains("AFTER-RESTART"))
 
-        // Order: BEFORE before AFTER.
-        if let beforeRange = collected.range(of: "BEFORE-RESTART"),
-           let afterRange = collected.range(of: "AFTER-RESTART") {
-            #expect(beforeRange.lowerBound < afterRange.lowerBound,
-                    "BEFORE-RESTART must precede AFTER-RESTART in the replay")
-        }
-
-        // No duplication: each marker appears exactly once.
-        let beforeCount = collected.components(separatedBy: "BEFORE-RESTART").count - 1
+        // AFTER-RESTART appears exactly once (no duplication on subscribe).
         let afterCount = collected.components(separatedBy: "AFTER-RESTART").count - 1
-        #expect(beforeCount == 1, "BEFORE-RESTART duplicated (\(beforeCount) occurrences)")
         #expect(afterCount == 1, "AFTER-RESTART duplicated (\(afterCount) occurrences)")
 
         try? await client2.killPane(paneID: pane)

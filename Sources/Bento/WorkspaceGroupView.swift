@@ -172,6 +172,10 @@ private final class WorkspaceContainerView: NSView {
     private var currentWorkspace: WorkspaceGroup?
     private var hasEditorColumn: Bool = false
     private var lastSidebarState: WorkspaceSidebarState?
+    /// Rebuild the terminal column when the user switches inner tabs so
+    /// each tab gets its own BrokeredTerminalView pointed at its own
+    /// broker paneID. Tracked here so `apply` can detect transitions.
+    private var lastFocusedTabID: TabID?
     private var pendingSidebarPosition: CGFloat?
     private var pendingEditorPosition: CGFloat?
 
@@ -205,8 +209,18 @@ private final class WorkspaceContainerView: NSView {
             coordinator?.lastPaneID = paneID
         }
 
+        let focusedTabChanged = lastFocusedTabID != nil
+            && lastFocusedTabID != workspace.focusedTabID
         let needsRebuild = outerSplit == nil
             || hasEditorColumn != (workspace.openEditorPath != nil)
+            || focusedTabChanged
+        if focusedTabChanged {
+            // Switching inner tabs binds the terminal area to a new
+            // broker paneID. We invalidate the cached terminal host so a
+            // fresh BrokeredTerminalView is built for the new pane.
+            coordinator?.terminalHost = nil
+        }
+        lastFocusedTabID = workspace.focusedTabID
 
         layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
 
@@ -523,18 +537,28 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
-        // The broker keys panes by `paneID` and survives across UI
-        // rebuilds, so `cwd` only matters at first spawn. We pass
-        // `currentCwd` (which equals `initialCwd` at first spawn) so a
-        // restored snapshot lands the user back at the last-known cwd.
-        TerminalPaneView(
-            theme: theme,
-            paneID: paneID,
-            cwd: workspace.currentCwd,
-            command: workspace.terminalCommand,
-            agentClient: agentClient,
-            onCwdChanged: onCwdChanged
-        )
+        // Stack: inner tab strip on top + terminal beneath. The tab
+        // strip is the per-workspace tab UI (Cmd+T adds an entry).
+        // The terminal binds to the focused inner tab's broker paneID
+        // — each tab has its own PTY.
+        let tab = workspace.focusedTab
+        VStack(spacing: 0) {
+            InnerTabStrip(
+                theme: theme,
+                tabs: workspace.tabs,
+                focusedID: workspace.focusedTabID
+            )
+            Hairline(theme: theme)
+            TerminalPaneView(
+                theme: theme,
+                paneID: tab.terminalPaneID,
+                cwd: tab.cwd,
+                command: tab.command,
+                agentClient: agentClient,
+                onCwdChanged: onCwdChanged
+            )
+            .id(tab.id)
+        }
     }
 
     @ViewBuilder

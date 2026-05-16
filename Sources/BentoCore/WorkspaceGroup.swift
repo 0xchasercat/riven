@@ -28,6 +28,15 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     /// directory names only at a narrow width; `.expanded` shows the
     /// full nested tree at the configured `sidebarWidth`.
     public var sidebarState: WorkspaceSidebarState
+    /// Inner tabs within this workspace. Each tab is its own terminal
+    /// with a unique paneID (so each has its own PTY at the broker).
+    /// The sidebar is shared across all inner tabs — that's the whole
+    /// point of the workspace boundary. Switching inner tabs swaps the
+    /// active terminal under the same sidebar + command bar.
+    public var tabs: [WorkspaceInnerTab]
+    /// Which inner tab currently has focus / is rendered. Must match
+    /// one of `tabs[*].id`; if it doesn't, `tabs[0]` is the fallback.
+    public var focusedTabID: TabID
 
     public init(
         initialCwd: String,
@@ -37,7 +46,9 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         sidebarWidth: CGFloat = 220,
         editorWidth: CGFloat = 480,
         focusedSubpane: WorkspaceSubpane = .terminal,
-        sidebarState: WorkspaceSidebarState = .collapsed
+        sidebarState: WorkspaceSidebarState = .collapsed,
+        tabs: [WorkspaceInnerTab]? = nil,
+        focusedTabID: TabID? = nil
     ) {
         self.initialCwd = initialCwd
         self.currentCwd = currentCwd ?? initialCwd
@@ -47,7 +58,63 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         self.editorWidth = editorWidth
         self.focusedSubpane = focusedSubpane
         self.sidebarState = sidebarState
+        // Default workspace ships with a single "shell" inner tab. The
+        // tab's paneID is fresh per workspace so each one gets its own
+        // PTY at the broker.
+        let defaultTab = WorkspaceInnerTab(
+            id: TabID(),
+            displayName: "shell",
+            terminalPaneID: PaneID(),
+            command: terminalCommand,
+            cwd: initialCwd
+        )
+        let resolvedTabs = tabs ?? [defaultTab]
+        self.tabs = resolvedTabs
+        self.focusedTabID = focusedTabID ?? resolvedTabs.first?.id ?? defaultTab.id
     }
+
+    /// Convenience: the currently-focused inner tab, or the first tab
+    /// if the focused ID doesn't resolve (defensive).
+    public var focusedTab: WorkspaceInnerTab {
+        tabs.first(where: { $0.id == focusedTabID }) ?? tabs[0]
+    }
+}
+
+/// One inner tab within a workspace. Carries the broker `PaneID` used
+/// to address its PTY plus the display name shown in the inner tab strip.
+public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
+    public var id: TabID
+    public var displayName: String
+    public var terminalPaneID: PaneID
+    public var command: String?
+    public var cwd: String
+
+    public init(
+        id: TabID = TabID(),
+        displayName: String,
+        terminalPaneID: PaneID,
+        command: String? = nil,
+        cwd: String
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.terminalPaneID = terminalPaneID
+        self.command = command
+        self.cwd = cwd
+    }
+}
+
+/// Stable identifier for inner tabs. Lives across renders so the broker
+/// can hold onto a tab's PTY by `terminalPaneID` and the UI can re-mount
+/// its NSHostingController without losing state.
+public struct TabID: Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(_ rawValue: String = UUID().uuidString) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
 }
 
 public enum WorkspaceSidebarState: String, Codable, Sendable {

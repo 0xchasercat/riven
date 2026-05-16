@@ -147,17 +147,15 @@ final class BentoRootController: ObservableObject {
         try await workspace.search(query)
     }
 
-    /// Add a brand-new workspace tab and focus it. Wired to Cmd+T and
-    /// Cmd+N. Cmd+N is the "zero-ceremony" path — it defaults to the
-    /// user's home directory, so users who don't care about projects
-    /// just drop into `~`. Cmd+T mirrors the same behaviour for now.
-    func openNewTab() {
-        openNewTab(at: NSHomeDirectory())
+    /// Add a brand-new top-level **workspace** (a new screen-level bento
+    /// box) rooted at `~`. Wired to Cmd+N. Each workspace owns its own
+    /// sidebar and its own collection of inner terminal tabs.
+    func openNewWorkspace() {
+        openNewWorkspace(at: NSHomeDirectory())
     }
 
-    /// Add a new workspace tab rooted at `cwd` and focus it. Used by
-    /// menu items and the tab-strip `+` button.
-    func openNewTab(at cwd: String) {
+    /// Add a new workspace rooted at `cwd` and focus it.
+    func openNewWorkspace(at cwd: String) {
         let newPane = PaneDescriptor(
             id: PaneID(),
             name: "workspace",
@@ -170,6 +168,69 @@ final class BentoRootController: ObservableObject {
             newPane: newPane
         )
         recordPaneGraph(graph)
+    }
+
+    /// Add a new **inner tab** to the currently focused workspace. Wired
+    /// to Cmd+T. The new tab gets its own broker PaneID (own PTY), and
+    /// focus moves to it. Sidebar stays put — that's the whole point of
+    /// keeping the sidebar at the workspace level.
+    func openNewInnerTab() {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace else {
+            // No focused workspace — fall back to creating a new top-level
+            // workspace so Cmd+T always does something useful.
+            openNewWorkspace()
+            return
+        }
+        let tab = WorkspaceInnerTab(
+            displayName: "shell",
+            terminalPaneID: PaneID(),
+            command: nil,
+            cwd: workspace.initialCwd
+        )
+        workspace.tabs.append(tab)
+        workspace.focusedTabID = tab.id
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Close an inner tab within the focused workspace. If it's the
+    /// last inner tab, no-op — the workspace always has at least one
+    /// terminal. If the closed tab was focused, focus moves to a
+    /// neighbour.
+    func closeInnerTab(_ id: TabID) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace,
+              workspace.tabs.count > 1,
+              let idx = workspace.tabs.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        workspace.tabs.remove(at: idx)
+        if workspace.focusedTabID == id {
+            workspace.focusedTabID = workspace.tabs[max(0, idx - 1)].id
+        }
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Move focus to an inner tab within the focused workspace.
+    func focusInnerTab(_ id: TabID) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace,
+              workspace.focusedTabID != id,
+              workspace.tabs.contains(where: { $0.id == id }) else {
+            return
+        }
+        workspace.focusedTabID = id
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Backward-compat shim — older menu wiring calls `openNewTab()`.
+    /// Maps to the new inner-tab semantics so Cmd+T behaves correctly
+    /// even before the menu rewires.
+    func openNewTab() {
+        openNewInnerTab()
     }
 
     /// Toggle the focused workspace's sidebar between collapsed and
