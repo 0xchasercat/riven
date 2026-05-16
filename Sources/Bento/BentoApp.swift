@@ -125,6 +125,10 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(NSMenuItem(title: "New Tab", action: #selector(newTab), keyEquivalent: "t"))
         fileMenu.addItem(NSMenuItem(title: "New Workspace", action: #selector(newWorkspace), keyEquivalent: "n"))
+        // Cmd+Shift+O: open another directory as a workspace tab.
+        let openItem = NSMenuItem(title: "Open Project…", action: #selector(openProject), keyEquivalent: "o")
+        openItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(openItem)
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(NSMenuItem(title: "Close Tab", action: #selector(closeTab), keyEquivalent: "w"))
         fileItem.submenu = fileMenu
@@ -158,6 +162,10 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     @objc private func closeTab() {
         NotificationCenter.default.post(name: .bentoCloseTab, object: nil)
     }
+
+    @objc private func openProject() {
+        NotificationCenter.default.post(name: .bentoOpenProject, object: nil)
+    }
 }
 
 extension Notification.Name {
@@ -168,4 +176,5 @@ extension Notification.Name {
     static let bentoCloseTab = Notification.Name("BentoCloseTab")
     static let bentoCloseEditor = Notification.Name("BentoCloseEditor")
     static let bentoToggleSidebar = Notification.Name("BentoToggleSidebar")
+    static let bentoOpenProject = Notification.Name("BentoOpenProject")
 }

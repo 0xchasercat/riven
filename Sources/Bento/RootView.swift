@@ -40,6 +40,7 @@ struct BentoRootView: View {
             onSearch: { activeOverlay = .search; searchQuery = "" },
             onNewTab: { controller.openNewInnerTab() },
             onNewWorkspace: { controller.openNewWorkspace() },
+            onOpenProject: { presentOpenProjectPicker() },
             onCloseTab: { controller.closeTab(controller.state.paneGraph.focusedPaneID) },
             onCloseEditor: { controller.closeFocusedEditor() },
             onToggleSidebar: { controller.toggleFocusedSidebar() },
@@ -205,6 +206,8 @@ struct BentoRootView: View {
             controller.openFile(url)
         case .openFilePicker:
             presentOpenFilePicker()
+        case .openProjectPicker:
+            presentOpenProjectPicker()
         case .showTrustPrompt:
             activeOverlay = .trust
         }
@@ -220,6 +223,22 @@ struct BentoRootView: View {
         panel.directoryURL = URL(fileURLWithPath: controller.state.projectRoot)
         if panel.runModal() == .OK, let url = panel.url {
             controller.openFile(url)
+        }
+    }
+
+    /// Run an `NSOpenPanel` constrained to a single directory and append
+    /// it as a new workspace tab. Used by both the palette ("Open
+    /// project…") and the Cmd+Shift+O menu item.
+    private func presentOpenProjectPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Project"
+        panel.directoryURL = URL(fileURLWithPath: controller.state.projectRoot)
+            .deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url {
+            controller.openNewWorkspace(at: url.path)
         }
     }
 
@@ -248,6 +267,7 @@ private struct NotificationWiring: ViewModifier {
     let onSearch: () -> Void
     let onNewTab: () -> Void
     let onNewWorkspace: () -> Void
+    let onOpenProject: () -> Void
     let onCloseTab: () -> Void
     let onCloseEditor: () -> Void
     let onToggleSidebar: () -> Void
@@ -260,6 +280,7 @@ private struct NotificationWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in onNewWorkspace() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoOpenProject)) { _ in onOpenProject() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in onCloseTab() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in onCloseEditor() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in onToggleSidebar() }

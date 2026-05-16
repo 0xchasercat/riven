@@ -22,6 +22,10 @@ public enum CommandAction: Equatable, Sendable {
     /// `.openFile(url)`. The dispatcher does the panel work; we just carry
     /// the intent through the palette.
     case openFilePicker
+    /// Open `NSOpenPanel` constrained to directories so the user can
+    /// choose another project to open as a new workspace tab. The
+    /// dispatcher runs the panel and adds the result to the pane graph.
+    case openProjectPicker
     /// Rotate to the next built-in theme in `ThemeSpec.builtIns`.
     case cycleTheme
     /// Reveal the search overlay.
@@ -50,7 +54,9 @@ public extension CommandAction {
             return .openFilePicker
         case .trustProject:
             return .showTrustPrompt
-        case .flipPane, .zoomPane, .openProject, .restoreSession:
+        case .openProject:
+            return .openProjectPicker
+        case .flipPane, .zoomPane, .restoreSession:
             return nil
         }
     }
