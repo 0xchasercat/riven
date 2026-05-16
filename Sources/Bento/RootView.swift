@@ -36,7 +36,8 @@ struct BentoRootView: View {
                         theme: theme,
                         paneGraph: controller.state.paneGraph,
                         openFile: $openFile,
-                        projectRoot: controller.state.projectRoot
+                        projectRoot: controller.state.projectRoot,
+                        onGraphChange: { controller.recordPaneGraph($0) }
                     )
                     statusBar
                 }

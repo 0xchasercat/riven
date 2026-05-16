@@ -97,6 +97,15 @@ public struct PaneGraph: Hashable, Codable, Sendable {
         self.focusedPaneID = focusedRoot.id
     }
 
+    /// Internal initializer used by the pure functional operations in
+    /// `PaneGraphOperations.swift` to rebuild a graph after a mutation.
+    /// Not intended for use outside the module.
+    init(panes: [PaneID: PaneDescriptor], rootNode: PaneNode, focusedPaneID: PaneID) {
+        self.panes = panes
+        self.rootNode = rootNode
+        self.focusedPaneID = focusedPaneID
+    }
+
     public func pane(_ id: PaneID) -> PaneDescriptor? {
         panes[id]
     }
