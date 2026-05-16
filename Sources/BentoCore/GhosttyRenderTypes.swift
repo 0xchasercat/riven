@@ -267,6 +267,23 @@ public struct GhosttyRenderFrame: Equatable, Sendable {
         self.cells = cells
     }
 
+    /// True iff at least one cell in the grid has `blink == true`. The
+    /// host view uses this to decide whether to keep a redraw timer
+    /// armed for SGR 5/6 animation — when nothing's blinking, no timer
+    /// fires and CPU stays at zero.
+    ///
+    /// Scans cells in row-major order and short-circuits on the first
+    /// hit, so the common no-blink case is `O(rows × cols)` worst-case
+    /// and `O(1)` in practice once a blink cell is seen.
+    public var hasBlinkingContent: Bool {
+        for row in cells {
+            for cell in row where cell.blink && !cell.isWideTail {
+                return true
+            }
+        }
+        return false
+    }
+
     /// An empty frame of the given size. Mostly useful for tests and as
     /// a "before-first-update" placeholder.
     public static func empty(

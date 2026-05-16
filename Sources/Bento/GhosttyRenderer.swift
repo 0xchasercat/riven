@@ -70,6 +70,12 @@ enum GhosttyRenderer {
         /// When the shell has no integration sourced, no cells are
         /// tagged as `.prompt` so the separator never draws.
         var blockSeparator: NSColor
+        /// Multiplier applied to the glyph alpha of cells with `blink ==
+        /// true`. 1.0 = fully ON (indistinguishable from non-blink), 0.0
+        /// = fully invisible. The host view computes this from a system
+        /// clock (~500 ms half-cycle) and passes it on each draw. When
+        /// no cell on the frame has `blink`, this value has no effect.
+        var blinkAlpha: CGFloat
 
         init(
             defaultForeground: NSColor,
@@ -77,7 +83,8 @@ enum GhosttyRenderer {
             cursorColor: NSColor,
             fontSize: CGFloat,
             fontName: String? = nil,
-            blockSeparator: NSColor? = nil
+            blockSeparator: NSColor? = nil,
+            blinkAlpha: CGFloat = 1.0
         ) {
             self.defaultForeground = defaultForeground
             self.defaultBackground = defaultBackground
@@ -90,6 +97,9 @@ enum GhosttyRenderer {
             // for callers that don't know about block separators yet.
             self.blockSeparator = blockSeparator
                 ?? defaultForeground.withAlphaComponent(0.18)
+            // Clamp defensively so a misbehaving host doesn't blow past
+            // 0..1 and produce a negative-alpha glyph.
+            self.blinkAlpha = max(0, min(1, blinkAlpha))
         }
     }
 
@@ -276,8 +286,16 @@ enum GhosttyRenderer {
                 // applied AFTER inverse resolution so a faint+inverse
                 // cell dims its (swapped) foreground rather than the
                 // original.
-                let glyphColor = run.faint
-                    ? fg.withAlphaComponent(0.6)
+                //
+                // SGR 5/6 blink: multiply the resulting alpha by
+                // configuration.blinkAlpha (1.0 on the OFF phase boundary
+                // means no animation — see TerminalRenderConfiguration).
+                var glyphAlpha: CGFloat = run.faint ? 0.6 : 1.0
+                if run.blink {
+                    glyphAlpha *= configuration.blinkAlpha
+                }
+                let glyphColor: NSColor = (glyphAlpha < 0.999)
+                    ? fg.withAlphaComponent(glyphAlpha)
                     : fg
 
                 let runFont = Self.font(

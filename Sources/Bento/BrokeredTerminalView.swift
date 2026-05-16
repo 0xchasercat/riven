@@ -116,6 +116,20 @@ public final class BrokeredTerminalView: NSView {
 
     private var textAttributes: [NSAttributedString.Key: Any] = [:]
 
+    /// Timer that ticks `needsDisplay = true` while blink cells are on
+    /// screen so the next draw can swap the alpha. Lazily started by
+    /// `draw(_:)` when it sees blink content, lazily stopped when no
+    /// blink content is present. nil = not running.
+    ///
+    /// `nonisolated(unsafe)` because `deinit` (nonisolated) needs to
+    /// invalidate it and Timer isn't Sendable. `Timer.invalidate()` is
+    /// documented to be safe from any thread, and the only mutator
+    /// (`syncBlinkTimer`) is main-actor-isolated.
+    private nonisolated(unsafe) var blinkTimer: Timer?
+    /// Half-cycle duration for SGR 5 / 6 blink. 500 ms matches xterm
+    /// and Warp; <300 ms reads as flicker, >1 s feels broken.
+    private static let blinkHalfCycle: TimeInterval = 0.5
+
     // MARK: - Init
 
     /// Build a brokered terminal view. The pane is created on the broker
@@ -152,6 +166,12 @@ public final class BrokeredTerminalView: NSView {
         // Ghostty handle (Sendable) without hopping back to MainActor;
         // the broker keeps the underlying PTY around regardless.
         subscriptionTask?.cancel()
+        // `blinkTimer` is main-actor-isolated state; the only way it
+        // exists is if `startBlinkTimerIfNeeded` ran. By the time we
+        // hit deinit no one is keeping the view alive so the timer's
+        // weak self capture will already be releasing on next tick —
+        // explicit invalidate keeps it from firing once after deinit.
+        blinkTimer?.invalidate()
         if let session {
             try? bridge.close(session)
         }
@@ -429,6 +449,14 @@ public final class BrokeredTerminalView: NSView {
         } else {
             frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
         }
+
+        // SGR 5/6 blink: arm a self-redraw timer while blink cells are
+        // on screen, and compute the current alpha from the wall clock.
+        // No blink content → no timer → zero CPU.
+        let hasBlink = frame.hasBlinkingContent
+        let blinkAlpha: CGFloat = hasBlink ? Self.currentBlinkAlpha() : 1.0
+        syncBlinkTimer(active: hasBlink)
+
         GhosttyRenderer.draw(
             frame: frame,
             configuration: GhosttyRenderer.TerminalRenderConfiguration(
@@ -436,7 +464,8 @@ public final class BrokeredTerminalView: NSView {
                 defaultBackground: configuration.background,
                 cursorColor: configuration.cursor,
                 fontSize: configuration.fontSize,
-                fontName: configuration.fontName
+                fontName: configuration.fontName,
+                blinkAlpha: blinkAlpha
             ),
             metrics: GhosttyRenderer.TerminalCellMetrics(
                 cellWidth: cellWidth,
@@ -446,6 +475,46 @@ public final class BrokeredTerminalView: NSView {
             in: ctx,
             bounds: bounds
         )
+    }
+
+    // MARK: - Blink animation
+
+    /// Wall-clock-driven blink alpha. The half-cycle is `blinkHalfCycle`
+    /// (500 ms); during the ON phase the value is 1.0, during the OFF
+    /// phase it's 0.3 (matches what xterm and Warp settle on — fully
+    /// invisible is illegible, fully visible is no animation). Using a
+    /// shared clock means adjacent panes blink in phase, which reads
+    /// cleaner than each pane running its own random offset.
+    private static func currentBlinkAlpha() -> CGFloat {
+        let t = Date().timeIntervalSinceReferenceDate
+        let phase = Int(floor(t / blinkHalfCycle))
+        return (phase % 2 == 0) ? 1.0 : 0.3
+    }
+
+    /// Arm or disarm the blink redraw timer to match `active`. Idempotent
+    /// — calling with the same state in a row is a no-op so `draw(_:)`
+    /// can invoke it on every paint without ceremony.
+    private func syncBlinkTimer(active: Bool) {
+        if active {
+            guard blinkTimer == nil else { return }
+            // Tick at the same cadence as the half-cycle so each tick
+            // straddles exactly one phase boundary; this guarantees the
+            // alpha visibly changes on every redraw and we don't waste
+            // a frame on a redraw that paints the same value as before.
+            let timer = Timer(timeInterval: Self.blinkHalfCycle, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.needsDisplay = true
+                }
+            }
+            // Use .common mode so the redraw still fires while the user
+            // is in a tracking loop (live-resize, menu open). Default
+            // mode would stall the animation in those cases.
+            RunLoop.main.add(timer, forMode: .common)
+            blinkTimer = timer
+        } else {
+            blinkTimer?.invalidate()
+            blinkTimer = nil
+        }
     }
 
     // MARK: - Keyboard input
