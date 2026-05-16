@@ -8,6 +8,12 @@ struct BentoRootView: View {
     @State private var activeOverlay: Overlay?
     @State private var paletteQuery = ""
     @State private var searchQuery = ""
+    /// Projects whose trust prompt we've already auto-shown in *this
+    /// session*. Keyed by `projectRoot` so opening a different project
+    /// (or restarting the app) still triggers exactly one auto-show.
+    /// Set when the prompt opens; never cleared. The user can dismiss
+    /// and the toolbar pill remains as the always-available re-entry.
+    @State private var autoPromptedTrustForProjects: Set<String> = []
 
     private var theme: ThemeSpec {
         let id = selectedThemeID ?? controller.state.selectedThemeID
@@ -16,35 +22,7 @@ struct BentoRootView: View {
 
     var body: some View {
         ZStack {
-            // Single column. The global SidebarView is gone — each workspace
-            // owns its own file viewer keyed to its own cwd. The tab bar
-            // sits at the top of the window; the focused workspace renders
-            // full-width below it.
-            VStack(spacing: 0) {
-                WorkspaceTabBar(
-                    theme: theme,
-                    tabs: controller.state.paneGraph.leaves(),
-                    focusedID: controller.state.paneGraph.focusedPaneID,
-                    onSelect: { controller.focusTab($0) },
-                    onClose: { controller.closeTab($0) },
-                    onAdd: { controller.openNewWorkspace() }
-                )
-                toolbar
-                PaneGridView(
-                    theme: theme,
-                    paneGraph: controller.state.paneGraph,
-                    projectRoot: controller.state.projectRoot,
-                    fileMap: controller.fileMap,
-                    agentClient: controller.agentClient,
-                    brokerEpoch: controller.brokerEpoch,
-                    onGraphChange: { controller.recordPaneGraph($0) },
-                    onOpenFile: { controller.openFile($0) },
-                    onCwdChanged: { paneID, cwd in
-                        controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
-                    }
-                )
-                statusBar
-            }
+            mainColumn
             if !controller.preference.hasExplicitSelection {
                 ThemePicker(theme: theme, onSelect: { id in
                     try? controller.preference.selectTheme(id: id)
@@ -57,39 +35,84 @@ struct BentoRootView: View {
         }
         .background(Color(hex: theme.chrome.background.hex))
         .foregroundStyle(Color(hex: theme.chrome.text.hex))
-        .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in
-            activeOverlay = .palette
-            paletteQuery = ""
+        .modifier(NotificationWiring(
+            onPalette: { activeOverlay = .palette; paletteQuery = "" },
+            onSearch: { activeOverlay = .search; searchQuery = "" },
+            onNewTab: { controller.openNewInnerTab() },
+            onNewWorkspace: { controller.openNewWorkspace() },
+            onCloseTab: { controller.closeTab(controller.state.paneGraph.focusedPaneID) },
+            onCloseEditor: { controller.closeFocusedEditor() },
+            onToggleSidebar: { controller.toggleFocusedSidebar() },
+            onFocusInnerTab: { controller.focusInnerTab($0) },
+            onCloseInnerTab: { controller.closeInnerTab($0) }
+        ))
+        // Auto-open the trust prompt the first time we see a project
+        // that requires trust this session. The toolbar pill remains as
+        // the re-entry point if the user dismisses.
+        .onChange(of: trustPromptTrigger) { _, trigger in
+            maybeAutoShowTrust(for: trigger)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in
-            activeOverlay = .search
-            searchQuery = ""
+        // Also handle the first-render case: openProject may complete
+        // before any user interaction, so SwiftUI doesn't fire the
+        // .onChange above. Mirror the same gate here.
+        .task(id: trustPromptTrigger) {
+            maybeAutoShowTrust(for: trustPromptTrigger)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in
-            controller.openNewInnerTab()
+    }
+
+    private var mainColumn: some View {
+        VStack(spacing: 0) {
+            WorkspaceTabBar(
+                theme: theme,
+                tabs: controller.state.paneGraph.leaves(),
+                focusedID: controller.state.paneGraph.focusedPaneID,
+                onSelect: { controller.focusTab($0) },
+                onClose: { controller.closeTab($0) },
+                onAdd: { controller.openNewWorkspace() }
+            )
+            toolbar
+            PaneGridView(
+                theme: theme,
+                paneGraph: controller.state.paneGraph,
+                projectRoot: controller.state.projectRoot,
+                fileMap: controller.fileMap,
+                agentClient: controller.agentClient,
+                brokerEpoch: controller.brokerEpoch,
+                onGraphChange: { controller.recordPaneGraph($0) },
+                onOpenFile: { controller.openFile($0) },
+                onCwdChanged: { paneID, cwd in
+                    controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
+                }
+            )
+            statusBar
         }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in
-            controller.openNewWorkspace()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in
-            controller.closeTab(controller.state.paneGraph.focusedPaneID)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in
-            controller.closeFocusedEditor()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in
-            controller.toggleFocusedSidebar()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoFocusInnerTab)) { note in
-            if let id = note.object as? TabID {
-                controller.focusInnerTab(id)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseInnerTab)) { note in
-            if let id = note.object as? TabID {
-                controller.closeInnerTab(id)
-            }
-        }
+    }
+
+    private func maybeAutoShowTrust(for trigger: TrustPromptTrigger) {
+        guard
+            trigger.requires,
+            !trigger.root.isEmpty,
+            !autoPromptedTrustForProjects.contains(trigger.root),
+            activeOverlay == nil
+        else { return }
+        autoPromptedTrustForProjects.insert(trigger.root)
+        activeOverlay = .trust
+    }
+
+    /// Composite key tracking "does this project still need trust?". Used
+    /// as both the `onChange` value AND the `task(id:)` key so we react
+    /// to (a) the controller landing a fresh project state, and (b) the
+    /// `requiresTaskTrust` flag flipping true asynchronously after open.
+    private var trustPromptTrigger: TrustPromptTrigger {
+        TrustPromptTrigger(
+            root: controller.state.projectRoot,
+            requires: controller.state.requiresTaskTrust
+        )
+    }
+
+    private struct TrustPromptTrigger: Equatable, Hashable {
+        let root: String
+        let requires: Bool
     }
 
     private var toolbar: some View {
@@ -213,5 +236,38 @@ struct BentoRootView: View {
         .padding(.horizontal, 12)
         .frame(height: 22)
         .background(Color(hex: theme.chrome.background.hex))
+    }
+}
+
+/// Collects all NotificationCenter wiring into a single ViewModifier so
+/// `BentoRootView.body` stays under the SwiftUI type-checker's complexity
+/// budget. Every callback hops back to `BentoRootView`'s closures so the
+/// state mutations still live with the view that owns the `@State`.
+private struct NotificationWiring: ViewModifier {
+    let onPalette: () -> Void
+    let onSearch: () -> Void
+    let onNewTab: () -> Void
+    let onNewWorkspace: () -> Void
+    let onCloseTab: () -> Void
+    let onCloseEditor: () -> Void
+    let onToggleSidebar: () -> Void
+    let onFocusInnerTab: (TabID) -> Void
+    let onCloseInnerTab: (TabID) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in onNewWorkspace() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in onCloseTab() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in onCloseEditor() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in onToggleSidebar() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoFocusInnerTab)) { note in
+                if let id = note.object as? TabID { onFocusInnerTab(id) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseInnerTab)) { note in
+                if let id = note.object as? TabID { onCloseInnerTab(id) }
+            }
     }
 }
