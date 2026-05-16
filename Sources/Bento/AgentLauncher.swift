@@ -36,6 +36,16 @@ public final class AgentLauncher {
     private var cachedClient: AgentClient?
     private var connectTask: Task<AgentClient, Error>?
     private var didShutdown = false
+    private var watchdogTask: Task<Void, Never>?
+    /// Set when the orchestrator initiates a respawn (so the watchdog
+    /// doesn't re-fire on the inside of its own teardown).
+    private var isRespawning = false
+
+    /// Fires after the watchdog respawns a dead broker and a fresh
+    /// `AgentClient` is connected. Receivers should treat the previous
+    /// client as dead and rebind their views to the new one. Called on
+    /// the main actor; the previous client has already been `close()`'d.
+    public var onClientReplaced: ((AgentClient) -> Void)?
 
     /// Build a launcher targeting `socketURL` (defaults to the per-user
     /// agent socket). The agent isn't spawned until ``start()`` is called.
@@ -61,7 +71,13 @@ public final class AgentLauncher {
     @discardableResult
     public func start() async throws -> URL {
         precondition(!didShutdown, "AgentLauncher.start() called after shutdown")
+        return try await spawnIfNeeded()
+    }
 
+    /// Same flow as `start()`, but without the post-shutdown precondition
+    /// so the watchdog can drive it during `respawn()`. Idempotent on
+    /// already-running brokers.
+    private func spawnIfNeeded() async throws -> URL {
         // Already attached to an existing broker (or we already spawned one).
         if spawnedProcess != nil { return socketURL }
         if isSocketConnectable(socketURL) { return socketURL }
@@ -94,7 +110,10 @@ public final class AgentLauncher {
         // Wait briefly for the socket to come up.
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
-            if isSocketConnectable(socketURL) { return socketURL }
+            if isSocketConnectable(socketURL) {
+                installWatchdog(process: process)
+                return socketURL
+            }
             try await Task.sleep(for: .milliseconds(50))
             if !process.isRunning { break }
         }
@@ -110,6 +129,8 @@ public final class AgentLauncher {
     public func shutdown() async {
         guard !didShutdown else { return }
         didShutdown = true
+        watchdogTask?.cancel()
+        watchdogTask = nil
         connectTask?.cancel()
         connectTask = nil
         if let cachedClient {
@@ -120,6 +141,74 @@ public final class AgentLauncher {
             process.terminate()
         }
         spawnedProcess = nil
+    }
+
+    // MARK: - Watchdog
+
+    /// Spawn a polling task that fires `respawn()` if the broker exits
+    /// without us asking it to. Polling at 250 ms keeps the cost trivial
+    /// while still catching deaths within ~1 RTT for UI feedback.
+    ///
+    /// Termination signals we deliberately initiate (`SIGTERM` from
+    /// `shutdown()`) flip `didShutdown` first, so the watchdog skips the
+    /// respawn path in that case.
+    private func installWatchdog(process: Process) {
+        watchdogTask?.cancel()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runWatchdog(process: process)
+        }
+        watchdogTask = task
+    }
+
+    private func runWatchdog(process: Process) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return }
+            if didShutdown { return }
+            if !process.isRunning {
+                NSLog(
+                    "BentoAgent broker exited unexpectedly (status \(process.terminationStatus)); attempting respawn"
+                )
+                await respawn()
+                return
+            }
+        }
+    }
+
+    /// Attempt to bring a fresh broker online. Cleans up the dead
+    /// process's bookkeeping, then re-runs the spawn flow with
+    /// exponential backoff (1s → 2s → 4s → 8s cap) until we succeed or
+    /// the launcher is shut down.
+    private func respawn() async {
+        guard !didShutdown, !isRespawning else { return }
+        isRespawning = true
+        defer { isRespawning = false }
+
+        // Close the dead client connection (the underlying socket is
+        // already gone). Clear caches so `start()` + `client()` rebuild.
+        if let cachedClient {
+            await cachedClient.close()
+        }
+        cachedClient = nil
+        connectTask?.cancel()
+        connectTask = nil
+        spawnedProcess = nil
+
+        var backoffMS: UInt64 = 1000
+        while !didShutdown {
+            do {
+                _ = try await spawnIfNeeded()
+                let fresh = try await client()
+                if didShutdown { return }
+                onClientReplaced?(fresh)
+                return
+            } catch {
+                NSLog("BentoAgent respawn attempt failed (\(error)); retrying in \(backoffMS) ms")
+                try? await Task.sleep(for: .milliseconds(backoffMS))
+                backoffMS = min(backoffMS * 2, 8000)
+            }
+        }
     }
 
     // MARK: - Client access

@@ -36,6 +36,7 @@ struct BentoRootView: View {
                     projectRoot: controller.state.projectRoot,
                     fileMap: controller.fileMap,
                     agentClient: controller.agentClient,
+                    brokerEpoch: controller.brokerEpoch,
                     onGraphChange: { controller.recordPaneGraph($0) },
                     onOpenFile: { controller.openFile($0) },
                     onCwdChanged: { paneID, cwd in

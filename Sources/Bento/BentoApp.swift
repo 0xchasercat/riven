@@ -24,6 +24,12 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         self.rootController = controller
 
         let launcher = AgentLauncher()
+        // Wire the launcher's respawn callback to the controller so
+        // terminal panes can rebuild against the fresh broker when the
+        // watchdog brings one back up.
+        launcher.onClientReplaced = { [weak controller] client in
+            controller?.attachAgentClient(client)
+        }
         self.agentLauncher = launcher
 
         // Spin up the broker and hand the connected client to the

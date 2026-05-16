@@ -18,6 +18,11 @@ struct PaneGridView: NSViewRepresentable {
     let projectRoot: String
     let fileMap: PaneFileMap
     let agentClient: AgentClient?
+    /// Bumped each time the agent client is replaced (initial connect /
+    /// watchdog respawn). Threaded through so terminal tab content can
+    /// stamp it into its `.id(...)` and SwiftUI tears down + rebuilds
+    /// the underlying `BrokeredTerminalView` against the fresh client.
+    let brokerEpoch: Int
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (PaneID, String) -> Void
@@ -28,6 +33,7 @@ struct PaneGridView: NSViewRepresentable {
         projectRoot: String,
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
+        brokerEpoch: Int = 0,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
@@ -42,6 +48,7 @@ struct PaneGridView: NSViewRepresentable {
         self.projectRoot = projectRoot
         self.fileMap = fileMap
         self.agentClient = agentClient
+        self.brokerEpoch = brokerEpoch
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
@@ -60,6 +67,7 @@ struct PaneGridView: NSViewRepresentable {
             projectRoot: projectRoot,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -79,6 +87,7 @@ struct PaneGridView: NSViewRepresentable {
             projectRoot: projectRoot,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -87,9 +96,12 @@ struct PaneGridView: NSViewRepresentable {
 
     /// Holds per-leaf `NSHostingController`s across SwiftUI updates so the
     /// underlying terminal PTYs / editor text views aren't torn down every
-    /// time the graph mutates.
+    /// time the graph mutates. Also remembers the last broker epoch we
+    /// served — when it changes (broker respawn), the entire cache is
+    /// invalidated so stale BrokeredTerminalView captures get rebuilt.
     final class Coordinator {
         var leafHosts: [PaneID: NSHostingController<AnyView>] = [:]
+        var brokerEpoch: Int = 0
     }
 }
 
@@ -176,6 +188,7 @@ final class BentoPaneContainerView: NSView {
         projectRoot: String,
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
+        brokerEpoch: Int,
         onGraphChange: @escaping (PaneGraph) -> Void,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
@@ -183,6 +196,15 @@ final class BentoPaneContainerView: NSView {
         self.currentGraph = graph
         self.onGraphChange = onGraphChange
         self.layer?.backgroundColor = NSColor(hex: theme.chrome.border.hex).cgColor
+
+        // If the broker has been respawned since the last apply, drop the
+        // cached leaf hosting controllers — they hold BrokeredTerminalView
+        // instances that captured the *previous* (now-closed) agent
+        // client and would silently fail their next subscribe.
+        if let coord = coordinator, coord.brokerEpoch != brokerEpoch {
+            coord.leafHosts.removeAll()
+            coord.brokerEpoch = brokerEpoch
+        }
 
         // Build a fresh tree. NSHostingControllers for leaves are cached on
         // the coordinator so the existing terminal/editor NSViews are reused.
@@ -192,6 +214,7 @@ final class BentoPaneContainerView: NSView {
             projectRoot: projectRoot,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -312,6 +335,7 @@ private struct PaneTreeBuilder {
     let projectRoot: String
     let fileMap: PaneFileMap
     let agentClient: AgentClient?
+    let brokerEpoch: Int
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
     let onSplit: @MainActor (PaneID) -> Void
@@ -452,6 +476,7 @@ private struct PaneTreeBuilder {
                         workspace: workspace,
                         fileMap: fileMap,
                         agentClient: agentClient,
+                        brokerEpoch: brokerEpoch,
                         onOpenFile: onOpenFile,
                         onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )

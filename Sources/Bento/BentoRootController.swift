@@ -17,6 +17,12 @@ final class BentoRootController: ObservableObject {
     @Published private(set) var state: WorkspaceState
     @Published var openFilePaths: [String] = []
     @Published private(set) var agentClient: AgentClient?
+    /// Bumped each time `agentClient` is replaced — initial connect counts
+    /// as epoch 1, every subsequent watchdog respawn bumps to 2, 3, …
+    /// Views that hold long-lived broker sessions stamp this into their
+    /// SwiftUI `.id(...)` so they tear down + rebuild against the fresh
+    /// client when the broker is respawned.
+    @Published private(set) var brokerEpoch: Int = 0
 
     init() {
         let support = FileManager.default
@@ -52,8 +58,15 @@ final class BentoRootController: ObservableObject {
     /// Hand off the broker connection once `AgentLauncher` finishes its
     /// startup handshake. Until this fires, terminal panes render a
     /// "connecting" placeholder.
+    ///
+    /// Also called by the launcher's watchdog after a respawn — in that
+    /// case the previous `agentClient` is already closed and views need
+    /// to rebuild against the new one. We bump `brokerEpoch` so views
+    /// that key off it (`PaneGridView`, terminal tab content) tear down
+    /// their cached NSViews and ask SwiftUI for a fresh build.
     func attachAgentClient(_ client: AgentClient) {
         self.agentClient = client
+        self.brokerEpoch &+= 1
     }
 
     /// Open `url` in the focused workspace as an editor tab.

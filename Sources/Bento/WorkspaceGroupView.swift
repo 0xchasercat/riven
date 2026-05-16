@@ -39,6 +39,10 @@ struct WorkspaceGroupView: View {
     let workspace: WorkspaceGroup
     let fileMap: PaneFileMap
     let agentClient: AgentClient
+    /// Bumped each time the agent client is replaced (initial connect /
+    /// watchdog respawn). Stamped into terminal tab `.id(...)` so the
+    /// BrokeredTerminalView is rebuilt against the fresh client.
+    let brokerEpoch: Int
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -48,6 +52,7 @@ struct WorkspaceGroupView: View {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
+        brokerEpoch: Int = 0,
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (String) -> Void = { _ in },
         onCloseEditor: @escaping () -> Void = { }
@@ -62,6 +67,7 @@ struct WorkspaceGroupView: View {
         self.workspace = workspace
         self.fileMap = fileMap
         self.agentClient = agentClient
+        self.brokerEpoch = brokerEpoch
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
     }
@@ -73,6 +79,7 @@ struct WorkspaceGroupView: View {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -97,6 +104,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let workspace: WorkspaceGroup
     let fileMap: PaneFileMap
     let agentClient: AgentClient
+    let brokerEpoch: Int
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -113,6 +121,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -127,6 +136,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             workspace: workspace,
             fileMap: fileMap,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -171,6 +181,10 @@ private final class WorkspaceContainerView: NSView {
     /// tab gets its own BrokeredTerminalView / EditorPaneView pointed at
     /// its own surface. Tracked here so `apply` can detect transitions.
     private var lastFocusedTabID: TabID?
+    /// Force a tab-area rebuild when the broker is respawned so the
+    /// cached `tabAreaHost`'s SwiftUI subtree gets fresh BrokeredTerminal
+    /// instances pointed at the new agent client.
+    private var lastBrokerEpoch: Int?
     private var pendingSidebarPosition: CGFloat?
 
     override var isFlipped: Bool { true }
@@ -191,6 +205,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
+        brokerEpoch: Int,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -204,14 +219,18 @@ private final class WorkspaceContainerView: NSView {
 
         let focusedTabChanged = lastFocusedTabID != nil
             && lastFocusedTabID != workspace.focusedTabID
-        let needsRebuild = outerSplit == nil || focusedTabChanged
-        if focusedTabChanged {
-            // Switching inner tabs binds the tab area to a fresh
-            // terminal/editor surface. Invalidate the cached host so a
-            // new BrokeredTerminalView / EditorPaneView is built.
+        // Broker respawn invalidates the cached host so a fresh
+        // BrokeredTerminalView is built against the new agent client.
+        let brokerEpochChanged = lastBrokerEpoch != nil
+            && lastBrokerEpoch != brokerEpoch
+        let needsRebuild = outerSplit == nil
+            || focusedTabChanged
+            || brokerEpochChanged
+        if focusedTabChanged || brokerEpochChanged {
             coordinator?.tabAreaHost = nil
         }
         lastFocusedTabID = workspace.focusedTabID
+        lastBrokerEpoch = brokerEpoch
 
         layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
 
@@ -235,6 +254,7 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 fileMap: fileMap,
                 agentClient: agentClient,
+                brokerEpoch: brokerEpoch,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -247,6 +267,7 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 fileMap: fileMap,
                 agentClient: agentClient,
+                brokerEpoch: brokerEpoch,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -263,6 +284,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
+        brokerEpoch: Int,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -294,6 +316,7 @@ private final class WorkspaceContainerView: NSView {
             paneID: paneID,
             workspace: workspace,
             agentClient: agentClient,
+            brokerEpoch: brokerEpoch,
             fileMap: fileMap,
             onCwdChanged: onCwdChanged
         )
@@ -368,6 +391,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
         agentClient: AgentClient,
+        brokerEpoch: Int,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -380,6 +404,7 @@ private final class WorkspaceContainerView: NSView {
                 paneID: paneID,
                 workspace: workspace,
                 agentClient: agentClient,
+                brokerEpoch: brokerEpoch,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -412,6 +437,7 @@ private final class WorkspaceContainerView: NSView {
         paneID: PaneID,
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
+        brokerEpoch: Int,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
@@ -421,6 +447,7 @@ private final class WorkspaceContainerView: NSView {
                 paneID: paneID,
                 workspace: workspace,
                 agentClient: agentClient,
+                brokerEpoch: brokerEpoch,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -456,14 +483,16 @@ private final class WorkspaceContainerView: NSView {
     }
 
     /// The right-hand column: inner tab strip + focused tab content +
-    /// (for terminal tabs) command bar. The whole stack is `.id(tab.id)`
-    /// so swapping tabs gives SwiftUI clean teardown/build semantics.
+    /// (for terminal tabs) command bar. The whole stack is keyed on
+    /// `(tab.id, brokerEpoch)` so swapping tabs OR getting a fresh
+    /// broker connection gives SwiftUI clean teardown/build semantics.
     @ViewBuilder
     private func tabAreaView(
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
+        brokerEpoch: Int,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
@@ -484,7 +513,9 @@ private final class WorkspaceContainerView: NSView {
                 onCwdChanged: onCwdChanged
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .id(tab.id)
+            // Combined id: switching tabs OR getting a new broker client
+            // both rebuild the inner subtree against fresh state.
+            .id("\(tab.id.rawValue)|epoch:\(brokerEpoch)")
             // Only terminal tabs get the warp-style command bar. Editor
             // tabs reclaim that vertical space for the text view — typing
             // commands at a file doesn't make sense.
