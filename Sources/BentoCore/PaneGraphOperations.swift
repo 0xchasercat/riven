@@ -124,7 +124,7 @@ public extension PaneGraph {
     /// Returns a new graph with `pane.id`'s descriptor replaced by `pane`.
     /// No-op if `pane.id` isn't present. Focus + rootNode are preserved;
     /// use this for in-place attribute updates (e.g. mutating a workspace
-    /// group's `openEditorPath` or `currentCwd`).
+    /// group's `tabs`, `focusedTabID`, or `currentCwd`).
     func replacingPane(_ pane: PaneDescriptor) -> PaneGraph {
         guard panes[pane.id] != nil else { return self }
         var newPanes = panes

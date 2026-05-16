@@ -55,6 +55,14 @@ private struct InnerTabChip: View {
             )
         } label: {
             HStack(spacing: BentoSpacing.xs) {
+                // Tiny kind glyph so a user can scan terminal vs editor
+                // tabs at a glance without reading the label. `›_` for
+                // terminal (prompt-shaped), `✎` for editor.
+                Text(kindGlyph)
+                    .font(BentoType.mono(BentoType.small, weight: .semibold))
+                    .foregroundStyle(Color(hex: isActive
+                        ? theme.chrome.accent.hex
+                        : theme.chrome.tertiaryText.hex))
                 Text(tab.displayName)
                     .font(BentoType.chrome(11, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(Color(hex: isActive
@@ -104,6 +112,15 @@ private struct InnerTabChip: View {
         .onHover { isHovered = $0 }
         .animation(BentoMotion.hover, value: isHovered)
         .animation(BentoMotion.hover, value: isActive)
+    }
+
+    /// `›_` reads as a tiny shell prompt; `✎` (pencil) reads as "editor".
+    /// Both are single glyphs so the strip stays compact.
+    private var kindGlyph: String {
+        switch tab.kind {
+        case .terminal: return "›_"
+        case .editor: return "✎"
+        }
     }
 }
 

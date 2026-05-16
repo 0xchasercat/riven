@@ -1,17 +1,19 @@
 import Foundation
 
 /// A self-contained workspace unit: one shell with its own file viewer and
-/// optional editor. Splitting the pane graph creates a new `WorkspaceGroup`
-/// next to the existing one, so each split is its own coherent context.
+/// a stack of inner tabs (each terminal or editor). Splitting the pane
+/// graph creates a new `WorkspaceGroup` next to the existing one, so each
+/// split is its own coherent context.
 ///
 /// `currentCwd` is initially seeded from `initialCwd` but updated as the
 /// shell emits OSC 7 sequences (which Ghostty parses and surfaces via
 /// `GHOSTTY_TERMINAL_DATA_PWD`). The file viewer rebinds to that path so
 /// `cd` in the shell moves the sidebar with it.
 ///
-/// `openEditorPath` is nil when the workspace shows only a sidebar +
-/// terminal; non-nil when an editor pane is also visible (e.g. after the
-/// user clicked a file in the sidebar).
+/// The "open a file in the editor" flow no longer adds a side column —
+/// it appends (or focuses) an `.editor` inner tab. That's the opinionated
+/// bento layout: one tab is one thing (terminal OR editor), all sharing
+/// the workspace's sidebar.
 public struct WorkspaceGroup: Hashable, Codable, Sendable {
     public var initialCwd: String
     /// Updated as the shell emits OSC 7. Useful for status/breadcrumb
@@ -20,19 +22,22 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     /// the shell doesn't rip the file viewer out from under the user).
     public var currentCwd: String
     public var terminalCommand: String?
-    public var openEditorPath: String?
     public var sidebarWidth: CGFloat
+    /// Width hint for editor tabs. Retained as a per-workspace preference
+    /// so future split-editor experiments can reuse it; today editor tabs
+    /// fill the whole tab area so this is informational only.
     public var editorWidth: CGFloat
     public var focusedSubpane: WorkspaceSubpane
     /// Sidebar visibility. `.collapsed` (default) shows top-level
     /// directory names only at a narrow width; `.expanded` shows the
     /// full nested tree at the configured `sidebarWidth`.
     public var sidebarState: WorkspaceSidebarState
-    /// Inner tabs within this workspace. Each tab is its own terminal
-    /// with a unique paneID (so each has its own PTY at the broker).
-    /// The sidebar is shared across all inner tabs — that's the whole
-    /// point of the workspace boundary. Switching inner tabs swaps the
-    /// active terminal under the same sidebar + command bar.
+    /// Inner tabs within this workspace. Each tab is its own surface —
+    /// either a terminal (with a unique broker `PaneID` for its PTY) or
+    /// an editor pointed at a file path. The sidebar is shared across
+    /// all inner tabs — that's the whole point of the workspace boundary.
+    /// Switching inner tabs swaps the active surface under the same
+    /// sidebar + (for terminal tabs) command bar.
     public var tabs: [WorkspaceInnerTab]
     /// Which inner tab currently has focus / is rendered. Must match
     /// one of `tabs[*].id`; if it doesn't, `tabs[0]` is the fallback.
@@ -42,7 +47,6 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         initialCwd: String,
         currentCwd: String? = nil,
         terminalCommand: String? = nil,
-        openEditorPath: String? = nil,
         sidebarWidth: CGFloat = 220,
         editorWidth: CGFloat = 480,
         focusedSubpane: WorkspaceSubpane = .terminal,
@@ -53,7 +57,6 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         self.initialCwd = initialCwd
         self.currentCwd = currentCwd ?? initialCwd
         self.terminalCommand = terminalCommand
-        self.openEditorPath = openEditorPath
         self.sidebarWidth = sidebarWidth
         self.editorWidth = editorWidth
         self.focusedSubpane = focusedSubpane
@@ -64,8 +67,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         let defaultTab = WorkspaceInnerTab(
             id: TabID(),
             displayName: "shell",
-            terminalPaneID: PaneID(),
-            command: terminalCommand,
+            kind: .terminal(paneID: PaneID(), command: terminalCommand),
             cwd: initialCwd
         )
         let resolvedTabs = tabs ?? [defaultTab]
@@ -78,30 +80,169 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     public var focusedTab: WorkspaceInnerTab {
         tabs.first(where: { $0.id == focusedTabID }) ?? tabs[0]
     }
+
+    // MARK: - Codable
+    //
+    // Custom decoder so legacy snapshots (which carry an `openEditorPath`
+    // field and a flat `terminalPaneID` on each tab) still resurrect.
+    // `openEditorPath`, if present, becomes a fresh `.editor` tab appended
+    // to whatever terminal tabs already exist.
+
+    private enum CodingKeys: String, CodingKey {
+        case initialCwd
+        case currentCwd
+        case terminalCommand
+        case sidebarWidth
+        case editorWidth
+        case focusedSubpane
+        case sidebarState
+        case tabs
+        case focusedTabID
+        // Legacy:
+        case openEditorPath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.initialCwd = try c.decode(String.self, forKey: .initialCwd)
+        self.currentCwd = try c.decodeIfPresent(String.self, forKey: .currentCwd) ?? self.initialCwd
+        self.terminalCommand = try c.decodeIfPresent(String.self, forKey: .terminalCommand)
+        self.sidebarWidth = try c.decodeIfPresent(CGFloat.self, forKey: .sidebarWidth) ?? 220
+        self.editorWidth = try c.decodeIfPresent(CGFloat.self, forKey: .editorWidth) ?? 480
+        self.focusedSubpane = try c.decodeIfPresent(WorkspaceSubpane.self, forKey: .focusedSubpane) ?? .terminal
+        self.sidebarState = try c.decodeIfPresent(WorkspaceSidebarState.self, forKey: .sidebarState) ?? .collapsed
+
+        var decodedTabs = try c.decodeIfPresent([WorkspaceInnerTab].self, forKey: .tabs) ?? []
+        if decodedTabs.isEmpty {
+            // Pre-tabs snapshot: synthesize the default shell tab.
+            decodedTabs = [WorkspaceInnerTab(
+                id: TabID(),
+                displayName: "shell",
+                kind: .terminal(paneID: PaneID(), command: self.terminalCommand),
+                cwd: self.initialCwd
+            )]
+        }
+        // Legacy `openEditorPath` becomes an appended editor tab so the
+        // user lands back in the same file even though the storage shape
+        // changed.
+        if let legacyEditor = try c.decodeIfPresent(String.self, forKey: .openEditorPath),
+           !legacyEditor.isEmpty,
+           !decodedTabs.contains(where: { $0.editorPath == legacyEditor }) {
+            decodedTabs.append(WorkspaceInnerTab(
+                id: TabID(),
+                displayName: URL(fileURLWithPath: legacyEditor).lastPathComponent,
+                kind: .editor(path: legacyEditor),
+                cwd: self.initialCwd
+            ))
+        }
+        self.tabs = decodedTabs
+
+        let decodedFocus = try c.decodeIfPresent(TabID.self, forKey: .focusedTabID)
+        self.focusedTabID = decodedFocus ?? decodedTabs.first?.id ?? TabID()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(initialCwd, forKey: .initialCwd)
+        try c.encode(currentCwd, forKey: .currentCwd)
+        try c.encodeIfPresent(terminalCommand, forKey: .terminalCommand)
+        try c.encode(sidebarWidth, forKey: .sidebarWidth)
+        try c.encode(editorWidth, forKey: .editorWidth)
+        try c.encode(focusedSubpane, forKey: .focusedSubpane)
+        try c.encode(sidebarState, forKey: .sidebarState)
+        try c.encode(tabs, forKey: .tabs)
+        try c.encode(focusedTabID, forKey: .focusedTabID)
+        // Don't re-emit `openEditorPath` — it's strictly a decode-side
+        // back-compat hook.
+    }
 }
 
-/// One inner tab within a workspace. Carries the broker `PaneID` used
-/// to address its PTY plus the display name shown in the inner tab strip.
+/// One inner tab within a workspace. Carries its `kind` (terminal or
+/// editor) plus the display name shown in the inner tab strip and the
+/// cwd the tab was created under (informational; the broker still owns
+/// the live PTY's cwd via OSC 7).
 public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
     public var id: TabID
     public var displayName: String
-    public var terminalPaneID: PaneID
-    public var command: String?
+    public var kind: WorkspaceInnerTabKind
     public var cwd: String
 
     public init(
         id: TabID = TabID(),
         displayName: String,
-        terminalPaneID: PaneID,
-        command: String? = nil,
+        kind: WorkspaceInnerTabKind,
         cwd: String
     ) {
         self.id = id
         self.displayName = displayName
-        self.terminalPaneID = terminalPaneID
-        self.command = command
+        self.kind = kind
         self.cwd = cwd
     }
+
+    /// Back-compat accessor: the broker PaneID for terminal tabs, nil
+    /// for editor tabs. Callers reaching for this should branch on
+    /// `kind` instead — this is kept to keep diffs small in views that
+    /// were written before tabs grew variants.
+    public var terminalPaneID: PaneID? {
+        if case let .terminal(paneID, _) = kind { return paneID }
+        return nil
+    }
+
+    /// Back-compat accessor: the optional shell command for terminal tabs.
+    public var command: String? {
+        if case let .terminal(_, command) = kind { return command }
+        return nil
+    }
+
+    /// The file path for editor tabs.
+    public var editorPath: String? {
+        if case let .editor(path) = kind { return path }
+        return nil
+    }
+
+    // MARK: - Codable
+    //
+    // Permissive decoder so legacy snapshots — which encoded a flat
+    // `terminalPaneID` + `command` and no `kind` — still resurrect as
+    // `.terminal` tabs.
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, kind, cwd, terminalPaneID, command
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(TabID.self, forKey: .id)
+        self.displayName = try c.decode(String.self, forKey: .displayName)
+        self.cwd = try c.decode(String.self, forKey: .cwd)
+        if let kind = try c.decodeIfPresent(WorkspaceInnerTabKind.self, forKey: .kind) {
+            self.kind = kind
+        } else {
+            // Legacy shape: a flat `terminalPaneID` + `command` lived on
+            // the tab itself. Reconstruct a `.terminal` kind from those.
+            let paneID = try c.decode(PaneID.self, forKey: .terminalPaneID)
+            let command = try c.decodeIfPresent(String.self, forKey: .command)
+            self.kind = .terminal(paneID: paneID, command: command)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(cwd, forKey: .cwd)
+    }
+}
+
+/// What a `WorkspaceInnerTab` is. A `.terminal` tab carries its own
+/// broker `PaneID` (the address of its PTY) and an optional shell
+/// command; an `.editor` tab carries the file path the editor is bound
+/// to. Persisted in snapshots so each tab survives a restart with its
+/// surface kind intact.
+public enum WorkspaceInnerTabKind: Hashable, Codable, Sendable {
+    case terminal(paneID: PaneID, command: String?)
+    case editor(path: String)
 }
 
 /// Stable identifier for inner tabs. Lives across renders so the broker

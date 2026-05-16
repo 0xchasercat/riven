@@ -3,35 +3,30 @@ import BentoCore
 import SwiftUI
 
 /// Renders one `WorkspaceGroup` leaf inside the pane grid: a self-contained
-/// [sidebar | terminal | editor-if-open] unit. The sidebar shows the file
-/// tree of the workspace's currently-tracked `currentCwd`; clicking a file
-/// opens it in the workspace's own editor pane (created on demand).
+/// `[sidebar | (inner-tab-strip + focused-tab-content)]` unit. The sidebar
+/// shows the file tree of the workspace's root cwd; clicking a file opens
+/// it as an editor tab (appended to the inner tab strip, focused).
 ///
-/// Layout is built on two real `NSSplitView`s wrapped in an
-/// `NSViewRepresentable` so the user gets native divider dragging. Each
-/// column reads as a distinct surface (sidebar = `chrome.panel`,
-/// terminal = `terminal.background`, editor = blended editor surface) but
-/// they share the same hairline dividers and section headers so the three
-/// areas feel like one coherent workspace.
+/// Layout is built on one real `NSSplitView` wrapped in an
+/// `NSViewRepresentable` so the user gets native divider dragging on the
+/// sidebar boundary. The right side is a single hosted SwiftUI column
+/// that switches between terminal and editor based on the focused tab's
+/// `kind`. Terminal tabs also render the warp-style command bar pinned
+/// to the bottom; editor tabs stretch the full vertical area.
 ///
-///   ┌───────────────────────────────────────────────────────┐
-///   │ FILES   …/cwd │ TerminalPaneView   │ EDITING  foo.swift │
-///   │ ──────────────┼────────────────────┼────────────────── │
-///   │  ▸ src        │ ┌────────────────┐ │  …editor body…    │
-///   │  ▸ Tests      │ │  terminal grid │ │                    │
-///   │               │ └────────────────┘ │                    │
-///   │               │ ──── hairline ──── │                    │
-///   │               │ ░ command bar  ░░░ │                    │
-///   └───────────────────────────────────────────────────────┘
+///   ┌────────────────────────────────────────────────────┐
+///   │ FILES   …/cwd │ [shell] [foo.swift] [bar.md]    +  │
+///   │ ──────────────┼────────────────────────────────── │
+///   │  ▸ src        │  …terminal OR editor body…         │
+///   │  ▸ Tests      │                                    │
+///   │               │ ──── hairline ──── (terminal only) │
+///   │               │ ░ command bar  ░░░ (terminal only) │
+///   └────────────────────────────────────────────────────┘
 ///
-/// - The outer split is horizontal: `sidebar | (terminal-area | editor?)`.
-/// - The inner split is also horizontal between the terminal column and
-///   the editor column. The editor column is only added to the split when
-///   `workspace.openEditorPath != nil`; the split rebuilds on flip.
-/// - The terminal column itself is a vertical stack (terminal on top,
-///   a hairline + the `CommandBarView` wrapped in a thin elevated band
-///   pinned to the bottom). The command bar reads as part of the
-///   terminal experience rather than a tacked-on widget.
+/// - The outer split is horizontal: `sidebar | tab-area`.
+/// - The tab area itself is a vertical stack (tab strip on top, focused
+///   tab content beneath, command bar pinned to the bottom for terminal
+///   tabs).
 ///
 /// `currentCwd` is read straight from the model. OSC 7 plumbing from the
 /// broker bridge up to here lands in `onCwdChanged` and the parent
@@ -90,11 +85,12 @@ struct WorkspaceGroupView: View {
 
 // MARK: - NSSplitView wrapper
 
-/// Hosts the workspace's two `NSSplitView`s. The split tree is rebuilt on
-/// SwiftUI updates whenever a structural change happens (sidebar width,
-/// editor presence, paneID change) — but each subpane is wrapped in its
-/// own cached `NSHostingController` so the underlying terminal PTY and
-/// editor text view survive re-renders intact.
+/// Hosts the workspace's `NSSplitView` (sidebar | tab-area). The tab-area
+/// SwiftUI root is rebuilt on focused-tab transitions so each tab gets a
+/// fresh BrokeredTerminalView / EditorPaneView pointed at its own surface
+/// — but the cached `NSHostingController`s on the coordinator survive
+/// re-renders so the underlying terminal PTY / editor text view aren't
+/// torn down on every model mutation.
 private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let theme: ThemeSpec
     let paneID: PaneID
@@ -144,8 +140,11 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         var sidebarHost: NSHostingController<AnyView>?
-        var terminalHost: NSHostingController<AnyView>?
-        var editorHost: NSHostingController<AnyView>?
+        /// Hosting controller for the right-hand tab area (tab strip +
+        /// focused tab content + optional command bar). Rebuilt when the
+        /// focused tab changes — this keeps the terminal PTY / editor
+        /// text view from being torn down on unrelated updates.
+        var tabAreaHost: NSHostingController<AnyView>?
         /// The last paneID this coordinator served. If it changes (e.g. the
         /// pane was replaced), we throw the caches away so the new pane's
         /// terminal isn't bound to the stale broker session.
@@ -154,30 +153,25 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
 }
 
 /// Top-level NSView for the workspace. Owns the outer (horizontal) split
-/// view and rebuilds the inner split whenever `openEditorPath` flips
-/// between nil and set. Subviews are cached so the inner rebuild doesn't
-/// destroy live PTY / editor state.
+/// view between the sidebar and the tab-area. The tab-area itself is a
+/// single hosted SwiftUI column that swaps content on focused-tab
+/// transitions; subviews are cached so unrelated re-renders don't destroy
+/// live PTY / editor state.
 @MainActor
 private final class WorkspaceContainerView: NSView {
     weak var coordinator: WorkspaceSplitRepresentable.Coordinator?
 
     private var outerSplit: BentoWorkspaceSplitView?
     private var sidebarContainer: NSView?
-    private var rightContainer: NSView?
-    private var innerSplit: BentoWorkspaceSplitView?
-    private var terminalColumn: NSView?
-    private var editorColumn: NSView?
-    private var commandBarHost: NSView?
+    private var tabArea: NSView?
 
     private var currentWorkspace: WorkspaceGroup?
-    private var hasEditorColumn: Bool = false
     private var lastSidebarState: WorkspaceSidebarState?
-    /// Rebuild the terminal column when the user switches inner tabs so
-    /// each tab gets its own BrokeredTerminalView pointed at its own
-    /// broker paneID. Tracked here so `apply` can detect transitions.
+    /// Rebuild the tab area when the user switches inner tabs so each
+    /// tab gets its own BrokeredTerminalView / EditorPaneView pointed at
+    /// its own surface. Tracked here so `apply` can detect transitions.
     private var lastFocusedTabID: TabID?
     private var pendingSidebarPosition: CGFloat?
-    private var pendingEditorPosition: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -201,24 +195,21 @@ private final class WorkspaceContainerView: NSView {
         onCwdChanged: @escaping (String) -> Void
     ) {
         // If the pane identity changes, throw away cached hosts so we
-        // don't reattach the previous pane's terminal/editor here.
+        // don't reattach the previous pane's surfaces here.
         if coordinator?.lastPaneID != paneID {
             coordinator?.sidebarHost = nil
-            coordinator?.terminalHost = nil
-            coordinator?.editorHost = nil
+            coordinator?.tabAreaHost = nil
             coordinator?.lastPaneID = paneID
         }
 
         let focusedTabChanged = lastFocusedTabID != nil
             && lastFocusedTabID != workspace.focusedTabID
-        let needsRebuild = outerSplit == nil
-            || hasEditorColumn != (workspace.openEditorPath != nil)
-            || focusedTabChanged
+        let needsRebuild = outerSplit == nil || focusedTabChanged
         if focusedTabChanged {
-            // Switching inner tabs binds the terminal area to a new
-            // broker paneID. We invalidate the cached terminal host so a
-            // fresh BrokeredTerminalView is built for the new pane.
-            coordinator?.terminalHost = nil
+            // Switching inner tabs binds the tab area to a fresh
+            // terminal/editor surface. Invalidate the cached host so a
+            // new BrokeredTerminalView / EditorPaneView is built.
+            coordinator?.tabAreaHost = nil
         }
         lastFocusedTabID = workspace.focusedTabID
 
@@ -262,7 +253,6 @@ private final class WorkspaceContainerView: NSView {
         }
 
         currentWorkspace = workspace
-        hasEditorColumn = (workspace.openEditorPath != nil)
     }
 
     // MARK: - Rebuild
@@ -294,72 +284,33 @@ private final class WorkspaceContainerView: NSView {
         embed(sidebarHost.view, in: sidebarPane)
         sidebarContainer = sidebarPane
 
-        // Terminal column (terminal on top + command bar slot at bottom).
-        let terminalHost = hostTerminal(
+        // Tab area — a single hosted SwiftUI column carrying the inner
+        // tab strip, the focused tab's content (terminal or editor),
+        // and (for terminal tabs) the warp-style command bar pinned at
+        // the bottom. SwiftUI handles the per-kind layout so we don't
+        // need a second NSSplitView here.
+        let tabHost = hostTabArea(
             theme: theme,
             paneID: paneID,
             workspace: workspace,
             agentClient: agentClient,
+            fileMap: fileMap,
             onCwdChanged: onCwdChanged
         )
-        let terminalPane = NSView()
-        terminalPane.translatesAutoresizingMaskIntoConstraints = false
-        terminalPane.wantsLayer = true
-        terminalPane.layer?.backgroundColor = NSColor(hex: theme.terminal.background.hex).cgColor
-        // The command bar writes into the **focused inner tab's** PTY, not
-        // the outer workspace's PaneID (which doesn't exist on the broker).
-        // The tree rebuilds when focusedTabID changes so the bar always
-        // points at the right tab.
-        let commandBar = makeCommandBar(
-            theme: theme,
-            paneID: workspace.focusedTab.terminalPaneID,
-            agentClient: agentClient
-        )
-        embedTerminalColumn(terminalHost.view, commandBar: commandBar, in: terminalPane, theme: theme)
-        terminalColumn = terminalPane
-        commandBarHost = commandBar
+        let tabPane = NSView()
+        tabPane.translatesAutoresizingMaskIntoConstraints = false
+        tabPane.wantsLayer = true
+        tabPane.layer?.backgroundColor = NSColor(hex: theme.terminal.background.hex).cgColor
+        embed(tabHost.view, in: tabPane)
+        tabArea = tabPane
 
-        // Build right container: either just the terminal column, or an
-        // inner split (terminal | editor).
-        let right: NSView
-        if workspace.openEditorPath != nil {
-            let editorHost = hostEditor(
-                theme: theme,
-                paneID: paneID,
-                workspace: workspace,
-                fileMap: fileMap
-            )
-            let editorPane = NSView()
-            editorPane.translatesAutoresizingMaskIntoConstraints = false
-            editorPane.wantsLayer = true
-            editorPane.layer?.backgroundColor = NSColor(hex: theme.chrome.panel.hex).cgColor
-            embed(editorHost.view, in: editorPane)
-            editorColumn = editorPane
-
-            let inner = BentoWorkspaceSplitView(theme: theme)
-            inner.isVertical = true // vertical divider == side by side
-            inner.dividerStyle = .thin
-            inner.translatesAutoresizingMaskIntoConstraints = false
-            inner.addArrangedSubview(terminalPane)
-            inner.addArrangedSubview(editorPane)
-            innerSplit = inner
-            right = inner
-            pendingEditorPosition = workspace.editorWidth
-        } else {
-            innerSplit = nil
-            editorColumn = nil
-            right = terminalPane
-            pendingEditorPosition = nil
-        }
-        rightContainer = right
-
-        // Outer split: sidebar | right.
+        // Outer split: sidebar | tab-area.
         let outer = BentoWorkspaceSplitView(theme: theme)
         outer.isVertical = true
         outer.dividerStyle = .thin
         outer.translatesAutoresizingMaskIntoConstraints = false
         outer.addArrangedSubview(sidebarPane)
-        outer.addArrangedSubview(right)
+        outer.addArrangedSubview(tabPane)
         outerSplit = outer
         // Collapsed sidebar = narrow strip (~140 pt — enough for top-level
         // names without burning real estate). Expanded = the user's saved
@@ -397,15 +348,6 @@ private final class WorkspaceContainerView: NSView {
             outer.setPosition(target, ofDividerAt: 0)
             pendingSidebarPosition = nil
         }
-        if let inner = innerSplit,
-           let editorPos = pendingEditorPosition,
-           inner.arrangedSubviews.count == 2,
-           inner.bounds.width > 0 {
-            // editor occupies the right side; divider sits at total - editorWidth.
-            let target = max(200, min(inner.bounds.width - editorPos, inner.bounds.width - 200))
-            inner.setPosition(target, ofDividerAt: 0)
-            pendingEditorPosition = nil
-        }
     }
 
     override func layout() {
@@ -413,7 +355,7 @@ private final class WorkspaceContainerView: NSView {
         // If we're laid out with non-zero bounds and divider placement is
         // still pending (the deferred dispatch lost the race with layout),
         // apply it now.
-        if pendingSidebarPosition != nil || pendingEditorPosition != nil {
+        if pendingSidebarPosition != nil {
             applyPendingDividers()
         }
     }
@@ -432,24 +374,19 @@ private final class WorkspaceContainerView: NSView {
         coordinator?.sidebarHost?.rootView = AnyView(
             sidebarView(theme: theme, workspace: workspace, onOpenFile: onOpenFile)
         )
-        coordinator?.terminalHost?.rootView = AnyView(
-            terminalView(
+        coordinator?.tabAreaHost?.rootView = AnyView(
+            tabAreaView(
                 theme: theme,
                 paneID: paneID,
                 workspace: workspace,
                 agentClient: agentClient,
+                fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
         )
-        if workspace.openEditorPath != nil {
-            coordinator?.editorHost?.rootView = AnyView(
-                editorView(theme: theme, paneID: paneID, workspace: workspace, fileMap: fileMap)
-            )
-        }
         // Refresh divider colour on themed split views in case the theme
         // changed since the last layout pass.
         outerSplit?.theme = theme
-        innerSplit?.theme = theme
     }
 
     // MARK: - Hosting helpers
@@ -470,46 +407,31 @@ private final class WorkspaceContainerView: NSView {
         return host
     }
 
-    private func hostTerminal(
+    private func hostTabArea(
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
+        fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
         let root = AnyView(
-            terminalView(
+            tabAreaView(
                 theme: theme,
                 paneID: paneID,
                 workspace: workspace,
                 agentClient: agentClient,
+                fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
         )
-        if let existing = coordinator?.terminalHost {
+        if let existing = coordinator?.tabAreaHost {
             existing.rootView = root
             return existing
         }
         let host = NSHostingController(rootView: root)
         host.view.translatesAutoresizingMaskIntoConstraints = false
-        coordinator?.terminalHost = host
-        return host
-    }
-
-    private func hostEditor(
-        theme: ThemeSpec,
-        paneID: PaneID,
-        workspace: WorkspaceGroup,
-        fileMap: PaneFileMap
-    ) -> NSHostingController<AnyView> {
-        let root = AnyView(editorView(theme: theme, paneID: paneID, workspace: workspace, fileMap: fileMap))
-        if let existing = coordinator?.editorHost {
-            existing.rootView = root
-            return existing
-        }
-        let host = NSHostingController(rootView: root)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        coordinator?.editorHost = host
+        coordinator?.tabAreaHost = host
         return host
     }
 
@@ -527,24 +449,24 @@ private final class WorkspaceContainerView: NSView {
             // follow OSC 7. `cd` in the shell still updates the status
             // breadcrumb but doesn't yank the file viewer to a new path.
             currentCwd: workspace.initialCwd,
-            activePath: workspace.openEditorPath,
+            activePath: workspace.focusedTab.editorPath,
             isCollapsed: workspace.sidebarState == .collapsed,
             onOpenFile: onOpenFile
         )
     }
 
+    /// The right-hand column: inner tab strip + focused tab content +
+    /// (for terminal tabs) command bar. The whole stack is `.id(tab.id)`
+    /// so swapping tabs gives SwiftUI clean teardown/build semantics.
     @ViewBuilder
-    private func terminalView(
+    private func tabAreaView(
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
+        fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
-        // Stack: inner tab strip on top + terminal beneath. The tab
-        // strip is the per-workspace tab UI (Cmd+T adds an entry).
-        // The terminal binds to the focused inner tab's broker paneID
-        // — each tab has its own PTY.
         let tab = workspace.focusedTab
         VStack(spacing: 0) {
             InnerTabStrip(
@@ -553,31 +475,54 @@ private final class WorkspaceContainerView: NSView {
                 focusedID: workspace.focusedTabID
             )
             Hairline(theme: theme)
-            TerminalPaneView(
+            tabContent(
                 theme: theme,
-                paneID: tab.terminalPaneID,
-                cwd: tab.cwd,
-                command: tab.command,
+                tab: tab,
+                workspace: workspace,
                 agentClient: agentClient,
+                fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .id(tab.id)
+            // Only terminal tabs get the warp-style command bar. Editor
+            // tabs reclaim that vertical space for the text view — typing
+            // commands at a file doesn't make sense.
+            if case .terminal = tab.kind {
+                Hairline(theme: theme)
+                CommandBarBand(theme: theme, onSubmit: { text in
+                    guard let paneID = tab.terminalPaneID else { return }
+                    let payload = text + "\n"
+                    let data = Data(payload.utf8)
+                    Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
+                })
+            }
         }
+        .background(Color(hex: theme.terminal.background.hex))
     }
 
     @ViewBuilder
-    private func editorView(
+    private func tabContent(
         theme: ThemeSpec,
-        paneID: PaneID,
+        tab: WorkspaceInnerTab,
         workspace: WorkspaceGroup,
-        fileMap: PaneFileMap
+        agentClient: AgentClient,
+        fileMap: PaneFileMap,
+        onCwdChanged: @escaping (String) -> Void
     ) -> some View {
-        WorkspaceEditorColumn(
-            theme: theme,
-            paneID: paneID,
-            openPath: workspace.openEditorPath,
-            fileMap: fileMap
-        )
+        switch tab.kind {
+        case let .terminal(paneID, command):
+            TerminalPaneView(
+                theme: theme,
+                paneID: paneID,
+                cwd: tab.cwd,
+                command: command,
+                agentClient: agentClient,
+                onCwdChanged: onCwdChanged
+            )
+        case let .editor(path):
+            EditorTabContent(theme: theme, tabID: tab.id, path: path, fileMap: fileMap)
+        }
     }
 
     // MARK: - Layout helpers
@@ -593,68 +538,36 @@ private final class WorkspaceContainerView: NSView {
         ])
     }
 
-    /// Stacks `terminal` on top of `commandBar` inside `parent`, separated
-    /// by a 1pt hairline so the command bar reads as a deliberate input
-    /// strip rather than being flush against the terminal grid.
-    private func embedTerminalColumn(
-        _ terminal: NSView,
-        commandBar: NSView,
-        in parent: NSView,
-        theme: ThemeSpec
-    ) {
-        terminal.translatesAutoresizingMaskIntoConstraints = false
-        commandBar.translatesAutoresizingMaskIntoConstraints = false
+}
 
-        let hairline = NSView()
-        hairline.translatesAutoresizingMaskIntoConstraints = false
-        hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
+// MARK: - Editor tab content
 
-        parent.addSubview(terminal)
-        parent.addSubview(hairline)
-        parent.addSubview(commandBar)
-        NSLayoutConstraint.activate([
-            terminal.topAnchor.constraint(equalTo: parent.topAnchor),
-            terminal.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
-            terminal.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
-            terminal.bottomAnchor.constraint(equalTo: hairline.topAnchor),
+/// SwiftUI wrapper that hosts an `EditorPaneView` for an editor inner tab.
+///
+/// The existing `EditorPaneView` is keyed off `(PaneID, PaneFileMap)` —
+/// it expects the file map to carry the open URL. Inner tabs don't have
+/// their own broker `PaneID` (only terminal tabs do), so we synthesize a
+/// deterministic PaneID derived from the tab's id and seed the file map
+/// before the editor mounts. The seeding happens in `task(id:)` so a
+/// later focus-back-to-this-tab restores the binding cleanly even if the
+/// map entry was evicted.
+private struct EditorTabContent: View {
+    let theme: ThemeSpec
+    let tabID: TabID
+    let path: String
+    @ObservedObject var fileMap: PaneFileMap
 
-            hairline.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
-            hairline.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
-            hairline.bottomAnchor.constraint(equalTo: commandBar.topAnchor),
-            hairline.heightAnchor.constraint(equalToConstant: 1),
+    /// Stable virtual paneID — `editor-tab-<tab uuid>`. Survives focus
+    /// changes because the tab's id survives. Coexists with real broker
+    /// paneIDs (which are UUIDs) because of the `editor-tab-` prefix.
+    private var virtualPaneID: PaneID { PaneID("editor-tab-\(tabID.rawValue)") }
 
-            commandBar.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
-            commandBar.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
-            commandBar.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
-        ])
-    }
-
-    /// Build the Warp-style command bar at the bottom of the terminal
-    /// column. The bar itself is hosted inside a thin `elevated`-coloured
-    /// band so it visually pops as the input area without competing with
-    /// the terminal grid above.
-    /// On submit, the typed text + a trailing newline is written into the
-    /// broker pane via `AgentClient.writeInput`.
-    private func makeCommandBar(
-        theme: ThemeSpec,
-        paneID: PaneID,
-        agentClient: AgentClient
-    ) -> NSView {
-        let bar = CommandBarBand(
-            theme: theme,
-            onSubmit: { text in
-                // Append a trailing newline so the shell treats the line as
-                // submitted. Empty submissions still send a newline (matches
-                // a bare Return at a real prompt).
-                let payload = text + "\n"
-                let data = Data(payload.utf8)
-                Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
+    var body: some View {
+        EditorPaneView(theme: theme, paneID: virtualPaneID, fileMap: fileMap)
+            .background(Color(hex: theme.chrome.panel.hex))
+            .task(id: "\(tabID.rawValue)|\(path)") {
+                fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
             }
-        )
-        let host = NSHostingController(rootView: bar)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        return host.view
     }
 }
 
@@ -1065,80 +978,6 @@ private struct WorkspaceFileRow: View {
     }
 }
 
-// MARK: - Editor column
-
-/// Editor sub-surface shown to the right of the terminal column when
-/// `workspace.openEditorPath` is non-nil. Adds a 32 pt header
-/// (`EDITING` + the file's `lastPathComponent`) and a hairline above the
-/// `EditorPaneView` body so the editor reads as a deliberate sibling of
-/// the terminal and sidebar surfaces rather than a bare text box.
-private struct WorkspaceEditorColumn: View {
-    let theme: ThemeSpec
-    let paneID: PaneID
-    let openPath: String?
-    let fileMap: PaneFileMap
-
-    @State private var isCloseHovered = false
-
-    /// Close action: posts a notification the orchestrator listens for and
-    /// translates into `BentoRootController.closeFocusedEditor()`. We use
-    /// notifications instead of a callback parameter because plumbing one
-    /// through `WorkspaceContainerView` / `rebuildTree` / `hostEditor` /
-    /// `editorView` would require six layers of parameter additions for a
-    /// single click handler.
-    private func onClose() {
-        NotificationCenter.default.post(name: .bentoCloseEditor, object: nil)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Hairline(theme: theme)
-            EditorPaneView(theme: theme, paneID: paneID, fileMap: fileMap)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(hex: theme.chrome.panel.hex))
-    }
-
-    private var header: some View {
-        HStack(spacing: BentoSpacing.s) {
-            SectionLabel(theme: theme, "EDITING")
-            Spacer(minLength: BentoSpacing.s)
-            Text(fileName)
-                .font(BentoType.mono(BentoType.small, weight: .medium))
-                .foregroundStyle(Color(hex: theme.chrome.text.hex))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Button(action: onClose) {
-                Text("×")
-                    .font(BentoType.chrome(13, weight: .medium))
-                    .foregroundStyle(Color(hex: isCloseHovered
-                        ? theme.chrome.text.hex
-                        : theme.chrome.tertiaryText.hex))
-                    .frame(width: 22, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
-                            .fill(Color(hex: theme.chrome.accentSoft.hex)
-                                .opacity(isCloseHovered ? 1 : 0))
-                    )
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .onHover { isCloseHovered = $0 }
-            .help("Close editor (the file stays on disk)")
-            .animation(BentoMotion.hover, value: isCloseHovered)
-        }
-        .padding(.horizontal, BentoSpacing.m)
-        .frame(height: 32)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// `lastPathComponent` of `openEditorPath` — never the full path, per
-    /// the spec. The full path is implied by the sidebar's breadcrumb and
-    /// active-row highlight, so the editor header stays terse.
-    private var fileName: String {
-        guard let openPath, !openPath.isEmpty else { return "—" }
-        return URL(fileURLWithPath: openPath).lastPathComponent
-    }
-}
+// (The legacy `WorkspaceEditorColumn` lived here; it was removed when the
+// editor became an inner tab. The new entry point is `EditorTabContent`
+// inside `WorkspaceContainerView`'s SwiftUI tab-area surface above.)

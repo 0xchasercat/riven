@@ -56,24 +56,40 @@ final class BentoRootController: ObservableObject {
         self.agentClient = client
     }
 
-    /// Open `url` in the focused workspace's editor pane. If the focused
-    /// pane is a workspace, set its `openEditorPath` (which causes the
-    /// `WorkspaceGroupView` to reveal its editor subpane); legacy
-    /// terminal/editor leaves fall back to the old auto-split behavior.
+    /// Open `url` in the focused workspace as an editor tab.
+    ///
+    /// If the focused workspace already has an editor tab pointed at
+    /// `url`, focus that tab. Otherwise append a fresh editor tab and
+    /// focus it. The sidebar is unchanged — that's the whole point of
+    /// the bento model: the editor lives as a peer of the terminal in
+    /// the inner tab strip, sharing one sidebar.
+    ///
+    /// Legacy non-workspace pane kinds (terminal / editor leaves from
+    /// pre-workspace snapshots) fall back to the old auto-split behavior
+    /// so old graphs keep working.
     func openFile(_ url: URL) {
         var graph = state.paneGraph
         let focusedID = graph.focusedPaneID
         let focused = graph.pane(focusedID)
 
         if let workspace = focused?.workspace {
-            // Update the workspace's editor binding in place — no new split.
             var updated = workspace
-            updated.openEditorPath = url.path
+            if let existing = updated.tabs.first(where: { $0.editorPath == url.path }) {
+                // Already open — just focus the existing tab.
+                updated.focusedTabID = existing.id
+            } else {
+                let newTab = WorkspaceInnerTab(
+                    id: TabID(),
+                    displayName: url.lastPathComponent,
+                    kind: .editor(path: url.path),
+                    cwd: updated.initialCwd
+                )
+                updated.tabs.append(newTab)
+                updated.focusedTabID = newTab.id
+            }
             var pane = focused!
             pane.kind = .workspace(updated)
-            // Rebuild the graph by replacing the pane in-place.
             graph = graph.replacingPane(pane)
-            fileMap.setFile(url, for: focusedID)
         } else {
             // Legacy fallback (terminal/editor leaves): preserve previous
             // behavior of splitting in an editor pane.
@@ -184,8 +200,7 @@ final class BentoRootController: ObservableObject {
         }
         let tab = WorkspaceInnerTab(
             displayName: "shell",
-            terminalPaneID: PaneID(),
-            command: nil,
+            kind: .terminal(paneID: PaneID(), command: nil),
             cwd: workspace.initialCwd
         )
         workspace.tabs.append(tab)
@@ -258,18 +273,23 @@ final class BentoRootController: ObservableObject {
         if next != state.paneGraph { recordPaneGraph(next) }
     }
 
-    /// Close the focused workspace's open editor (if any). The editor
-    /// column hides; the terminal stays put. No-op when the focused pane
-    /// isn't a workspace or the workspace has no editor open.
+    /// Close the focused inner tab if it's an editor. No-op when the
+    /// focused pane isn't a workspace, when the focused inner tab is a
+    /// terminal, or when the workspace has only one tab left (we never
+    /// let a workspace go tabless).
+    ///
+    /// Wired to the `bentoCloseEditor` notification; the editor column
+    /// header's `×` button used to fire this. Now that the editor is an
+    /// inner tab, the per-tab `×` in `InnerTabStrip` is the primary
+    /// close path — this remains as a fallback so older entry points
+    /// (Cmd shortcuts, palette actions) still work.
     func closeFocusedEditor() {
-        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              var workspace = pane.workspace,
-              workspace.openEditorPath != nil else {
+        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace,
+              workspace.focusedTab.editorPath != nil else {
             return
         }
-        workspace.openEditorPath = nil
-        pane.kind = .workspace(workspace)
-        recordPaneGraph(state.paneGraph.replacingPane(pane))
+        closeInnerTab(workspace.focusedTabID)
     }
 
     /// Trust the currently open project so its `.bento/session.yml` task

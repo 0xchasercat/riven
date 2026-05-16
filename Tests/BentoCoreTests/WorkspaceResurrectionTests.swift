@@ -135,7 +135,16 @@ struct WorkspaceResurrectionTests {
             #expect(workspace.initialCwd == project.standardizedFileURL.path)
             #expect(workspace.currentCwd == project.standardizedFileURL.path)
             #expect(workspace.terminalCommand == nil)
-            #expect(workspace.openEditorPath == nil)
+            // A fresh workspace ships with exactly one inner tab — a
+            // terminal anchored at the workspace's cwd. The editor is
+            // now a peer tab kind, not a side column; opening a file
+            // appends an `.editor` tab.
+            #expect(workspace.tabs.count == 1)
+            if case .terminal = workspace.tabs.first?.kind {
+                // expected
+            } else {
+                Issue.record("expected default inner tab to be a terminal")
+            }
         } else {
             Issue.record("expected default pane to be a workspace group")
         }
