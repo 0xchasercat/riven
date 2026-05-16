@@ -306,9 +306,13 @@ private final class WorkspaceContainerView: NSView {
         terminalPane.translatesAutoresizingMaskIntoConstraints = false
         terminalPane.wantsLayer = true
         terminalPane.layer?.backgroundColor = NSColor(hex: theme.terminal.background.hex).cgColor
+        // The command bar writes into the **focused inner tab's** PTY, not
+        // the outer workspace's PaneID (which doesn't exist on the broker).
+        // The tree rebuilds when focusedTabID changes so the bar always
+        // points at the right tab.
         let commandBar = makeCommandBar(
             theme: theme,
-            paneID: paneID,
+            paneID: workspace.focusedTab.terminalPaneID,
             agentClient: agentClient
         )
         embedTerminalColumn(terminalHost.view, commandBar: commandBar, in: terminalPane, theme: theme)
