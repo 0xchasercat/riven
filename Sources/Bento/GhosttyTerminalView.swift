@@ -312,20 +312,32 @@ public final class GhosttyTerminalView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        // Snapshot the live terminal via the libghostty-vt render-state
+        // API. Falls back to an empty frame if the session isn't ready
+        // yet (e.g. the view is in a window but `startIfNeeded` hasn't
+        // run, or the session was just closed).
+        let frame: GhosttyRenderFrame
+        if let session, let live = try? bridge.snapshotFrame(session) {
+            frame = live
+        } else {
+            frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
+        }
         GhosttyRenderer.draw(
-            bridge: bridge,
-            session: session,
-            bounds: bounds,
-            ctx: ctx,
-            style: GhosttyRenderer.Style(
-                foreground: configuration.foreground,
-                background: configuration.background,
-                cursor: configuration.cursor
+            frame: frame,
+            configuration: GhosttyRenderer.TerminalRenderConfiguration(
+                defaultForeground: configuration.foreground,
+                defaultBackground: configuration.background,
+                cursorColor: configuration.cursor,
+                fontSize: configuration.fontSize,
+                fontName: configuration.fontName
             ),
-            textAttributes: textAttributes,
-            cellWidth: cellWidth,
-            cellHeight: cellHeight,
-            ascent: ascent
+            metrics: GhosttyRenderer.TerminalCellMetrics(
+                cellWidth: cellWidth,
+                cellHeight: cellHeight,
+                ascent: ascent
+            ),
+            in: ctx,
+            bounds: bounds
         )
     }
 

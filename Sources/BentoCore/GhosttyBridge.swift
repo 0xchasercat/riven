@@ -4,6 +4,9 @@ import GhosttyVt
 public final class GhosttySessionHandle: @unchecked Sendable {
     public let paneID: PaneID
     fileprivate var terminal: GhosttyTerminal?
+    /// Lazily-created render state, owned by this handle. Created on first
+    /// `snapshotFrame` call, freed on `close`/`deinit`.
+    fileprivate var renderState: GhosttyRenderState?
 
     fileprivate init(paneID: PaneID, terminal: GhosttyTerminal) {
         self.paneID = paneID
@@ -11,17 +14,12 @@ public final class GhosttySessionHandle: @unchecked Sendable {
     }
 
     deinit {
+        if let renderState {
+            ghostty_render_state_free(renderState)
+        }
         if let terminal {
             ghostty_terminal_free(terminal)
         }
-    }
-}
-
-public struct GhosttyRenderFrame: Equatable, Sendable {
-    public var dirtyRectCount: Int
-
-    public init(dirtyRectCount: Int = 0) {
-        self.dirtyRectCount = dirtyRectCount
     }
 }
 
@@ -185,15 +183,283 @@ public struct GhosttyBridge: Sendable {
         handle.terminal != nil
     }
 
-    public func renderFrame(for handle: GhosttySessionHandle) throws -> GhosttyRenderFrame {
-        GhosttyRenderFrame()
-    }
-
     public func close(_ handle: GhosttySessionHandle) throws {
+        if let renderState = handle.renderState {
+            ghostty_render_state_free(renderState)
+            handle.renderState = nil
+        }
         if let terminal = handle.terminal {
             ghostty_terminal_free(terminal)
             handle.terminal = nil
         }
+    }
+
+    // MARK: - Render-state snapshot
+
+    /// Build a fully-resolved `GhosttyRenderFrame` for the current viewport
+    /// using the libghostty-vt **Render State API** (`render.h`). This is
+    /// the production-grade path the renderer should use every redraw —
+    /// unlike `readGridText`, which uses `ghostty_terminal_grid_ref` and is
+    /// documented as not built for render-loop framerates.
+    ///
+    /// The render state is owned by `handle` and lives as long as the
+    /// session. It is created lazily on first call.
+    ///
+    /// After taking the snapshot we clear the render state's "dirty" flag
+    /// so libghostty's internal accounting stays consistent for the next
+    /// `update` (we currently re-snapshot the whole frame on every call;
+    /// dirty-region rendering is a future optimization for the renderer).
+    public func snapshotFrame(_ handle: GhosttySessionHandle) throws -> GhosttyRenderFrame {
+        guard let terminal = handle.terminal else {
+            throw GhosttyBridgeError.closedSession
+        }
+
+        // Lazy-create the render state.
+        let state: GhosttyRenderState
+        if let existing = handle.renderState {
+            state = existing
+        } else {
+            var created: GhosttyRenderState?
+            let result = ghostty_render_state_new(nil, &created)
+            guard result == GHOSTTY_SUCCESS, let created else {
+                throw GhosttyBridgeError.snapshotFailed("render_state_new=\(result.rawValue)")
+            }
+            handle.renderState = created
+            state = created
+        }
+
+        // Sync from terminal.
+        let updateResult = ghostty_render_state_update(state, terminal)
+        guard updateResult == GHOSTTY_SUCCESS else {
+            throw GhosttyBridgeError.snapshotFailed("render_state_update=\(updateResult.rawValue)")
+        }
+
+        // Viewport dimensions.
+        var cols: UInt16 = 0
+        var rows: UInt16 = 0
+        guard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_COLS, &cols) == GHOSTTY_SUCCESS,
+              ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_ROWS, &rows) == GHOSTTY_SUCCESS else {
+            throw GhosttyBridgeError.snapshotFailed("render_state_get(cols/rows)")
+        }
+
+        // Default colors. The struct uses the sized-struct ABI: we MUST
+        // initialize `size` ourselves since `GHOSTTY_INIT_SIZED` is a C macro
+        // that doesn't bridge to Swift.
+        var colors = GhosttyRenderStateColors()
+        colors.size = MemoryLayout<GhosttyRenderStateColors>.size
+        var defaultFG = GhosttyRGB(r: 220, g: 220, b: 220)
+        var defaultBG = GhosttyRGB(r: 18, g: 18, b: 18)
+        if ghostty_render_state_colors_get(state, &colors) == GHOSTTY_SUCCESS {
+            defaultFG = GhosttyRGB(r: colors.foreground.r, g: colors.foreground.g, b: colors.foreground.b)
+            defaultBG = GhosttyRGB(r: colors.background.r, g: colors.background.g, b: colors.background.b)
+        }
+
+        // Cursor state.
+        let cursor = readCursorState(state: state)
+
+        // Cells.
+        let cellGrid = try readCells(state: state, cols: Int(cols), rows: Int(rows))
+
+        // Clear dirty so libghostty's tracking doesn't accumulate forever.
+        var dirtyOff = GHOSTTY_RENDER_STATE_DIRTY_FALSE
+        _ = ghostty_render_state_set(state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirtyOff)
+
+        return GhosttyRenderFrame(
+            cols: cols,
+            rows: rows,
+            defaultForeground: defaultFG,
+            defaultBackground: defaultBG,
+            cursor: cursor,
+            cells: cellGrid
+        )
+    }
+
+    private func readCursorState(state: GhosttyRenderState) -> GhosttyCursorState {
+        var visibleMode: Bool = false
+        var blinking: Bool = false
+        var styleRaw: GhosttyRenderStateCursorVisualStyle = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+        var hasViewport: Bool = false
+        var x: UInt16 = 0
+        var y: UInt16 = 0
+        var wideTail: Bool = false
+
+        _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &visibleMode)
+        _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &blinking)
+        _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &styleRaw)
+        _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &hasViewport)
+        if hasViewport {
+            _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &x)
+            _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &y)
+            _ = ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL, &wideTail)
+        }
+
+        return GhosttyCursorState(
+            visible: visibleMode && hasViewport,
+            blinking: blinking,
+            style: GhosttyCursorVisualStyle.from(Int32(styleRaw.rawValue)),
+            x: x,
+            y: y,
+            isOnWideTail: wideTail
+        )
+    }
+
+    private func readCells(
+        state: GhosttyRenderState,
+        cols: Int,
+        rows: Int
+    ) throws -> [[GhosttyResolvedCell]] {
+        let blankRow = Array(repeating: GhosttyResolvedCell.blank, count: cols)
+        var grid = Array(repeating: blankRow, count: rows)
+
+        guard cols > 0, rows > 0 else { return grid }
+
+        // Allocate the row iterator + a reusable cells container.
+        var rowIterOpt: GhosttyRenderStateRowIterator?
+        guard ghostty_render_state_row_iterator_new(nil, &rowIterOpt) == GHOSTTY_SUCCESS,
+              let rowIter = rowIterOpt else {
+            throw GhosttyBridgeError.snapshotFailed("row_iterator_new")
+        }
+        defer { ghostty_render_state_row_iterator_free(rowIter) }
+
+        // Populate the iterator from the render state. The C call writes the
+        // handle pointer back into our local; pass an inout copy so we can
+        // satisfy Swift's mutability check on the immutable `rowIter`.
+        var rowIterMutable: GhosttyRenderStateRowIterator? = rowIter
+        guard ghostty_render_state_get(
+            state,
+            GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+            &rowIterMutable
+        ) == GHOSTTY_SUCCESS else {
+            throw GhosttyBridgeError.snapshotFailed("row_iterator populate")
+        }
+
+        var cellsHandleOpt: GhosttyRenderStateRowCells?
+        guard ghostty_render_state_row_cells_new(nil, &cellsHandleOpt) == GHOSTTY_SUCCESS,
+              let cellsHandle = cellsHandleOpt else {
+            throw GhosttyBridgeError.snapshotFailed("row_cells_new")
+        }
+        defer { ghostty_render_state_row_cells_free(cellsHandle) }
+
+        var rowIndex = 0
+        while rowIndex < rows && ghostty_render_state_row_iterator_next(rowIter) {
+            // Populate cells container for the current row.
+            var localCells: GhosttyRenderStateRowCells? = cellsHandle
+            let cellsResult = ghostty_render_state_row_get(
+                rowIter,
+                GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+                &localCells
+            )
+            if cellsResult != GHOSTTY_SUCCESS {
+                rowIndex += 1
+                continue
+            }
+
+            var rowCells = blankRow
+            var col = 0
+            while col < cols && ghostty_render_state_row_cells_next(cellsHandle) {
+                rowCells[col] = readOneCell(cells: cellsHandle)
+                col += 1
+            }
+            grid[rowIndex] = rowCells
+            rowIndex += 1
+        }
+
+        return grid
+    }
+
+    private func readOneCell(cells: GhosttyRenderStateRowCells) -> GhosttyResolvedCell {
+        // Raw cell value (a uint64_t typedef — value, not pointer).
+        var rawCell: GhosttyCell = 0
+        _ = ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &rawCell)
+
+        var hasText: Bool = false
+        _ = ghostty_cell_get(rawCell, GHOSTTY_CELL_DATA_HAS_TEXT, &hasText)
+
+        var wide: GhosttyCellWide = GHOSTTY_CELL_WIDE_NARROW
+        _ = ghostty_cell_get(rawCell, GHOSTTY_CELL_DATA_WIDE, &wide)
+        let isWideTail = (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL)
+
+        // Build the grapheme-cluster text for this cell.
+        var text: String
+        if isWideTail || !hasText {
+            text = isWideTail ? "" : " "
+        } else {
+            var graphemeLen: UInt32 = 0
+            _ = ghostty_render_state_row_cells_get(
+                cells,
+                GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN,
+                &graphemeLen
+            )
+            if graphemeLen <= 1 {
+                var codepoint: UInt32 = 0
+                _ = ghostty_cell_get(rawCell, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint)
+                if codepoint == 0 {
+                    text = " "
+                } else if let scalar = Unicode.Scalar(codepoint) {
+                    text = String(scalar)
+                } else {
+                    text = " "
+                }
+            } else {
+                var buffer = [UInt32](repeating: 0, count: Int(graphemeLen))
+                let rc: GhosttyResult = buffer.withUnsafeMutableBufferPointer { buf -> GhosttyResult in
+                    var ptr: UnsafeMutablePointer<UInt32>? = buf.baseAddress
+                    return ghostty_render_state_row_cells_get(
+                        cells,
+                        GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
+                        &ptr
+                    )
+                }
+                if rc == GHOSTTY_SUCCESS {
+                    var scalars = String.UnicodeScalarView()
+                    for cp in buffer {
+                        if let s = Unicode.Scalar(cp) { scalars.append(s) }
+                    }
+                    text = String(scalars)
+                    if text.isEmpty { text = " " }
+                } else {
+                    text = " "
+                }
+            }
+        }
+
+        // Style (bold, italic, underline, etc.).
+        var style = GhosttyStyle()
+        style.size = MemoryLayout<GhosttyStyle>.size
+        _ = ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style)
+
+        // Resolved foreground / background — INVALID_VALUE means "use default".
+        var fgRgb = GhosttyColorRgb(r: 0, g: 0, b: 0)
+        var bgRgb = GhosttyColorRgb(r: 0, g: 0, b: 0)
+        let fgResult = ghostty_render_state_row_cells_get(
+            cells,
+            GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
+            &fgRgb
+        )
+        let bgResult = ghostty_render_state_row_cells_get(
+            cells,
+            GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+            &bgRgb
+        )
+
+        let foreground: GhosttyRGB? = (fgResult == GHOSTTY_SUCCESS)
+            ? GhosttyRGB(r: fgRgb.r, g: fgRgb.g, b: fgRgb.b)
+            : nil
+        let background: GhosttyRGB? = (bgResult == GHOSTTY_SUCCESS)
+            ? GhosttyRGB(r: bgRgb.r, g: bgRgb.g, b: bgRgb.b)
+            : nil
+
+        return GhosttyResolvedCell(
+            text: text,
+            foreground: foreground,
+            background: background,
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline != GHOSTTY_SGR_UNDERLINE_NONE.rawValue,
+            strikethrough: style.strikethrough,
+            inverse: style.inverse,
+            isWideTail: isWideTail
+        )
     }
 }
 
@@ -204,4 +470,5 @@ public enum GhosttyBridgeError: Error, Equatable {
     case invalidSize(columns: Int, rows: Int)
     case emptyInput
     case gridReadFailed
+    case snapshotFailed(String)
 }
