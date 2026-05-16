@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Pre-commit hook for Bento.
+#
+# Blocks accidental re-tracking of vendored Ghostty sources / install dirs.
+# Those live under External/ and are provisioned per-machine by
+# scripts/setup-ghostty.sh; they're listed in .gitignore but git's
+# "embedded git repo" detection re-stages them whenever someone runs
+# `git add -A` from the repo root, and we've already had to back that out
+# twice (see commits abdc4b1, 5bebf66).
+#
+# Enable: run `git config core.hooksPath scripts/git-hooks` once.
+# scripts/setup-ghostty.sh does that for you on first run.
+
+set -euo pipefail
+
+# Staged paths (added/modified/renamed/copied/typechange) — anything
+# we're about to commit, in either tracked or newly-added state.
+staged="$(git diff --cached --name-only --diff-filter=ACMRT)"
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+# Reject any path under External/ (the vendored Ghostty source + the
+# built libghostty-vt install). Allows External/.keep or similar marker
+# files at the top level if we ever need them, but rejects everything
+# nested.
+blocked="$(printf '%s\n' "$staged" | grep -E '^External/.+' || true)"
+
+if [ -n "$blocked" ]; then
+  cat >&2 <<EOF
+[bento pre-commit] Refusing to commit paths under External/:
+
+$blocked
+
+Those are vendored / built artifacts (Ghostty source, libghostty-vt
+install) and live in .gitignore. They were re-staged most likely by a
+'git add -A' from the repo root — git auto-tracks embedded repos.
+
+To unstage them and continue:
+
+  git reset HEAD External/
+
+If you genuinely need to commit an External/ change (e.g. a one-off
+marker file at the very top of External/), bypass the hook with
+'git commit --no-verify' — but only after you're sure.
+EOF
+  exit 1
+fi
+
+exit 0
