@@ -1,5 +1,6 @@
 import BentoCore
 import Darwin
+import Dispatch
 import Foundation
 import Network
 
@@ -70,6 +71,134 @@ final class RingBuffer: @unchecked Sendable {
     }
 }
 
+// MARK: - Scrollback persistence
+
+/// Buffered, write-coalescing front-end to ``ScrollbackStore`` used by the
+/// broker. Each `IPCEvent.output` chunk is queued in a per-pane in-memory
+/// buffer; the buffer is flushed to disk under a hybrid policy:
+///
+/// * **Size**: as soon as a pane's pending buffer crosses
+///   ``flushBytesThreshold`` (default 4 KiB) we ask the I/O queue to drain
+///   that pane ASAP. The hot path stays lock-bounded — never blocked on disk.
+/// * **Time**: a single repeating `DispatchSourceTimer` fires every
+///   ``flushInterval`` (default 250 ms) and drains every dirty pane.
+///
+/// All disk I/O happens on a dedicated `DispatchQueue` (`ioQueue`) so the
+/// broker's actors never block on `write(2)` or the periodic O(N) truncate.
+/// Worst case after a hard kill: ~250 ms of buffered bytes. SIGTERM/SIGINT
+/// flush synchronously via ``shutdown()``.
+///
+/// After every flush we enforce a per-pane size cap (`onDiskCapBytes`,
+/// default 1 MiB) by truncating the file from the oldest end. Truncation is
+/// amortized — see ``ScrollbackStore/truncateIfExceeds(_:cap:slack:)``.
+final class ScrollbackPersister: @unchecked Sendable {
+    let store: ScrollbackStore
+    let flushBytesThreshold: Int
+    let flushInterval: DispatchTimeInterval
+    let onDiskCapBytes: Int
+    /// Slack between the on-disk cap and the trigger that forces a rewrite.
+    /// Higher = less I/O, more wasted disk; lower = tighter cap, more rewrites.
+    let truncateSlackBytes: Int = 256 * 1024
+
+    private let lock = NSLock()
+    private var pending: [PaneID: Data] = [:]
+    private let timer: DispatchSourceTimer
+    private let ioQueue: DispatchQueue
+    private var stopped = false
+
+    init(
+        store: ScrollbackStore,
+        flushBytesThreshold: Int = 4 * 1024,
+        flushInterval: DispatchTimeInterval = .milliseconds(250),
+        onDiskCapBytes: Int = 1 * 1024 * 1024
+    ) {
+        self.store = store
+        self.flushBytesThreshold = flushBytesThreshold
+        self.flushInterval = flushInterval
+        self.onDiskCapBytes = onDiskCapBytes
+
+        self.ioQueue = DispatchQueue(label: "bento.agent.scrollback-persister.io", qos: .utility)
+        self.timer = DispatchSource.makeTimerSource(queue: ioQueue)
+        self.timer.schedule(deadline: .now() + flushInterval, repeating: flushInterval)
+        self.timer.setEventHandler { [weak self] in
+            self?.flushAll()
+        }
+        self.timer.resume()
+    }
+
+    /// Append `data` to the pane's pending write buffer. Never blocks on disk
+    /// — when the per-pane buffer crosses ``flushBytesThreshold`` we just
+    /// async-dispatch a drain to the I/O queue and return.
+    func enqueue(_ data: Data, for paneID: PaneID) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        var buf = pending[paneID] ?? Data()
+        buf.append(data)
+        pending[paneID] = buf
+        let shouldFlush = buf.count >= flushBytesThreshold
+        lock.unlock()
+        if shouldFlush {
+            ioQueue.async { [weak self] in
+                self?.flush(paneID: paneID)
+            }
+        }
+    }
+
+    /// Synchronously flush a single pane's pending buffer to disk and apply
+    /// the size cap. Always invoked on `ioQueue` — the timer, the
+    /// size-trigger dispatch, and `flushAll()` all run there. ``shutdown()``
+    /// is the one caller that runs synchronously on the calling thread (so
+    /// SIGTERM blocks until everything is on disk).
+    func flush(paneID: PaneID) {
+        lock.lock()
+        guard let data = pending.removeValue(forKey: paneID), !data.isEmpty else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        do {
+            try store.appendData(data, to: paneID)
+            try store.truncateIfExceeds(paneID, cap: onDiskCapBytes, slack: truncateSlackBytes)
+        } catch {
+            FileHandle.standardError.write(Data("BentoAgent scrollback flush failed for \(paneID): \(error)\n".utf8))
+        }
+    }
+
+    /// Flush every pane that has pending bytes (runs on `ioQueue`).
+    func flushAll() {
+        lock.lock()
+        let ids = Array(pending.keys)
+        lock.unlock()
+        for id in ids { flush(paneID: id) }
+    }
+
+    /// Block until every pane's pending bytes are durable on disk, then
+    /// stop the periodic timer. Used by:
+    ///
+    /// * SIGTERM/SIGINT — guarantees the next process generation sees all
+    ///   the bytes from this one.
+    /// * Subscribe path — guarantees the replay we hand to a new subscriber
+    ///   includes every byte the in-memory ring already saw.
+    func flushNow() {
+        // Synchronously drain the io queue: any in-flight async flush is
+        // already on it, and our barrier block won't run until they finish.
+        ioQueue.sync(flags: .barrier) {
+            self.flushAll()
+        }
+    }
+
+    /// Flush everything and stop the background timer. Call from the SIGTERM
+    /// path before exiting the process.
+    func shutdown() {
+        lock.lock()
+        if stopped { lock.unlock(); return }
+        stopped = true
+        lock.unlock()
+        timer.cancel()
+        flushNow()
+    }
+}
+
 // MARK: - Pane state
 
 /// One PTY-backed pane owned by the broker. Subscribers are connections that
@@ -81,21 +210,44 @@ actor PaneState {
     let cwd: String
     let pty: LivePseudoTerminal
     let ringBuffer: RingBuffer
+    let persister: ScrollbackPersister?
     private var subscribers: [ObjectIdentifier: ConnectionSink] = [:]
     private(set) var isRunning: Bool = true
     private(set) var exitStatus: Int32? = nil
 
-    init(paneID: PaneID, command: String, args: [String], cwd: String, pty: LivePseudoTerminal, ringBuffer: RingBuffer) {
+    init(
+        paneID: PaneID,
+        command: String,
+        args: [String],
+        cwd: String,
+        pty: LivePseudoTerminal,
+        ringBuffer: RingBuffer,
+        persister: ScrollbackPersister?
+    ) {
         self.paneID = paneID
         self.command = command
         self.args = args
         self.cwd = cwd
         self.pty = pty
         self.ringBuffer = ringBuffer
+        self.persister = persister
     }
 
+    /// Add a subscriber and return the replay payload for it. Replay prefers
+    /// the on-disk scrollback tail (which is the canonical history including
+    /// bytes from previous broker generations); falls back to the in-memory
+    /// ring buffer when there's no persister or no on-disk file yet.
     func addSubscriber(_ sink: ConnectionSink) -> Data {
         subscribers[ObjectIdentifier(sink)] = sink
+        if let persister {
+            // Drain *all* pending bytes (any pane) before sampling the tail
+            // so we don't ship a replay that's missing the most recent few
+            // hundred milliseconds of output.
+            persister.flushNow()
+            if let tail = try? persister.store.tail(paneID, bytes: persister.onDiskCapBytes), !tail.isEmpty {
+                return tail
+            }
+        }
         return ringBuffer.snapshot()
     }
 
@@ -117,6 +269,7 @@ actor PaneState {
 
     func handleOutput(_ data: Data) {
         ringBuffer.append(data)
+        persister?.enqueue(data, for: paneID)
         let frame = IPCFrame.event(.output(paneID: paneID, data: data))
         for (_, sink) in subscribers {
             sink.send(frame: frame)
@@ -126,6 +279,10 @@ actor PaneState {
     func handleExit(_ status: Int32) {
         isRunning = false
         exitStatus = status
+        // Make sure any tail bytes the child wrote right before exit are on
+        // disk before we tear the subscriber list down. Doing this on a
+        // background queue would race the exit notification.
+        persister?.flushNow()
         let frame = IPCFrame.event(.exited(paneID: paneID, status: status))
         for (_, sink) in subscribers {
             sink.send(frame: frame)
@@ -172,6 +329,19 @@ final class ConnectionSink: @unchecked Sendable {
 
 actor AgentBroker {
     private var panes: [PaneID: PaneState] = [:]
+    /// Paths to scrollback files for panes that existed in a previous broker
+    /// generation. We don't spin a PTY back up for them — but if a client
+    /// subscribes by paneID we serve their on-disk history as a one-shot
+    /// replay so the UI can repaint.
+    private var dormantHistory: Set<PaneID> = []
+    let persister: ScrollbackPersister?
+
+    init(persister: ScrollbackPersister?) {
+        self.persister = persister
+        if let persister, let ids = try? persister.store.listPaneIDs() {
+            self.dormantHistory = Set(ids)
+        }
+    }
 
     func createPane(
         paneID: PaneID,
@@ -207,8 +377,18 @@ actor AgentBroker {
         }
 
         let ring = RingBuffer(capacity: AgentIPC.replayBufferBytes)
-        let state = PaneState(paneID: paneID, command: command, args: args, cwd: cwd, pty: pty, ringBuffer: ring)
+        let state = PaneState(
+            paneID: paneID,
+            command: command,
+            args: args,
+            cwd: cwd,
+            pty: pty,
+            ringBuffer: ring,
+            persister: persister
+        )
         panes[paneID] = state
+        // Once a pane is live again, it owns the disk file going forward.
+        dormantHistory.remove(paneID)
 
         // Pump output into the pane state.
         Task.detached { [pty, state] in
@@ -227,16 +407,32 @@ actor AgentBroker {
 
     func pane(_ id: PaneID) -> PaneState? { panes[id] }
 
+    /// Scrollback for a paneID that has on-disk history but no live PTY.
+    func dormantReplay(for id: PaneID) -> Data? {
+        guard dormantHistory.contains(id), let persister else { return nil }
+        return try? persister.store.tail(id, bytes: persister.onDiskCapBytes)
+    }
+
     func listPanes() async -> [IPCPaneInfo] {
         var out: [IPCPaneInfo] = []
         for (_, p) in panes {
             await out.append(p.info())
+        }
+        // Surface dormant panes too so a reconnecting UI can find them and
+        // optionally re-spawn or just replay their history.
+        for id in dormantHistory where panes[id] == nil {
+            out.append(IPCPaneInfo(paneID: id, command: "", args: [], cwd: "", isRunning: false))
         }
         return out
     }
 
     func removePane(_ id: PaneID) {
         panes.removeValue(forKey: id)
+        // Killed panes also lose their dormant history entry; if scrollback
+        // should outlive a kill, drop this line. Today's UX matches the prior
+        // in-memory model where killing a pane discards it entirely.
+        dormantHistory.remove(id)
+        try? persister?.store.delete(id)
     }
 }
 
@@ -290,6 +486,11 @@ func handleConnection(_ connection: NWConnection, broker: AgentBroker) async {
                 let replay = await pane.addSubscriber(sink)
                 subscriptions.insert(paneID)
                 sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: replay))
+            } else if let history = await broker.dormantReplay(for: paneID) {
+                // No live PTY for this pane in this broker generation, but
+                // there's on-disk scrollback from a previous run. Deliver it
+                // as a one-shot replay; no live events will follow.
+                sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: history))
             } else {
                 sendResponse(id: id, payload: .error(.unknownPane))
             }
@@ -365,7 +566,7 @@ func handleConnection(_ connection: NWConnection, broker: AgentBroker) async {
 
 // MARK: - Listener
 
-func runAgent(socketPath: String) async throws {
+func runAgent(socketPath: String, scrollbackRoot: URL?) async throws {
     // Make sure the directory exists and any stale socket file is removed.
     let url = URL(fileURLWithPath: socketPath)
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -373,13 +574,19 @@ func runAgent(socketPath: String) async throws {
         try FileManager.default.removeItem(atPath: socketPath)
     }
 
+    // Build the persister. If the caller didn't override the scrollback root,
+    // use the standard Application Support location alongside the socket.
+    let resolvedRoot: URL = scrollbackRoot ?? defaultScrollbackRoot()
+    let store = ScrollbackStore(root: resolvedRoot)
+    let persister = ScrollbackPersister(store: store)
+
     let endpoint = NWEndpoint.unix(path: socketPath)
     let params = NWParameters.tcp
     params.requiredLocalEndpoint = endpoint
     params.allowLocalEndpointReuse = true
     let listener = try NWListener(using: params)
 
-    let broker = AgentBroker()
+    let broker = AgentBroker(persister: persister)
 
     listener.newConnectionHandler = { connection in
         connection.start(queue: .global(qos: .userInitiated))
@@ -405,6 +612,11 @@ func runAgent(socketPath: String) async throws {
 
     listener.start(queue: .global(qos: .userInitiated))
 
+    // Install SIGTERM (and SIGINT) handlers that flush pending scrollback to
+    // disk synchronously before exiting. Without this, up to ~250 ms of bytes
+    // sitting in the persister's per-pane buffers would be lost on shutdown.
+    installShutdownHandlers(persister: persister)
+
     // Wait for ready, then announce on stdout so the parent process can
     // synchronize launch (tests rely on this line).
     for await _ in started.stream {
@@ -416,16 +628,56 @@ func runAgent(socketPath: String) async throws {
     try await Task.sleep(nanoseconds: UInt64.max)
 }
 
+private func defaultScrollbackRoot() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+    return base.appendingPathComponent("Bento", isDirectory: true).appendingPathComponent("scrollback", isDirectory: true)
+}
+
+/// Install POSIX signal handlers for SIGTERM and SIGINT that flush pending
+/// scrollback writes before exiting. Uses `DispatchSource` so the signal is
+/// handled on a dispatch queue rather than the (very limited) signal context.
+private func installShutdownHandlers(persister: ScrollbackPersister) {
+    let queue = DispatchQueue(label: "bento.agent.shutdown", qos: .userInitiated)
+    for sig in [SIGTERM, SIGINT] {
+        // Override the default disposition so the dispatch source can observe
+        // the signal instead of the process being killed immediately.
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+        source.setEventHandler {
+            persister.shutdown()
+            // Re-raise with the default handler so the parent sees the
+            // expected exit status (e.g. 128+SIGTERM).
+            signal(sig, SIG_DFL)
+            raise(sig)
+        }
+        source.resume()
+        // Keep the source alive for the lifetime of the process.
+        Self_keepAlive.append(source)
+    }
+}
+
+/// Holds onto signal sources so they aren't deallocated. Top-level `let`
+/// can't be mutated, so we use a private holder type with a static array.
+private enum Self_keepAlive {
+    nonisolated(unsafe) static var sources: [DispatchSourceSignal] = []
+    static func append(_ source: DispatchSourceSignal) { sources.append(source) }
+}
+
 @main
 struct BentoAgentMain {
     static func main() async {
         let args = CommandLine.arguments
         var socketPath = AgentIPC.defaultSocketURL.path
+        var scrollbackRoot: URL? = nil
         var i = 1
         while i < args.count {
             let a = args[i]
             if a == "--socket", i + 1 < args.count {
                 socketPath = args[i + 1]
+                i += 2
+            } else if a == "--scrollback-root", i + 1 < args.count {
+                scrollbackRoot = URL(fileURLWithPath: args[i + 1])
                 i += 2
             } else {
                 i += 1
@@ -433,7 +685,7 @@ struct BentoAgentMain {
         }
 
         do {
-            try await runAgent(socketPath: socketPath)
+            try await runAgent(socketPath: socketPath, scrollbackRoot: scrollbackRoot)
         } catch {
             FileHandle.standardError.write(Data("BentoAgent fatal: \(error)\n".utf8))
             exit(1)

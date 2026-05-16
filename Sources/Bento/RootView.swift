@@ -1,3 +1,4 @@
+import AppKit
 import BentoCore
 import SwiftUI
 
@@ -73,8 +74,14 @@ struct BentoRootView: View {
                     .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
             }
             if controller.state.requiresTaskTrust {
-                Text("\(controller.state.pendingTaskCommands.count) task panes pending trust")
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+                Button {
+                    activeOverlay = .trust
+                } label: {
+                    Text("\(controller.state.pendingTaskCommands.count) task panes pending trust")
+                        .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
+                        .underline()
+                }
+                .buttonStyle(.plain)
             }
             Text("cmd+k")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -107,6 +114,17 @@ struct BentoRootView: View {
                 },
                 onClose: { activeOverlay = nil }
             )
+        case .trust:
+            TrustPromptOverlay(
+                theme: theme,
+                projectRoot: controller.state.projectRoot,
+                pendingCommands: controller.state.pendingTaskCommands,
+                onTrust: {
+                    controller.trustCurrentProject()
+                    activeOverlay = nil
+                },
+                onDismiss: { activeOverlay = nil }
+            )
         }
     }
 
@@ -131,6 +149,23 @@ struct BentoRootView: View {
             activeOverlay = .search
             searchQuery = ""
         case .openFile(let url):
+            controller.openFile(url)
+        case .openFilePicker:
+            presentOpenFilePicker()
+        case .showTrustPrompt:
+            activeOverlay = .trust
+        }
+    }
+
+    /// Run an `NSOpenPanel` and forward the chosen URL to the controller.
+    /// Used by the palette's "Open file…" command.
+    private func presentOpenFilePicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: controller.state.projectRoot)
+        if panel.runModal() == .OK, let url = panel.url {
             controller.openFile(url)
         }
     }

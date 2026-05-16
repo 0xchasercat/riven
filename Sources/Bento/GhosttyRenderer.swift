@@ -10,16 +10,37 @@ import Foundation
 /// The renderer consumes a fully-resolved `GhosttyRenderFrame` produced
 /// by `GhosttyBridge` and paints it into a `CGContext`. Per-cell SGR
 /// styling is honored: bold and italic resolve to font variants via
-/// `NSFontManager.convert(_:toHaveTrait:)`, underline and strikethrough
-/// flow through `NSAttributedString` attributes, inverse swaps fg/bg at
-/// draw time, and a styled cursor is overlaid in one of four shapes
-/// (`block`, `blockHollow`, `bar`, `underline`).
+/// `NSFontManager.convert(_:toHaveTrait:)`, strikethrough flows through
+/// an `NSAttributedString` attribute, inverse swaps fg/bg at draw time,
+/// and a styled cursor is overlaid in one of four shapes (`block`,
+/// `blockHollow`, `bar`, `underline`).
+///
+/// Underline variants (single, double, curly, dotted, dashed) and
+/// overline are drawn directly into the context — `NSAttributedString`
+/// only knows about a single underline variant. SGR 58 underline color
+/// is applied separately from the foreground.
 ///
 /// Per-row coalescing is delegated to `BentoCore.TerminalRunCoalescer`
 /// so the pure data path is testable without dragging in AppKit. A row
 /// that switches between eight colors becomes ~8 styled `CTLine` draws
 /// instead of 80 per-cell draws — that's the main performance win over
 /// the previous monochrome implementation.
+///
+/// SGR semantics worth pinning down:
+/// - **faint (SGR 2)** — glyph drawn at 60% alpha of its resolved
+///   foreground (after inverse resolution).
+/// - **invisible (SGR 8)** — glyph skipped entirely; background and
+///   underline/overline are still painted because the cell still
+///   "occupies space".
+/// - **blink (SGR 5/6)** — currently a no-op visually: the glyph is
+///   drawn at full opacity. The renderer is stateless and the views
+///   that wrap it don't run a redraw timer, so true animated blink
+///   needs a frame-driven repaint scheme that doesn't exist yet. The
+///   data flows end-to-end so it's a pure renderer change once the
+///   view layer ticks.
+/// - **hyperlink (OSC 8)** — the URI is wired through the data model
+///   (so it's available to the future hover/click feature) but the
+///   renderer doesn't currently style hyperlinked text differently.
 ///
 /// The renderer holds zero state between frames; everything it needs is
 /// passed in as parameters. Callers cache `TerminalCellMetrics` and the
@@ -151,40 +172,95 @@ enum GhosttyRenderer {
             // wide-tail or zero-width cells — extremely rare but cheap
             // to guard).
             for run in runs {
-                guard !run.text.isEmpty else { continue }
                 let (fg, _) = effectiveColors(
                     for: run,
                     configuration: configuration,
                     frame: frame,
                     cache: &colorCache
                 )
+
+                // Resolve the underline / overline color: explicit SGR 58
+                // wins, otherwise the run's foreground (after inverse
+                // resolution).
+                let lineColor: NSColor
+                if let rgb = run.underlineColor {
+                    lineColor = colorCache.color(for: rgb)
+                } else {
+                    lineColor = fg
+                }
+
+                // Decorations (underline variants + overline) draw
+                // independently of the glyph; they cover the run's
+                // full column footprint, including wide-tail and any
+                // invisible cells.
+                let runOriginX = CGFloat(run.startColumn) * cellWidth
+                let runWidth = CGFloat(run.endColumn - run.startColumn) * cellWidth
+
+                if run.overline {
+                    drawOverline(
+                        x: runOriginX,
+                        y: yTop,
+                        width: runWidth,
+                        color: lineColor,
+                        in: ctx
+                    )
+                }
+
+                if run.underlineStyle != .none {
+                    drawUnderline(
+                        style: run.underlineStyle,
+                        x: runOriginX,
+                        yTop: yTop,
+                        width: runWidth,
+                        cellHeight: cellHeight,
+                        cellWidth: cellWidth,
+                        color: lineColor,
+                        in: ctx
+                    )
+                }
+
+                // SGR 8 invisible: skip the glyph entirely. Background
+                // (above) and decorations (just rendered) are still
+                // honored.
+                guard !run.invisible else { continue }
+                guard !run.text.isEmpty else { continue }
+
+                // SGR 2 faint: dim the glyph color to 60% alpha. This is
+                // applied AFTER inverse resolution so a faint+inverse
+                // cell dims its (swapped) foreground rather than the
+                // original.
+                let glyphColor = run.faint
+                    ? fg.withAlphaComponent(0.6)
+                    : fg
+
                 let runFont = Self.font(
                     base: baseFont,
                     bold: run.bold,
                     italic: run.italic
                 )
 
+                // Underline + strikethrough on the attributed string
+                // would draw a single straight line — we already
+                // hand-drew the underline above (so we get the right
+                // style), so don't ask CoreText to draw another. We
+                // keep the strikethrough attribute because there's
+                // only one variant.
                 var attrs: [NSAttributedString.Key: Any] = [
                     .font: runFont,
-                    .foregroundColor: fg,
+                    .foregroundColor: glyphColor,
                 ]
-                if run.underline {
-                    attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                    attrs[.underlineColor] = fg
-                }
                 if run.strikethrough {
                     attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-                    attrs[.strikethroughColor] = fg
+                    attrs[.strikethroughColor] = glyphColor
                 }
 
                 let attr = NSAttributedString(string: run.text, attributes: attrs)
                 let ctLine = CTLineCreateWithAttributedString(attr)
 
                 let baselineFromTop = yTop + ascent
-                let originX = CGFloat(run.startColumn) * cellWidth
 
                 ctx.saveGState()
-                ctx.translateBy(x: originX, y: baselineFromTop)
+                ctx.translateBy(x: runOriginX, y: baselineFromTop)
                 ctx.scaleBy(x: 1, y: -1)
                 ctx.textPosition = .zero
                 CTLineDraw(ctLine, ctx)
@@ -380,6 +456,115 @@ enum GhosttyRenderer {
         ctx.textPosition = .zero
         CTLineDraw(line, ctx)
         ctx.restoreGState()
+    }
+
+    // MARK: - Decorations (overline / underline variants)
+
+    /// Draw a 1-px overline along the top edge of the run.
+    private static func drawOverline(
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        color: NSColor,
+        in ctx: CGContext
+    ) {
+        // 0.5 inset so the 1-px stroke lands on whole pixels.
+        let rect = NSRect(x: x, y: y + 0.5, width: width, height: 1)
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(rect)
+    }
+
+    /// Draw an underline of the requested SGR style under a run.
+    /// Single uses a 1-px line at the bottom of the cell; double stacks
+    /// two; curly is a sine-wave squiggle (the standard for spell-check);
+    /// dotted is 1-px on / 1-px off; dashed is 3-px on / 2-px off.
+    ///
+    /// Visual quirk: at very small font sizes a curly underline can
+    /// degenerate into a near-straight line because there's only ~2 px
+    /// of vertical space between the baseline descent and the cell
+    /// bottom. That's expected — the squiggle's amplitude is tied to
+    /// the available space.
+    private static func drawUnderline(
+        style: GhosttyUnderlineStyle,
+        x: CGFloat,
+        yTop: CGFloat,
+        width: CGFloat,
+        cellHeight: CGFloat,
+        cellWidth: CGFloat,
+        color: NSColor,
+        in ctx: CGContext
+    ) {
+        guard style != .none, width > 0 else { return }
+
+        // Baseline of the underline: 1-px above the bottom of the cell.
+        let yBaseline = yTop + cellHeight - 1.5
+
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setFillColor(color.cgColor)
+        ctx.setLineWidth(1)
+
+        switch style {
+        case .none:
+            return
+
+        case .single:
+            ctx.fill(NSRect(x: x, y: yBaseline, width: width, height: 1))
+
+        case .double:
+            // Two parallel 1-px lines, 1 px apart. Place them so the
+            // pair sits inside the cell — the lower one at the
+            // standard underline position, the upper one 2 px above.
+            ctx.fill(NSRect(x: x, y: yBaseline, width: width, height: 1))
+            ctx.fill(NSRect(x: x, y: yBaseline - 2, width: width, height: 1))
+
+        case .curly:
+            // Sine-wave squiggle: one full period per cell column. We
+            // approximate the sine with two quad curves per period
+            // (peak above, trough below) which is cheap and looks
+            // smooth at typical terminal sizes.
+            let amplitude: CGFloat = 1.5
+            let midY = yBaseline + 0.5
+            let period = max(cellWidth, 4)
+            let halfPeriod = period / 2
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: x, y: midY))
+            var cx = x
+            var goingUp = true
+            while cx < x + width {
+                let nextX = min(cx + halfPeriod, x + width)
+                let controlX = cx + halfPeriod / 2
+                let controlY = goingUp ? midY - amplitude : midY + amplitude
+                path.addQuadCurve(
+                    to: CGPoint(x: nextX, y: midY),
+                    control: CGPoint(x: controlX, y: controlY)
+                )
+                cx = nextX
+                goingUp.toggle()
+            }
+            ctx.addPath(path)
+            ctx.strokePath()
+
+        case .dotted:
+            // 1 px on / 1 px off, walked across the run.
+            var dx = x
+            while dx < x + width {
+                ctx.fill(NSRect(x: dx, y: yBaseline, width: 1, height: 1))
+                dx += 2
+            }
+
+        case .dashed:
+            // 3 px on / 2 px off.
+            let onLen: CGFloat = 3
+            let offLen: CGFloat = 2
+            var dx = x
+            while dx < x + width {
+                let segLen = min(onLen, x + width - dx)
+                ctx.fill(NSRect(x: dx, y: yBaseline, width: segLen, height: 1))
+                dx += onLen + offLen
+            }
+        }
     }
 
     // MARK: - Font resolution

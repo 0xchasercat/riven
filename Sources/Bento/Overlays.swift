@@ -5,6 +5,7 @@ import SwiftUI
 enum Overlay {
     case palette
     case search
+    case trust
 }
 
 // MARK: - Command palette

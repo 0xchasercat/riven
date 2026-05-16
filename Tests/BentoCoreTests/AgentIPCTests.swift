@@ -120,9 +120,9 @@ struct AgentIPCTests {
 /// down on `stop()`.
 final class AgentHarness {
     let socketURL: URL
-    private let process: Process
+    let process: Process
 
-    private init(socketURL: URL, process: Process) {
+    init(socketURL: URL, process: Process) {
         self.socketURL = socketURL
         self.process = process
     }

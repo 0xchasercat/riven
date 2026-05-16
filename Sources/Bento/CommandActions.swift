@@ -18,10 +18,16 @@ public enum CommandAction: Equatable, Sendable {
     case cycleFocus
     /// Open the supplied file in the editor surface.
     case openFile(URL)
+    /// Open `NSOpenPanel` to let the user pick a file, then dispatch
+    /// `.openFile(url)`. The dispatcher does the panel work; we just carry
+    /// the intent through the palette.
+    case openFilePicker
     /// Rotate to the next built-in theme in `ThemeSpec.builtIns`.
     case cycleTheme
     /// Reveal the search overlay.
     case showSearch
+    /// Reveal the trust prompt for the currently open project.
+    case showTrustPrompt
 }
 
 public extension CommandAction {
@@ -40,6 +46,10 @@ public extension CommandAction {
             return .closePane
         case .search:
             return .showSearch
+        case .openFile:
+            return .openFilePicker
+        case .trustProject:
+            return .showTrustPrompt
         case .flipPane, .zoomPane, .openProject, .restoreSession:
             return nil
         }

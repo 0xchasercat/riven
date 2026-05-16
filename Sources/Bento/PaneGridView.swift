@@ -90,6 +90,10 @@ final class BentoPaneContainerView: NSView {
     private var currentGraph: PaneGraph?
     private var onGraphChange: ((PaneGraph) -> Void)?
     private var contentView: NSView?
+    /// `Any?` so we can store the observer token across NotificationCenter
+    /// API surfaces. Marked unsafe so `deinit` (which is nonisolated) can
+    /// remove it without crossing actor boundaries.
+    nonisolated(unsafe) private var firstResponderObserver: Any?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -99,9 +103,56 @@ final class BentoPaneContainerView: NSView {
         wantsLayer = true
     }
 
+    deinit {
+        if let firstResponderObserver {
+            NotificationCenter.default.removeObserver(firstResponderObserver)
+        }
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("BentoPaneContainerView does not support NSCoder")
+    }
+
+    /// Once we're attached to a window, watch for first-responder changes so
+    /// that clicks inside an editor (`STTextView`) or terminal
+    /// (`BrokeredTerminalView`) update `paneGraph.focusedPaneID`. Without
+    /// this, only clicks on the pane's chrome border or header would change
+    /// focus — which makes it impossible to tell which pane Cmd+W targets
+    /// after typing in a buffer.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let firstResponderObserver {
+            NotificationCenter.default.removeObserver(firstResponderObserver)
+            self.firstResponderObserver = nil
+        }
+        guard let window else { return }
+        firstResponderObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            // .main queue + main-actor isolation: hop explicitly so Swift 6
+            // strict concurrency can verify the call is safe.
+            MainActor.assumeIsolated {
+                self?.handleFirstResponderChange()
+            }
+        }
+    }
+
+    /// Walk up from the window's current first responder until we find an
+    /// enclosing `PaneShellNSView`; if it represents a different pane than
+    /// the focused one, propagate the change.
+    private func handleFirstResponderChange() {
+        guard let window, let responder = window.firstResponder as? NSView else { return }
+        var node: NSView? = responder
+        while let current = node {
+            if let shell = current as? PaneShellNSView {
+                requestFocus(shell.paneID)
+                return
+            }
+            node = current.superview
+        }
     }
 
     func apply(

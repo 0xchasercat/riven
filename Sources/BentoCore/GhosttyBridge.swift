@@ -449,16 +449,47 @@ public struct GhosttyBridge: Sendable {
             ? GhosttyRGB(r: bgRgb.r, g: bgRgb.g, b: bgRgb.b)
             : nil
 
+        // Underline style: maps `style.underline` (a GhosttySgrUnderline
+        // enum int) to our Swift enum.
+        let underlineStyle = GhosttyUnderlineStyle.from(raw: Int(style.underline))
+
+        // Underline color: only honor RGB direct values. PALETTE would
+        // require a 256-entry palette lookup that the cell-level color
+        // path doesn't give us here, and NONE means "fall back to
+        // foreground" — so both map to nil.
+        let underlineColor: GhosttyRGB?
+        if style.underline_color.tag == GHOSTTY_STYLE_COLOR_RGB {
+            let rgb = style.underline_color.value.rgb
+            underlineColor = GhosttyRGB(r: rgb.r, g: rgb.g, b: rgb.b)
+        } else {
+            underlineColor = nil
+        }
+
+        // Hyperlink URI: not exposed by the render-state row-cells API
+        // (see render.h — only RAW, STYLE, GRAPHEMES_*, FG_COLOR, and
+        // BG_COLOR are queryable). The only access path is
+        // `ghostty_grid_ref_hyperlink_uri` on the slower grid_ref API,
+        // which we deliberately moved off of. Left at nil so the data
+        // model has a slot ready for the future interactive feature.
+        let hyperlinkURI: String? = nil
+
         return GhosttyResolvedCell(
             text: text,
             foreground: foreground,
             background: background,
             bold: style.bold,
             italic: style.italic,
-            underline: style.underline != GHOSTTY_SGR_UNDERLINE_NONE.rawValue,
+            underline: underlineStyle != .none,
             strikethrough: style.strikethrough,
             inverse: style.inverse,
-            isWideTail: isWideTail
+            isWideTail: isWideTail,
+            faint: style.faint,
+            blink: style.blink,
+            invisible: style.invisible,
+            overline: style.overline,
+            underlineStyle: underlineStyle,
+            underlineColor: underlineColor,
+            hyperlinkURI: hyperlinkURI
         )
     }
 }

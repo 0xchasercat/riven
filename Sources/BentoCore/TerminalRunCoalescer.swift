@@ -36,10 +36,29 @@ public struct StyledRun: Equatable, Sendable {
     public var backgroundRGB: GhosttyRGB?
     public var bold: Bool
     public var italic: Bool
+    /// True iff `underlineStyle != .none`. Kept for ergonomic access at
+    /// callsites that don't care which underline variant they got.
     public var underline: Bool
+    /// Underline visual style (single, double, curly, dotted, dashed, none).
+    public var underlineStyle: GhosttyUnderlineStyle
+    /// Explicit underline color (SGR 58). nil = "use foreground".
+    public var underlineColor: GhosttyRGB?
     public var strikethrough: Bool
     /// SGR 7 (reverse video). The renderer swaps fg/bg at draw time.
     public var inverse: Bool
+    /// SGR 2 — dimmed glyph (drawn at reduced alpha by the renderer).
+    public var faint: Bool
+    /// SGR 5/6 — blinking glyph (renderer currently does not animate).
+    public var blink: Bool
+    /// SGR 8 — invisible glyph (renderer skips the draw).
+    public var invisible: Bool
+    /// SGR 53 — overline (1-px line at the top of each cell).
+    public var overline: Bool
+    /// OSC 8 hyperlink URI for this run, or nil. Always nil today (the
+    /// libghostty-vt render-state API does not expose this per-cell);
+    /// the field is here so future interactive-hyperlink work doesn't
+    /// have to widen the type.
+    public var hyperlinkURI: String?
     /// Inclusive start column.
     public var startColumn: Int
     /// Exclusive end column. `endColumn - startColumn` is the number of
@@ -57,6 +76,13 @@ public struct StyledRun: Equatable, Sendable {
         underline: Bool = false,
         strikethrough: Bool = false,
         inverse: Bool = false,
+        faint: Bool = false,
+        blink: Bool = false,
+        invisible: Bool = false,
+        overline: Bool = false,
+        underlineStyle: GhosttyUnderlineStyle? = nil,
+        underlineColor: GhosttyRGB? = nil,
+        hyperlinkURI: String? = nil,
         startColumn: Int,
         endColumn: Int
     ) {
@@ -65,9 +91,22 @@ public struct StyledRun: Equatable, Sendable {
         self.backgroundRGB = backgroundRGB
         self.bold = bold
         self.italic = italic
-        self.underline = underline
+        let resolved: GhosttyUnderlineStyle
+        if let explicit = underlineStyle {
+            resolved = explicit
+        } else {
+            resolved = underline ? .single : .none
+        }
+        self.underlineStyle = resolved
+        self.underline = (resolved != .none)
+        self.underlineColor = underlineColor
         self.strikethrough = strikethrough
         self.inverse = inverse
+        self.faint = faint
+        self.blink = blink
+        self.invisible = invisible
+        self.overline = overline
+        self.hyperlinkURI = hyperlinkURI
         self.startColumn = startColumn
         self.endColumn = endColumn
     }
@@ -118,9 +157,15 @@ public enum TerminalRunCoalescer {
                run.backgroundRGB == cellBg,
                run.bold == cell.bold,
                run.italic == cell.italic,
-               run.underline == cell.underline,
+               run.underlineStyle == cell.underlineStyle,
+               run.underlineColor == cell.underlineColor,
                run.strikethrough == cell.strikethrough,
-               run.inverse == cell.inverse {
+               run.inverse == cell.inverse,
+               run.faint == cell.faint,
+               run.blink == cell.blink,
+               run.invisible == cell.invisible,
+               run.overline == cell.overline,
+               run.hyperlinkURI == cell.hyperlinkURI {
                 run.text.append(cell.text)
                 run.endColumn = column + 1
                 current = run
@@ -134,9 +179,15 @@ public enum TerminalRunCoalescer {
                     backgroundRGB: cellBg,
                     bold: cell.bold,
                     italic: cell.italic,
-                    underline: cell.underline,
                     strikethrough: cell.strikethrough,
                     inverse: cell.inverse,
+                    faint: cell.faint,
+                    blink: cell.blink,
+                    invisible: cell.invisible,
+                    overline: cell.overline,
+                    underlineStyle: cell.underlineStyle,
+                    underlineColor: cell.underlineColor,
+                    hyperlinkURI: cell.hyperlinkURI,
                     startColumn: column,
                     endColumn: column + 1
                 )

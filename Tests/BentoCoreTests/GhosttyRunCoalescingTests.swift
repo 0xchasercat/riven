@@ -20,7 +20,14 @@ struct GhosttyRunCoalescingTests {
         underline: Bool = false,
         strikethrough: Bool = false,
         inverse: Bool = false,
-        isWideTail: Bool = false
+        isWideTail: Bool = false,
+        faint: Bool = false,
+        blink: Bool = false,
+        invisible: Bool = false,
+        overline: Bool = false,
+        underlineStyle: GhosttyUnderlineStyle? = nil,
+        underlineColor: GhosttyRGB? = nil,
+        hyperlinkURI: String? = nil
     ) -> GhosttyResolvedCell {
         GhosttyResolvedCell(
             text: text,
@@ -31,7 +38,14 @@ struct GhosttyRunCoalescingTests {
             underline: underline,
             strikethrough: strikethrough,
             inverse: inverse,
-            isWideTail: isWideTail
+            isWideTail: isWideTail,
+            faint: faint,
+            blink: blink,
+            invisible: invisible,
+            overline: overline,
+            underlineStyle: underlineStyle,
+            underlineColor: underlineColor,
+            hyperlinkURI: hyperlinkURI
         )
     }
 
@@ -293,5 +307,137 @@ struct GhosttyRunCoalescingTests {
         #expect(runs[0].startColumn == 0)
         #expect(runs[0].endColumn == 1)
         #expect(runs[1].text == "a")
+    }
+
+    // MARK: - Extended SGR attributes
+
+    @Test("two adjacent cells with different underline styles produce two runs")
+    func underlineStyleChangeBreaksRun() {
+        let row = [
+            cell("a", underlineStyle: .single),
+            cell("b", underlineStyle: .single),
+            cell("c", underlineStyle: .double),
+            cell("d", underlineStyle: .curly),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 3)
+        #expect(runs[0].text == "ab")
+        #expect(runs[0].underlineStyle == .single)
+        #expect(runs[1].text == "c")
+        #expect(runs[1].underlineStyle == .double)
+        #expect(runs[2].text == "d")
+        #expect(runs[2].underlineStyle == .curly)
+    }
+
+    @Test("two adjacent cells with same fg/bg but different faint produce two runs")
+    func faintChangeBreaksRun() {
+        let row = [
+            cell("a", fg: red, bg: blue, faint: false),
+            cell("b", fg: red, bg: blue, faint: true),
+            cell("c", fg: red, bg: blue, faint: true),
+            cell("d", fg: red, bg: blue, faint: false),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 3)
+        #expect(runs[0].text == "a")
+        #expect(runs[0].faint == false)
+        #expect(runs[1].text == "bc")
+        #expect(runs[1].faint == true)
+        // fg/bg are still preserved verbatim across the boundary.
+        #expect(runs[1].foregroundRGB == red)
+        #expect(runs[1].backgroundRGB == blue)
+        #expect(runs[2].text == "d")
+        #expect(runs[2].faint == false)
+    }
+
+    @Test("toggling blink starts a new run")
+    func blinkChangeBreaksRun() {
+        let row = [
+            cell("a"),
+            cell("b", blink: true),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 2)
+        #expect(runs[0].blink == false)
+        #expect(runs[1].blink == true)
+    }
+
+    @Test("toggling invisible starts a new run")
+    func invisibleChangeBreaksRun() {
+        let row = [
+            cell("a"),
+            cell("b", invisible: true),
+            cell("c", invisible: true),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 2)
+        #expect(runs[0].invisible == false)
+        #expect(runs[1].text == "bc")
+        #expect(runs[1].invisible == true)
+    }
+
+    @Test("toggling overline starts a new run")
+    func overlineChangeBreaksRun() {
+        let row = [
+            cell("a", overline: true),
+            cell("b"),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 2)
+        #expect(runs[0].overline == true)
+        #expect(runs[1].overline == false)
+    }
+
+    @Test("a change in underline color starts a new run")
+    func underlineColorChangeBreaksRun() {
+        let row = [
+            cell("a", underlineStyle: .single, underlineColor: red),
+            cell("b", underlineStyle: .single, underlineColor: red),
+            cell("c", underlineStyle: .single, underlineColor: green),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 2)
+        #expect(runs[0].text == "ab")
+        #expect(runs[0].underlineColor == red)
+        #expect(runs[1].text == "c")
+        #expect(runs[1].underlineColor == green)
+    }
+
+    @Test("a change in hyperlink URI starts a new run (forward-compat)")
+    func hyperlinkChangeBreaksRun() {
+        let row = [
+            cell("a", hyperlinkURI: "https://example.com/a"),
+            cell("b", hyperlinkURI: "https://example.com/a"),
+            cell("c", hyperlinkURI: "https://example.com/b"),
+            cell("d", hyperlinkURI: nil),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 3)
+        #expect(runs[0].text == "ab")
+        #expect(runs[0].hyperlinkURI == "https://example.com/a")
+        #expect(runs[1].text == "c")
+        #expect(runs[1].hyperlinkURI == "https://example.com/b")
+        #expect(runs[2].text == "d")
+        #expect(runs[2].hyperlinkURI == nil)
+    }
+
+    @Test("the single-underline convenience flag still works for legacy callsites")
+    func legacyUnderlineFlagStillWorks() {
+        // Old call sites can keep passing `underline: true` and get
+        // `.single` for free; coalescing must still match identical
+        // underline-bool runs.
+        let row = [
+            cell("a", underline: true),
+            cell("b", underline: true),
+            cell("c", underline: false),
+        ]
+        let runs = TerminalRunCoalescer.runs(in: row)
+        #expect(runs.count == 2)
+        #expect(runs[0].text == "ab")
+        #expect(runs[0].underline == true)
+        #expect(runs[0].underlineStyle == .single)
+        #expect(runs[1].text == "c")
+        #expect(runs[1].underline == false)
+        #expect(runs[1].underlineStyle == .none)
     }
 }

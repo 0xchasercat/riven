@@ -115,6 +115,18 @@ final class BentoRootController: ObservableObject {
         try await workspace.search(query)
     }
 
+    /// Trust the currently open project so its `.bento/session.yml` task
+    /// panes will auto-start now and on every future open. Wired through
+    /// the trust prompt overlay's "Trust this project" button.
+    func trustCurrentProject() {
+        Task { [weak self] in
+            guard let self else { return }
+            if let new = try? await self.workspace.trustCurrentProject() {
+                self.state = new
+            }
+        }
+    }
+
     /// Cycle to the next built-in theme. Wired through `CommandAction.cycleTheme`.
     func cycleTheme() {
         let all = ThemeSpec.builtIns

@@ -7,8 +7,10 @@ public enum CommandAction: String, Codable, Sendable {
     case zoomPane
     case closePane
     case openProject
+    case openFile
     case restoreSession
     case search
+    case trustProject
 }
 
 public struct Command: Equatable, Codable, Sendable, Identifiable {
@@ -31,6 +33,8 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
         Command(id: .zoomPane, group: "Pane", title: "Zoom active pane", shortcut: "cmd+/"),
         Command(id: .closePane, group: "Pane", title: "Close active pane", shortcut: "cmd+w"),
         Command(id: .openProject, group: "Project", title: "Open project", shortcut: "cmd+o"),
+        Command(id: .openFile, group: "Project", title: "Open file…", shortcut: "cmd+p"),
+        Command(id: .trustProject, group: "Project", title: "Trust this project"),
         Command(id: .restoreSession, group: "Project", title: "Restore last session"),
         Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f")
     ]

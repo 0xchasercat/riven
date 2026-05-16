@@ -21,6 +21,38 @@ public struct GhosttyRGB: Equatable, Hashable, Sendable {
     }
 }
 
+/// Underline visual style. Mirrors `GhosttySgrUnderline` from
+/// `External/ghostty-vt-install/include/ghostty/vt/sgr.h`:
+///   0 = NONE, 1 = SINGLE, 2 = DOUBLE, 3 = CURLY,
+///   4 = DOTTED, 5 = DASHED.
+///
+/// The legacy `GhosttyResolvedCell.underline: Bool` is kept as a
+/// derived convenience (`underlineStyle != .none`) so existing call
+/// sites compile unchanged.
+public enum GhosttyUnderlineStyle: Sendable, Equatable, Hashable {
+    case none
+    case single
+    case double
+    case curly
+    case dotted
+    case dashed
+
+    /// Map a raw `style.underline` int (a `GhosttySgrUnderline` value)
+    /// to the Swift enum. Unknown values fall back to `.single` because
+    /// libghostty has already accepted them as "some underline".
+    public static func from(raw: Int) -> GhosttyUnderlineStyle {
+        switch raw {
+        case 0: return .none
+        case 1: return .single
+        case 2: return .double
+        case 3: return .curly
+        case 4: return .dotted
+        case 5: return .dashed
+        default: return .single
+        }
+    }
+}
+
 /// One terminal cell after libghostty has resolved palette indices and
 /// SGR styling into final colors and style flags.
 ///
@@ -34,6 +66,8 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
     public let background: GhosttyRGB?
     public let bold: Bool
     public let italic: Bool
+    /// Convenience: `underlineStyle != .none`. Pinned for older
+    /// callers that only care whether the cell is underlined at all.
     public let underline: Bool
     public let strikethrough: Bool
     public let inverse: Bool
@@ -41,6 +75,32 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
     /// must not draw glyphs for these (the wide cell to the left already
     /// covers them).
     public let isWideTail: Bool
+
+    // MARK: - SGR additions
+
+    /// SGR 2 — dimmed text. Renderer draws the glyph at reduced alpha.
+    public let faint: Bool
+    /// SGR 5/6 — blinking text. The renderer currently leaves blinking
+    /// glyphs at full opacity (no animation); see `GhosttyRenderer` for
+    /// the rationale.
+    public let blink: Bool
+    /// SGR 8 — invisible text. Renderer skips the glyph but still paints
+    /// the background.
+    public let invisible: Bool
+    /// SGR 53 — overline (a 1-px line at the top of each cell).
+    public let overline: Bool
+    /// Underline visual style. `.none` matches the legacy `underline = false`.
+    public let underlineStyle: GhosttyUnderlineStyle
+    /// Explicit underline color (SGR 58). nil = "use foreground".
+    public let underlineColor: GhosttyRGB?
+    /// OSC 8 hyperlink URI for this cell, or nil if the cell isn't part
+    /// of a hyperlink. Currently always nil — the libghostty render-state
+    /// API does not expose hyperlink URIs at the row-cells level (the
+    /// only path is `ghostty_grid_ref_hyperlink_uri`, which is the slow
+    /// per-cell `grid_ref` API we just got off). Wired through the data
+    /// model so the future interactive-hyperlink feature has a place to
+    /// land without a second contract change.
+    public let hyperlinkURI: String?
 
     public init(
         text: String,
@@ -51,17 +111,39 @@ public struct GhosttyResolvedCell: Equatable, Hashable, Sendable {
         underline: Bool = false,
         strikethrough: Bool = false,
         inverse: Bool = false,
-        isWideTail: Bool = false
+        isWideTail: Bool = false,
+        faint: Bool = false,
+        blink: Bool = false,
+        invisible: Bool = false,
+        overline: Bool = false,
+        underlineStyle: GhosttyUnderlineStyle? = nil,
+        underlineColor: GhosttyRGB? = nil,
+        hyperlinkURI: String? = nil
     ) {
         self.text = text
         self.foreground = foreground
         self.background = background
         self.bold = bold
         self.italic = italic
-        self.underline = underline
+        // Resolve `underlineStyle` from either the new explicit param
+        // or the legacy `underline: Bool` so old call sites still work.
+        let resolvedStyle: GhosttyUnderlineStyle
+        if let explicit = underlineStyle {
+            resolvedStyle = explicit
+        } else {
+            resolvedStyle = underline ? .single : .none
+        }
+        self.underlineStyle = resolvedStyle
+        self.underline = (resolvedStyle != .none)
         self.strikethrough = strikethrough
         self.inverse = inverse
         self.isWideTail = isWideTail
+        self.faint = faint
+        self.blink = blink
+        self.invisible = invisible
+        self.overline = overline
+        self.underlineColor = underlineColor
+        self.hyperlinkURI = hyperlinkURI
     }
 
     /// Convenience: a fully-default empty cell. Useful for tests and as
