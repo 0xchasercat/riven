@@ -87,6 +87,25 @@ public enum SplitDirection: String, Codable, Sendable {
     case down
 }
 
+/// Tree structure of the workspace's pane graph.
+///
+/// **Renderer note (Bento alpha):** the `PaneGridView` deliberately only
+/// renders the focused leaf — see `Sources/Bento/PaneGridView.swift`'s
+/// `apply` for the explicit `.leaf(graph.focusedPaneID)` build path.
+/// `.split(...)` nodes in this enum (and the `split` / `flip` / close-
+/// collapse-single-child logic in `PaneGraphOperations.swift`) are kept
+/// intact for two reasons:
+///
+///   1. Legacy snapshots that contain `.split` nodes still load — the
+///      decoder doesn't reject them, so the data model has to keep the
+///      shape forever (or run a migration we haven't written yet).
+///   2. The planned drag-tabs-to-splits / splits-to-tabs feature (task
+///      #9 in the tracker) will exercise this code again. Tearing it
+///      out now means rebuilding it under design pressure later.
+///
+/// If you're touching this file: don't dead-code-strip `.split` even
+/// though the renderer ignores it. The PaneGraphOperations tests still
+/// exercise the split path and act as a fixture for the future feature.
 public enum PaneNode: Hashable, Codable, Sendable {
     case leaf(PaneID)
     indirect case split(SplitDirection, PaneNode, PaneNode)
