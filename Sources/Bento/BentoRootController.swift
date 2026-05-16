@@ -205,7 +205,7 @@ final class BentoRootController: ObservableObject {
     /// keeping the sidebar at the workspace level.
     func openNewInnerTab() {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              var workspace = pane.workspace else {
+              let workspace = pane.workspace else {
             // No focused workspace — fall back to creating a new top-level
             // workspace so Cmd+T always does something useful.
             openNewWorkspace()
@@ -216,9 +216,7 @@ final class BentoRootController: ObservableObject {
             kind: .terminal(paneID: PaneID(), command: nil),
             cwd: workspace.initialCwd
         )
-        workspace.tabs.append(tab)
-        workspace.focusedTabID = tab.id
-        pane.kind = .workspace(workspace)
+        pane.kind = .workspace(workspace.appendingTab(tab))
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
@@ -228,29 +226,24 @@ final class BentoRootController: ObservableObject {
     /// neighbour.
     func closeInnerTab(_ id: TabID) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              var workspace = pane.workspace,
-              workspace.tabs.count > 1,
-              let idx = workspace.tabs.firstIndex(where: { $0.id == id }) else {
+              let workspace = pane.workspace else {
             return
         }
-        workspace.tabs.remove(at: idx)
-        if workspace.focusedTabID == id {
-            workspace.focusedTabID = workspace.tabs[max(0, idx - 1)].id
-        }
-        pane.kind = .workspace(workspace)
+        let updated = workspace.removingTab(id)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
     /// Move focus to an inner tab within the focused workspace.
     func focusInnerTab(_ id: TabID) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              var workspace = pane.workspace,
-              workspace.focusedTabID != id,
-              workspace.tabs.contains(where: { $0.id == id }) else {
+              let workspace = pane.workspace else {
             return
         }
-        workspace.focusedTabID = id
-        pane.kind = .workspace(workspace)
+        let updated = workspace.focusingTab(id)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 

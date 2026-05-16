@@ -81,6 +81,52 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         tabs.first(where: { $0.id == focusedTabID }) ?? tabs[0]
     }
 
+    // MARK: - Pure mutators
+    //
+    // These are intentionally pure so the controller's tab plumbing can
+    // be exercised in tests without spinning up the full @MainActor
+    // BentoRootController (which does file I/O at init). The controller
+    // is just a thin layer that calls these and republishes the result.
+
+    /// Return a copy of this workspace with `tab` appended to the inner
+    /// tab list and focus moved to the new tab. The append is unchecked
+    /// — callers that need uniqueness (e.g. "don't add a second tab for
+    /// the same file") should pre-check.
+    public func appendingTab(_ tab: WorkspaceInnerTab) -> WorkspaceGroup {
+        var copy = self
+        copy.tabs.append(tab)
+        copy.focusedTabID = tab.id
+        return copy
+    }
+
+    /// Return a copy of this workspace with the tab matching `id`
+    /// removed. If `id` is the focused tab, focus moves to its left
+    /// neighbour (or the first tab when the closed tab was at index 0).
+    /// No-op when:
+    ///   - the workspace has only one tab (we never let a workspace go
+    ///     tabless — every workspace must have at least its shell),
+    ///   - `id` doesn't match any tab.
+    public func removingTab(_ id: TabID) -> WorkspaceGroup {
+        guard tabs.count > 1,
+              let idx = tabs.firstIndex(where: { $0.id == id })
+        else { return self }
+        var copy = self
+        copy.tabs.remove(at: idx)
+        if copy.focusedTabID == id {
+            copy.focusedTabID = copy.tabs[max(0, idx - 1)].id
+        }
+        return copy
+    }
+
+    /// Return a copy of this workspace with focus moved to `id`. No-op
+    /// when `id` is already focused or doesn't match any tab.
+    public func focusingTab(_ id: TabID) -> WorkspaceGroup {
+        guard id != focusedTabID, tabs.contains(where: { $0.id == id }) else { return self }
+        var copy = self
+        copy.focusedTabID = id
+        return copy
+    }
+
     // MARK: - Codable
     //
     // Custom decoder so legacy snapshots (which carry an `openEditorPath`
