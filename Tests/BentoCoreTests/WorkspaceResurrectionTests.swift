@@ -150,6 +150,120 @@ struct WorkspaceResurrectionTests {
         }
     }
 
+    @Test("inner tabs (terminal + editor kinds) round-trip through the snapshot")
+    func innerTabsSurviveSnapshotRoundtrip() async throws {
+        let project = try temporaryProject()
+        try "hello".write(to: project.appendingPathComponent("Hello.md"), atomically: true, encoding: .utf8)
+        let snapshotRoot = project.appendingPathComponent(".snapshots")
+        let store = WorkspaceSnapshotStore(root: snapshotRoot)
+
+        // Build a workspace with three inner tabs: two terminals and an
+        // editor. Each terminal carries its own broker `PaneID` (which
+        // we need to survive so the broker can reattach across UI
+        // launches).
+        let leftPaneID = PaneID()
+        let rightPaneID = PaneID()
+        let leftTab = WorkspaceInnerTab(
+            id: TabID("tab-left"),
+            displayName: "shell",
+            kind: .terminal(paneID: leftPaneID, command: nil),
+            cwd: project.standardizedFileURL.path
+        )
+        let editorTab = WorkspaceInnerTab(
+            id: TabID("tab-editor"),
+            displayName: "Hello.md",
+            kind: .editor(path: project.appendingPathComponent("Hello.md").path),
+            cwd: project.standardizedFileURL.path
+        )
+        let rightTab = WorkspaceInnerTab(
+            id: TabID("tab-right"),
+            displayName: "build",
+            kind: .terminal(paneID: rightPaneID, command: "swift build"),
+            cwd: project.standardizedFileURL.path
+        )
+        let workspace = WorkspaceGroup(
+            initialCwd: project.standardizedFileURL.path,
+            tabs: [leftTab, editorTab, rightTab],
+            focusedTabID: editorTab.id
+        )
+        let workspacePane = PaneDescriptor(
+            id: PaneID("workspace-root"),
+            name: "workspace",
+            kind: .workspace(workspace),
+            isFocused: true
+        )
+        let graph = PaneGraph(root: workspacePane)
+
+        let snapshot = WorkspaceSnapshot(
+            projectRoot: project.standardizedFileURL.path,
+            selectedThemeID: "bento",
+            paneGraph: graph,
+            openFiles: []
+        )
+        try store.save(snapshot)
+
+        let restored = try store.load(projectRoot: project.standardizedFileURL.path)
+        guard let restoredWorkspace = restored?.paneGraph.pane(PaneID("workspace-root"))?.workspace else {
+            Issue.record("expected restored snapshot to contain the workspace pane")
+            return
+        }
+
+        #expect(restoredWorkspace.tabs.count == 3)
+        #expect(restoredWorkspace.focusedTabID == editorTab.id)
+        // Same order, same ids, same kinds (with payloads).
+        #expect(restoredWorkspace.tabs[0].id == leftTab.id)
+        #expect(restoredWorkspace.tabs[1].id == editorTab.id)
+        #expect(restoredWorkspace.tabs[2].id == rightTab.id)
+        // Terminal tab carries its broker `PaneID` through — without this
+        // the broker can't reattach to the same PTY across UI launches.
+        #expect(restoredWorkspace.tabs[0].terminalPaneID == leftPaneID)
+        #expect(restoredWorkspace.tabs[2].terminalPaneID == rightPaneID)
+        #expect(restoredWorkspace.tabs[2].command == "swift build")
+        // Editor tab restores its path so the same file lands open.
+        #expect(restoredWorkspace.tabs[1].editorPath == project.appendingPathComponent("Hello.md").path)
+    }
+
+    @Test("legacy snapshot with openEditorPath promotes the file to an editor tab")
+    func legacyOpenEditorPathMigratesToInnerTab() throws {
+        // Stand in for a snapshot written before the editor became an
+        // inner tab kind: a workspace with a single terminal tab and the
+        // old `openEditorPath` field carrying a file. After decode the
+        // workspace should have two tabs — the original terminal plus a
+        // freshly-synthesized `.editor` tab pointed at the file.
+        let json = #"""
+        {
+          "initialCwd": "/tmp/legacy",
+          "currentCwd": "/tmp/legacy",
+          "sidebarWidth": 220,
+          "editorWidth": 480,
+          "focusedSubpane": "terminal",
+          "sidebarState": "collapsed",
+          "openEditorPath": "/tmp/legacy/Notes.md",
+          "tabs": [
+            {
+              "id": { "rawValue": "tab-shell" },
+              "displayName": "shell",
+              "cwd": "/tmp/legacy",
+              "terminalPaneID": { "rawValue": "pane-shell" }
+            }
+          ],
+          "focusedTabID": { "rawValue": "tab-shell" }
+        }
+        """#
+
+        let decoded = try JSONDecoder().decode(WorkspaceGroup.self, from: Data(json.utf8))
+        #expect(decoded.tabs.count == 2)
+        // Original terminal tab preserved with its flat paneID promoted
+        // into the new `.terminal` kind.
+        #expect(decoded.tabs[0].id == TabID("tab-shell"))
+        #expect(decoded.tabs[0].terminalPaneID == PaneID("pane-shell"))
+        // Legacy editor file becomes the second tab.
+        #expect(decoded.tabs[1].editorPath == "/tmp/legacy/Notes.md")
+        // Focus stays on the original tab; legacy doesn't tell us the
+        // user was actively in the editor column.
+        #expect(decoded.focusedTabID == TabID("tab-shell"))
+    }
+
     @Test("captureSnapshot throws when no project is open")
     func captureSnapshotRequiresOpenProject() async throws {
         let controller = WorkspaceController(
