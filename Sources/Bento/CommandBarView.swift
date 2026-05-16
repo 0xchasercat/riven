@@ -1,0 +1,574 @@
+import AppKit
+import BentoCore
+import SwiftUI
+
+/// Composable command bar pinned at the bottom of a terminal pane.
+///
+/// Today every keystroke goes straight to the PTY, which means the
+/// shell's own line editor is the only editing model the user gets. This
+/// view replaces that experience with a real macOS text input: full
+/// emacs/Cocoa key bindings, undo, multi-line composition, paste-as-text,
+/// and history walk. Pressing Enter (no modifier) submits the buffer to
+/// the orchestrator via `onSubmit`, which forwards it to the PTY.
+///
+/// The view manages its own buffer state. After a submit it clears.
+/// History is opt-in: callers wire `onHistoryRequest` to whatever store
+/// they prefer (typically `CommandHistory` from BentoCore).
+struct CommandBarView: View {
+    enum HistoryDirection { case previous, next }
+
+    private let theme: ThemeSpec
+    private let onSubmit: (String) -> Void
+    private let onHistoryRequest: (HistoryDirection) -> String?
+
+    @State private var text: String = ""
+    /// Measured intrinsic content height of the text view, in points.
+    /// Driven from the AppKit layer via the coordinator and clamped into
+    /// the [singleLineHeight, maxHeight] range below before we use it as
+    /// the SwiftUI frame height. Keeping the raw value in `@State` lets
+    /// transitions be smooth — we only animate the clamped output.
+    @State private var contentHeight: CGFloat = CommandBarMetrics.singleLineHeight
+
+    init(
+        theme: ThemeSpec,
+        onSubmit: @escaping (String) -> Void,
+        onHistoryRequest: @escaping (HistoryDirection) -> String? = { _ in nil }
+    ) {
+        self.theme = theme
+        self.onSubmit = onSubmit
+        self.onHistoryRequest = onHistoryRequest
+    }
+
+    var body: some View {
+        let clampedHeight = clampHeight(contentHeight)
+
+        HStack(alignment: .top, spacing: 8) {
+            // Prompt glyph mirrors the shell's PS1-ish look. We pin it
+            // to the top so multi-line input grows downward instead of
+            // pushing the prompt around.
+            Text(">")
+                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                .foregroundStyle(Color(hex: theme.terminal.prompt.hex).opacity(0.65))
+                .frame(width: 14, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+
+            CommandBarTextView(
+                theme: theme,
+                text: $text,
+                contentHeight: $contentHeight,
+                onSubmit: handleSubmit,
+                onHistoryRequest: handleHistoryRequest,
+                onCancel: handleCancel
+            )
+            .frame(height: clampedHeight)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(barBackground)
+        .overlay(alignment: .top) {
+            // 1pt top border: separates the bar from the terminal grid
+            // above. Drawn as an overlay so it sits flush against the
+            // top edge regardless of padding.
+            Rectangle()
+                .fill(Color(hex: theme.chrome.border.hex))
+                .frame(height: 1)
+        }
+        .animation(.easeOut(duration: 0.12), value: clampedHeight)
+    }
+
+    /// Background = terminal background blended slightly toward the
+    /// chrome panel so the bar reads as part of the terminal pane but
+    /// is visually separable from the scrollback area.
+    private var barBackground: some View {
+        ZStack {
+            Color(hex: theme.terminal.background.hex)
+            Color(hex: theme.chrome.panel.hex).opacity(0.35)
+        }
+    }
+
+    private func clampHeight(_ raw: CGFloat) -> CGFloat {
+        let minH = CommandBarMetrics.singleLineHeight
+        let maxH = CommandBarMetrics.maxHeight
+        if raw.isNaN || raw <= 0 { return minH }
+        return min(max(raw, minH), maxH)
+    }
+
+    // MARK: - Callbacks from the AppKit text view
+
+    private func handleSubmit(_ value: String) {
+        // Snapshot then clear so the SwiftUI text reset doesn't race the
+        // delegate that's still mid-event.
+        let payload = value
+        text = ""
+        contentHeight = CommandBarMetrics.singleLineHeight
+        onSubmit(payload)
+    }
+
+    private func handleHistoryRequest(_ direction: HistoryDirection) -> String? {
+        onHistoryRequest(direction)
+    }
+
+    private func handleCancel() {
+        text = ""
+        contentHeight = CommandBarMetrics.singleLineHeight
+    }
+}
+
+/// Layout constants. Centralized so the AppKit text view, the SwiftUI
+/// frame, and the prompt glyph stay aligned.
+private enum CommandBarMetrics {
+    /// Resting height of the bar with a single line of text. ~32pt is
+    /// slightly taller than Cocoa's default text-field height to fit
+    /// monospaced 13pt comfortably with breathing room top and bottom.
+    static let singleLineHeight: CGFloat = 28
+    /// Approximate per-line growth used for the cap calculation.
+    static let lineHeight: CGFloat = 17
+    /// Cap so the bar can't swallow the terminal grid: starting at the
+    /// resting height plus seven extra lines = roughly eight rows tall.
+    static let maxHeight: CGFloat = singleLineHeight + 7 * lineHeight
+    static let fontSize: CGFloat = 13
+    static let textInsetX: CGFloat = 2
+    static let textInsetY: CGFloat = 4
+}
+
+// MARK: - AppKit bridge
+
+/// Thin `NSViewRepresentable` wrapping an `NSTextView` inside an
+/// `NSScrollView`. The coordinator owns key interception (Enter,
+/// Shift+Enter, Up/Down, Escape) and reports content height changes
+/// back to SwiftUI via the `contentHeight` binding so the bar can grow
+/// and shrink with the buffer.
+private struct CommandBarTextView: NSViewRepresentable {
+    let theme: ThemeSpec
+    @Binding var text: String
+    @Binding var contentHeight: CGFloat
+    let onSubmit: (String) -> Void
+    let onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            text: $text,
+            contentHeight: $contentHeight,
+            onSubmit: onSubmit,
+            onHistoryRequest: onHistoryRequest,
+            onCancel: onCancel
+        )
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.verticalScrollElasticity = .none
+        scrollView.horizontalScrollElasticity = .none
+
+        let textView = CommandInputTextView()
+        textView.delegate = context.coordinator
+        textView.coordinator = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.smartInsertDeleteEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isFieldEditor = false
+        textView.usesFindBar = false
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(
+            width: CommandBarMetrics.textInsetX,
+            height: CommandBarMetrics.textInsetY
+        )
+        textView.font = monospacedFont
+        textView.textColor = NSColor(hex: theme.terminal.foreground.hex)
+        textView.insertionPointColor = NSColor(hex: theme.terminal.cursor.hex)
+        textView.selectedTextAttributes = [
+            .backgroundColor: NSColor(hex: theme.chrome.activeBorder.hex).withAlphaComponent(0.32)
+        ]
+        textView.placeholderString = "type a command, ⏎ to run, ⇧⏎ for newline"
+        textView.placeholderColor = NSColor(hex: theme.chrome.dimText.hex)
+
+        // A horizontally-resizing container with line wrapping is what
+        // gives us multi-line behavior without a manual line-break pass.
+        if let container = textView.textContainer {
+            container.widthTracksTextView = true
+            container.containerSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            container.lineFragmentPadding = 0
+        }
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.autoresizingMask = [.width]
+
+        scrollView.documentView = textView
+        context.coordinator.attach(textView: textView, scrollView: scrollView)
+        // Prime measured height so the SwiftUI frame is correct on the
+        // very first layout pass (otherwise we briefly render at 0pt).
+        DispatchQueue.main.async { [weak coordinator = context.coordinator] in
+            coordinator?.recomputeContentHeight()
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.update(
+            onSubmit: onSubmit,
+            onHistoryRequest: onHistoryRequest,
+            onCancel: onCancel
+        )
+        guard let textView = scrollView.documentView as? CommandInputTextView else { return }
+        textView.font = monospacedFont
+        textView.textColor = NSColor(hex: theme.terminal.foreground.hex)
+        textView.insertionPointColor = NSColor(hex: theme.terminal.cursor.hex)
+        textView.placeholderColor = NSColor(hex: theme.chrome.dimText.hex)
+        textView.selectedTextAttributes = [
+            .backgroundColor: NSColor(hex: theme.chrome.activeBorder.hex).withAlphaComponent(0.32)
+        ]
+
+        // Sync the AppKit buffer with the SwiftUI state when SwiftUI is
+        // the source of truth (e.g. after a submit clears `text`). Avoid
+        // touching the view if it already matches — otherwise we lose
+        // selection and undo each render pass.
+        if textView.string != text {
+            textView.applyExternalText(text)
+            context.coordinator.recomputeContentHeight()
+        }
+    }
+
+    private var monospacedFont: NSFont {
+        // Prefer SF Mono with a Menlo fallback. NSFont.monospaced…(…)
+        // already does the right thing on modern macOS, but the explicit
+        // chain keeps the intent obvious in code reviews.
+        if let sf = NSFont(name: "SFMono-Regular", size: CommandBarMetrics.fontSize) {
+            return sf
+        }
+        if let menlo = NSFont(name: "Menlo", size: CommandBarMetrics.fontSize) {
+            return menlo
+        }
+        return NSFont.monospacedSystemFont(ofSize: CommandBarMetrics.fontSize, weight: .regular)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, @MainActor NSTextViewDelegate {
+        private let textBinding: Binding<String>
+        private let contentHeightBinding: Binding<CGFloat>
+        private var onSubmit: (String) -> Void
+        private var onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
+        private var onCancel: () -> Void
+
+        weak var textView: CommandInputTextView?
+        weak var scrollView: NSScrollView?
+
+        /// Suppresses the "any user edit invalidates the history cursor"
+        /// hook while we're programmatically replacing the buffer with a
+        /// history entry. Without this, walking history would
+        /// immediately reset the cursor after the first up-arrow.
+        var isApplyingHistory: Bool = false
+
+        init(
+            text: Binding<String>,
+            contentHeight: Binding<CGFloat>,
+            onSubmit: @escaping (String) -> Void,
+            onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
+            onCancel: @escaping () -> Void
+        ) {
+            self.textBinding = text
+            self.contentHeightBinding = contentHeight
+            self.onSubmit = onSubmit
+            self.onHistoryRequest = onHistoryRequest
+            self.onCancel = onCancel
+        }
+
+        func attach(textView: CommandInputTextView, scrollView: NSScrollView) {
+            self.textView = textView
+            self.scrollView = scrollView
+        }
+
+        func update(
+            onSubmit: @escaping (String) -> Void,
+            onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
+            onCancel: @escaping () -> Void
+        ) {
+            self.onSubmit = onSubmit
+            self.onHistoryRequest = onHistoryRequest
+            self.onCancel = onCancel
+        }
+
+        // MARK: NSTextViewDelegate
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            let value = textView.string
+            // Push to SwiftUI on the next runloop tick; mutating bindings
+            // mid-delegate can confuse SwiftUI's update cycle.
+            let binding = textBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != value {
+                    binding.wrappedValue = value
+                }
+            }
+            recomputeContentHeight()
+        }
+
+        // MARK: Key intercept entry points (called from NSTextView subclass)
+
+        /// Returns `true` if the event was handled (i.e. NSTextView
+        /// should not run its default behavior).
+        func handleKeyDown(_ event: NSEvent) -> Bool {
+            guard let textView else { return false }
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isShift = mods.contains(.shift)
+            let isCommand = mods.contains(.command)
+            let isOption = mods.contains(.option)
+            let isControl = mods.contains(.control)
+
+            switch event.keyCode {
+            case 36, 76: // return / numpad enter
+                if isCommand || isOption || isControl {
+                    // Let upstream key handlers (e.g. Cmd+Return for
+                    // pane flip) get a shot at the event.
+                    return false
+                }
+                if isShift {
+                    // Shift+Enter inserts a literal newline.
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                    return true
+                }
+                submitCurrentBuffer()
+                return true
+
+            case 53: // escape
+                guard mods.isEmpty else { return false }
+                clearBuffer()
+                return true
+
+            case 126: // up arrow
+                guard !isShift, !isCommand, !isOption, !isControl else { return false }
+                if cursorIsAtBufferStart() {
+                    return applyHistory(.previous)
+                }
+                return false
+
+            case 125: // down arrow
+                guard !isShift, !isCommand, !isOption, !isControl else { return false }
+                if cursorIsAtBufferEnd() {
+                    return applyHistory(.next)
+                }
+                return false
+
+            default:
+                return false
+            }
+        }
+
+        // MARK: Helpers
+
+        private func submitCurrentBuffer() {
+            guard let textView else { return }
+            let value = textView.string
+            // Empty submissions are dropped by the history layer, but we
+            // still call onSubmit so the orchestrator can decide what to
+            // do (e.g. send a bare newline to the PTY). Most callers
+            // will just no-op on empty input.
+            onSubmit(value)
+            // Clear the AppKit buffer immediately so the user sees the
+            // bar reset before SwiftUI re-renders. Use the undo manager
+            // path so the user can't undo across a submit boundary.
+            textView.applyExternalText("")
+            textView.undoManager?.removeAllActions()
+            // Push the cleared state to SwiftUI on the next tick to
+            // avoid mutating bindings mid-event.
+            let binding = textBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != "" {
+                    binding.wrappedValue = ""
+                }
+            }
+            recomputeContentHeight()
+        }
+
+        private func clearBuffer() {
+            guard let textView else { return }
+            textView.applyExternalText("")
+            textView.undoManager?.removeAllActions()
+            let binding = textBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != "" {
+                    binding.wrappedValue = ""
+                }
+            }
+            onCancel()
+            recomputeContentHeight()
+        }
+
+        private func cursorIsAtBufferStart() -> Bool {
+            guard let textView else { return false }
+            let range = textView.selectedRange()
+            // Collapsed selection at offset 0 — or empty buffer — counts
+            // as "at the start". A non-empty selection means the user is
+            // doing something else; let the arrow do its native thing.
+            return range.length == 0 && range.location == 0
+        }
+
+        private func cursorIsAtBufferEnd() -> Bool {
+            guard let textView else { return false }
+            let range = textView.selectedRange()
+            let length = (textView.string as NSString).length
+            return range.length == 0 && range.location == length
+        }
+
+        private func applyHistory(_ direction: CommandBarView.HistoryDirection) -> Bool {
+            guard let textView else { return false }
+            guard let entry = onHistoryRequest(direction) else {
+                // No further history in that direction — swallow the
+                // event so the cursor doesn't move within the buffer.
+                return true
+            }
+            isApplyingHistory = true
+            textView.applyExternalText(entry)
+            // Park the caret at the end so the user can immediately edit
+            // the recalled command.
+            let length = (textView.string as NSString).length
+            textView.setSelectedRange(NSRange(location: length, length: 0))
+            isApplyingHistory = false
+
+            let binding = textBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != entry {
+                    binding.wrappedValue = entry
+                }
+            }
+            recomputeContentHeight()
+            return true
+        }
+
+        // MARK: Height measurement
+
+        func recomputeContentHeight() {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return }
+            // Force a layout pass so usedRect reflects the current text.
+            layoutManager.ensureLayout(for: textContainer)
+            let used = layoutManager.usedRect(for: textContainer)
+            let measured = ceil(used.height) + CommandBarMetrics.textInsetY * 2
+            let target = max(measured, CommandBarMetrics.singleLineHeight)
+            let binding = contentHeightBinding
+            // Only republish on a meaningful change to avoid thrash.
+            if abs(binding.wrappedValue - target) > 0.5 {
+                DispatchQueue.main.async {
+                    binding.wrappedValue = target
+                }
+            }
+        }
+    }
+}
+
+/// `NSTextView` subclass that delegates key handling to our coordinator.
+/// We override `keyDown` (rather than `performKeyEquivalent`) because
+/// plain Return/Up/Down are not key equivalents — Cocoa routes them
+/// through `keyDown` and then `doCommand(by:)`. Intercepting in
+/// `keyDown` lets us short-circuit *before* Cocoa interprets Return as
+/// `insertNewline:`.
+fileprivate final class CommandInputTextView: NSTextView {
+    weak var coordinator: CommandBarTextView.Coordinator?
+
+    /// Visible-when-empty placeholder. We draw it ourselves because
+    /// `NSTextView` doesn't expose a built-in placeholder API the way
+    /// `NSTextField` does.
+    var placeholderString: String?
+    var placeholderColor: NSColor = .secondaryLabelColor
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        // Repaint to clear the placeholder if we just got focus.
+        needsDisplay = true
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        needsDisplay = true
+        return result
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let coordinator, coordinator.handleKeyDown(event) {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    /// Notifies the coordinator after Cocoa applied a built-in command
+    /// (e.g. arrow movement, delete, paste). Any user-initiated edit
+    /// resets the history cursor so the next up-arrow starts fresh.
+    override func didChangeText() {
+        super.didChangeText()
+        if let coordinator, !coordinator.isApplyingHistory {
+            // We don't have a direct hook into "the user just edited
+            // text", but didChangeText fires on every applied edit. The
+            // history reset is encoded in the orchestrator's
+            // `onHistoryRequest` closure (typically by calling
+            // `CommandHistory.reset()` from `textDidChange` via the
+            // SwiftUI binding observer). Nothing to do here in the view.
+        }
+    }
+
+    /// Replaces the buffer programmatically (history walk, submit
+    /// clear, external state sync) without firing the user-edit hooks
+    /// that would otherwise reset the history cursor or pollute undo.
+    func applyExternalText(_ value: String) {
+        let storage = textStorage
+        storage?.beginEditing()
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: textColor ?? NSColor.textColor
+        ]
+        storage?.setAttributedString(NSAttributedString(string: value, attributes: attrs))
+        storage?.endEditing()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty,
+              let placeholderString,
+              !placeholderString.isEmpty else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: placeholderColor
+        ]
+        let attributed = NSAttributedString(string: placeholderString, attributes: attrs)
+        // Match the text container insets so the placeholder aligns
+        // exactly with where typed characters will appear.
+        let origin = NSPoint(
+            x: textContainerInset.width,
+            y: textContainerInset.height
+        )
+        attributed.draw(at: origin)
+    }
+
+    /// Disable the focus ring entirely; the bar's top border is the
+    /// only visual focus affordance we want.
+    override var focusRingType: NSFocusRingType {
+        get { .none }
+        set { _ = newValue }
+    }
+}

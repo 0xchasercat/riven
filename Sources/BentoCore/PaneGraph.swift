@@ -13,6 +13,12 @@ public struct PaneID: Hashable, Codable, Sendable, CustomStringConvertible {
 public enum PaneKind: Hashable, Codable, Sendable {
     case terminal(TerminalPane)
     case editor(EditorPane)
+    /// A self-contained workspace group: sidebar + terminal + optional
+    /// editor rendered as one cohesive unit. Splitting the pane graph
+    /// creates a new workspace alongside the existing one. New panes
+    /// created by the UI default to `.workspace`; legacy `.terminal` and
+    /// `.editor` cases remain so older snapshots still load.
+    case workspace(WorkspaceGroup)
 }
 
 public struct TerminalPane: Hashable, Codable, Sendable {
@@ -60,12 +66,18 @@ public struct PaneDescriptor: Hashable, Codable, Sendable {
         if case let .editor(value) = kind { value } else { nil }
     }
 
+    public var workspace: WorkspaceGroup? {
+        if case let .workspace(value) = kind { value } else { nil }
+    }
+
     public var restorableCWD: String? {
         switch kind {
         case let .terminal(terminal):
             terminal.cwd
         case let .editor(editor):
             editor.inheritedCWD ?? URL(fileURLWithPath: editor.path).deletingLastPathComponent().path
+        case let .workspace(workspace):
+            workspace.currentCwd
         }
     }
 }
@@ -116,11 +128,23 @@ public struct PaneGraph: Hashable, Codable, Sendable {
             throw PaneGraphError.missingPane(id)
         }
 
+        let inheritedCWD = parent.restorableCWD ?? NSHomeDirectory()
         let childID = PaneID()
+        // If the parent is a workspace, the child is also a workspace so the
+        // user gets the [sidebar + terminal + editor] grouping consistently.
+        // Otherwise default to a plain terminal so legacy graphs still split
+        // into the legacy leaf shape they expect.
+        let childKind: PaneKind
+        switch parent.kind {
+        case .workspace:
+            childKind = .workspace(WorkspaceGroup(initialCwd: inheritedCWD))
+        default:
+            childKind = .terminal(TerminalPane(command: nil, cwd: inheritedCWD))
+        }
         let child = PaneDescriptor(
             id: childID,
             name: "\(parent.name) copy",
-            kind: .terminal(TerminalPane(command: nil, cwd: parent.restorableCWD ?? NSHomeDirectory())),
+            kind: childKind,
             isFocused: true
         )
 
@@ -144,6 +168,12 @@ public struct PaneGraph: Hashable, Codable, Sendable {
             var editor = editor
             editor.inheritedCWD = editor.inheritedCWD ?? inheritedCWD
             pane.kind = .editor(editor)
+        case .workspace:
+            // Flipping into a workspace is a no-op for now: workspaces are
+            // containers (sidebar + terminal + editor) and don't have a
+            // "from any leaf kind" transition. UI splits a workspace by
+            // creating a new workspace leaf, not by flipping an existing one.
+            pane.kind = newKind
         }
         panes[id] = pane
     }

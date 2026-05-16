@@ -20,6 +20,14 @@ swift build -c release
 swift run BentoAgent
 ```
 
+## Shell Integration
+
+Optional shell snippets in [`scripts/`](scripts/README.md) make your shell
+emit OSC 7 (cwd reports) and OSC 133 A/B/C/D (semantic prompt markers) so
+Bento's sidebar can follow `cd` and Bento can identify command boundaries
+for block grouping. Available for zsh, bash, and fish. See
+[`scripts/README.md`](scripts/README.md) for install + verification.
+
 ## Non-Negotiables
 
 - No AI product features.

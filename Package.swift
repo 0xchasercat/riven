@@ -32,7 +32,18 @@ let package = Package(
                 .unsafeFlags(["-parse-as-library"])
             ]
         ),
-        .executableTarget(name: "BentoAgent", dependencies: ["BentoCore"]),
+        .executableTarget(
+            name: "BentoAgent",
+            dependencies: ["BentoCore"],
+            swiftSettings: [
+                // main.swift uses @main on a top-level type. Without this
+                // flag SourceKit (and some toolchain configurations) flags
+                // "@main attribute cannot be used in a module that contains
+                // top-level code" because the filename main.swift would
+                // otherwise be treated as a script.
+                .unsafeFlags(["-parse-as-library"])
+            ]
+        ),
         .testTarget(name: "BentoCoreTests", dependencies: ["BentoCore"]),
         .binaryTarget(
             name: "GhosttyVt",

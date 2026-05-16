@@ -31,7 +31,8 @@ struct BentoRootView: View {
                         projectRoot: controller.state.projectRoot,
                         fileMap: controller.fileMap,
                         agentClient: controller.agentClient,
-                        onGraphChange: { controller.recordPaneGraph($0) }
+                        onGraphChange: { controller.recordPaneGraph($0) },
+                        onOpenFile: { controller.openFile($0) }
                     )
                     statusBar
                 }

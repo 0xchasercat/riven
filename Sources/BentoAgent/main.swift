@@ -327,6 +327,7 @@ final class ConnectionSink: @unchecked Sendable {
 
 // MARK: - Broker
 
+// Actor declaration is permitted here; if error persists, check build context.
 actor AgentBroker {
     private var panes: [PaneID: PaneState] = [:]
     /// Paths to scrollback files for panes that existed in a previous broker
@@ -436,236 +437,19 @@ actor AgentBroker {
     }
 }
 
-// MARK: - Connection handler
-
-func handleConnection(_ connection: NWConnection, broker: AgentBroker) async {
-    let sink = ConnectionSink(connection: connection)
-    var subscriptions: Set<PaneID> = []
-    var readBuffer = Data()
-    let decoder = JSONDecoder()
-    let encoder = JSONEncoder()
-
-    func sendResponse(id: UInt64, payload: IPCResponse) {
-        guard let data = try? IPCFraming.encode(.response(id: id, payload: payload), encoder: encoder) else { return }
-        connection.send(content: data, completion: .contentProcessed { _ in })
-    }
-
-    func handleRequest(id: UInt64, request: IPCRequest) async {
-        switch request {
-        case .ping:
-            sendResponse(id: id, payload: .pong)
-
-        case let .createPane(paneID, command, args, cwd, columns, rows, env):
-            do {
-                let created = try await broker.createPane(paneID: paneID, command: command, args: args, cwd: cwd, columns: columns, rows: rows, env: env)
-                sendResponse(id: id, payload: .paneCreated(paneID: created))
-            } catch let err as IPCError {
-                sendResponse(id: id, payload: .error(err))
-            } catch {
-                sendResponse(id: id, payload: .error(IPCError(code: "create_failed", message: String(describing: error))))
-            }
-
-        case let .writeInput(paneID, data):
-            if let pane = await broker.pane(paneID) {
-                await pane.write(data)
-                sendResponse(id: id, payload: .ok)
-            } else {
-                sendResponse(id: id, payload: .error(.unknownPane))
-            }
-
-        case let .resize(paneID, columns, rows):
-            if let pane = await broker.pane(paneID) {
-                await pane.resize(columns: columns, rows: rows)
-                sendResponse(id: id, payload: .ok)
-            } else {
-                sendResponse(id: id, payload: .error(.unknownPane))
-            }
-
-        case let .subscribeOutput(paneID):
-            if let pane = await broker.pane(paneID) {
-                let replay = await pane.addSubscriber(sink)
-                subscriptions.insert(paneID)
-                sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: replay))
-            } else if let history = await broker.dormantReplay(for: paneID) {
-                // No live PTY for this pane in this broker generation, but
-                // there's on-disk scrollback from a previous run. Deliver it
-                // as a one-shot replay; no live events will follow.
-                sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: history))
-            } else {
-                sendResponse(id: id, payload: .error(.unknownPane))
-            }
-
-        case let .unsubscribeOutput(paneID):
-            if let pane = await broker.pane(paneID) {
-                await pane.removeSubscriber(sink)
-            }
-            subscriptions.remove(paneID)
-            sendResponse(id: id, payload: .ok)
-
-        case let .killPane(paneID):
-            if let pane = await broker.pane(paneID) {
-                await pane.kill()
-                await broker.removePane(paneID)
-                sendResponse(id: id, payload: .ok)
-            } else {
-                sendResponse(id: id, payload: .error(.unknownPane))
-            }
-
-        case .listPanes:
-            let list = await broker.listPanes()
-            sendResponse(id: id, payload: .panes(list))
-        }
-    }
-
-    func receiveOnce() async -> Data? {
-        await withCheckedContinuation { cont in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
-                if error != nil { cont.resume(returning: nil); return }
-                if let data, !data.isEmpty { cont.resume(returning: data); return }
-                if isComplete { cont.resume(returning: nil); return }
-                cont.resume(returning: Data())
-            }
-        }
-    }
-
-    readLoop: while true {
-        guard let chunk = await receiveOnce() else { break }
-        if chunk.isEmpty { continue }
-        readBuffer.append(chunk)
-        while readBuffer.count >= 4 {
-            let length = readBuffer.prefix(4).withUnsafeBytes { raw -> UInt32 in
-                var be: UInt32 = 0
-                memcpy(&be, raw.baseAddress, 4)
-                return UInt32(bigEndian: be)
-            }
-            if Int(length) > AgentIPC.maxFrameBytes {
-                break readLoop
-            }
-            let total = 4 + Int(length)
-            if readBuffer.count < total { break }
-            let body = readBuffer.subdata(in: 4..<total)
-            readBuffer.removeSubrange(0..<total)
-            guard let frame = try? decoder.decode(IPCFrame.self, from: body),
-                  case let .request(rid, payload) = frame else {
-                continue
-            }
-            await handleRequest(id: rid, request: payload)
-        }
-    }
-
-    // Connection closed — drop all subscriptions for this connection. The
-    // panes themselves keep running (broker survives client disconnect).
-    sink.close()
-    for paneID in subscriptions {
-        if let pane = await broker.pane(paneID) {
-            await pane.removeSubscriber(sink)
-        }
-    }
-    connection.cancel()
-}
-
-// MARK: - Listener
-
-func runAgent(socketPath: String, scrollbackRoot: URL?) async throws {
-    // Make sure the directory exists and any stale socket file is removed.
-    let url = URL(fileURLWithPath: socketPath)
-    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    if FileManager.default.fileExists(atPath: socketPath) {
-        try FileManager.default.removeItem(atPath: socketPath)
-    }
-
-    // Build the persister. If the caller didn't override the scrollback root,
-    // use the standard Application Support location alongside the socket.
-    let resolvedRoot: URL = scrollbackRoot ?? defaultScrollbackRoot()
-    let store = ScrollbackStore(root: resolvedRoot)
-    let persister = ScrollbackPersister(store: store)
-
-    let endpoint = NWEndpoint.unix(path: socketPath)
-    let params = NWParameters.tcp
-    params.requiredLocalEndpoint = endpoint
-    params.allowLocalEndpointReuse = true
-    let listener = try NWListener(using: params)
-
-    let broker = AgentBroker(persister: persister)
-
-    listener.newConnectionHandler = { connection in
-        connection.start(queue: .global(qos: .userInitiated))
-        Task.detached {
-            await handleConnection(connection, broker: broker)
-        }
-    }
-
-    let started = AsyncStream<Void>.makeStream()
-    listener.stateUpdateHandler = { state in
-        switch state {
-        case .ready:
-            started.continuation.yield(())
-        case let .failed(error):
-            FileHandle.standardError.write(Data("BentoAgent listener failed: \(error)\n".utf8))
-            started.continuation.finish()
-        case .cancelled:
-            started.continuation.finish()
-        default:
-            break
-        }
-    }
-
-    listener.start(queue: .global(qos: .userInitiated))
-
-    // Install SIGTERM (and SIGINT) handlers that flush pending scrollback to
-    // disk synchronously before exiting. Without this, up to ~250 ms of bytes
-    // sitting in the persister's per-pane buffers would be lost on shutdown.
-    installShutdownHandlers(persister: persister)
-
-    // Wait for ready, then announce on stdout so the parent process can
-    // synchronize launch (tests rely on this line).
-    for await _ in started.stream {
-        FileHandle.standardOutput.write(Data("BentoAgent listening on \(socketPath)\n".utf8))
-        break
-    }
-
-    // Park forever; the parent process terminates the agent.
-    try await Task.sleep(nanoseconds: UInt64.max)
-}
-
-private func defaultScrollbackRoot() -> URL {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-    return base.appendingPathComponent("Bento", isDirectory: true).appendingPathComponent("scrollback", isDirectory: true)
-}
-
-/// Install POSIX signal handlers for SIGTERM and SIGINT that flush pending
-/// scrollback writes before exiting. Uses `DispatchSource` so the signal is
-/// handled on a dispatch queue rather than the (very limited) signal context.
-private func installShutdownHandlers(persister: ScrollbackPersister) {
-    let queue = DispatchQueue(label: "bento.agent.shutdown", qos: .userInitiated)
-    for sig in [SIGTERM, SIGINT] {
-        // Override the default disposition so the dispatch source can observe
-        // the signal instead of the process being killed immediately.
-        signal(sig, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
-        source.setEventHandler {
-            persister.shutdown()
-            // Re-raise with the default handler so the parent sees the
-            // expected exit status (e.g. 128+SIGTERM).
-            signal(sig, SIG_DFL)
-            raise(sig)
-        }
-        source.resume()
-        // Keep the source alive for the lifetime of the process.
-        Self_keepAlive.append(source)
-    }
-}
-
-/// Holds onto signal sources so they aren't deallocated. Top-level `let`
-/// can't be mutated, so we use a private holder type with a static array.
-private enum Self_keepAlive {
-    nonisolated(unsafe) static var sources: [DispatchSourceSignal] = []
-    static func append(_ source: DispatchSourceSignal) { sources.append(source) }
-}
+// MARK: - BentoAgentMain
 
 @main
 struct BentoAgentMain {
+    private static let signalSourceKeeper = SignalSourceKeeper()
+
+    private actor SignalSourceKeeper {
+        private var sources: [DispatchSourceSignal] = []
+        func add(_ source: DispatchSourceSignal) {
+            sources.append(source)
+        }
+    }
+
     static func main() async {
         let args = CommandLine.arguments
         var socketPath = AgentIPC.defaultSocketURL.path
@@ -685,10 +469,227 @@ struct BentoAgentMain {
         }
 
         do {
-            try await runAgent(socketPath: socketPath, scrollbackRoot: scrollbackRoot)
+            try await Self.runAgent(socketPath: socketPath, scrollbackRoot: scrollbackRoot)
         } catch {
             FileHandle.standardError.write(Data("BentoAgent fatal: \(error)\n".utf8))
             exit(1)
+        }
+    }
+
+    static func runAgent(socketPath: String, scrollbackRoot: URL?) async throws {
+        // Make sure the directory exists and any stale socket file is removed.
+        let url = URL(fileURLWithPath: socketPath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: socketPath) {
+            try FileManager.default.removeItem(atPath: socketPath)
+        }
+
+        // Build the persister. If the caller didn't override the scrollback root,
+        // use the standard Application Support location alongside the socket.
+        let resolvedRoot: URL = scrollbackRoot ?? Self.defaultScrollbackRoot()
+        let store = ScrollbackStore(root: resolvedRoot)
+        let persister = ScrollbackPersister(store: store)
+
+        let endpoint = NWEndpoint.unix(path: socketPath)
+        let params = NWParameters.tcp
+        params.requiredLocalEndpoint = endpoint
+        params.allowLocalEndpointReuse = true
+        let listener = try NWListener(using: params)
+
+        let broker = AgentBroker(persister: persister)
+
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global(qos: .userInitiated))
+            Task.detached {
+                await Self.handleConnection(connection, broker: broker)
+            }
+        }
+
+        let started = AsyncStream<Void>.makeStream()
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                started.continuation.yield(())
+            case let .failed(error):
+                FileHandle.standardError.write(Data("BentoAgent listener failed: \(error)\n".utf8))
+                started.continuation.finish()
+            case .cancelled:
+                started.continuation.finish()
+            default:
+                break
+            }
+        }
+
+        listener.start(queue: .global(qos: .userInitiated))
+
+        // Install SIGTERM (and SIGINT) handlers that flush pending scrollback to
+        // disk synchronously before exiting. Without this, up to ~250 ms of bytes
+        // sitting in the persister's per-pane buffers would be lost on shutdown.
+        Self.installShutdownHandlers(persister: persister)
+
+        // Wait for ready, then announce on stdout so the parent process can
+        // synchronize launch (tests rely on this line).
+        for await _ in started.stream {
+            FileHandle.standardOutput.write(Data("BentoAgent listening on \(socketPath)\n".utf8))
+            break
+        }
+
+        // Park forever; the parent process terminates the agent.
+        try await Task.sleep(nanoseconds: UInt64.max)
+    }
+
+    static func handleConnection(_ connection: NWConnection, broker: AgentBroker) async {
+        let sink = ConnectionSink(connection: connection)
+        var subscriptions: Set<PaneID> = []
+        var readBuffer = Data()
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+
+        func sendResponse(id: UInt64, payload: IPCResponse) {
+            guard let data = try? IPCFraming.encode(.response(id: id, payload: payload), encoder: encoder) else { return }
+            connection.send(content: data, completion: .contentProcessed { _ in })
+        }
+
+        func handleRequest(id: UInt64, request: IPCRequest) async {
+            switch request {
+            case .ping:
+                sendResponse(id: id, payload: .pong)
+
+            case let .createPane(paneID, command, args, cwd, columns, rows, env):
+                do {
+                    let created = try await broker.createPane(paneID: paneID, command: command, args: args, cwd: cwd, columns: columns, rows: rows, env: env)
+                    sendResponse(id: id, payload: .paneCreated(paneID: created))
+                } catch let err as IPCError {
+                    sendResponse(id: id, payload: .error(err))
+                } catch {
+                    sendResponse(id: id, payload: .error(IPCError(code: "create_failed", message: String(describing: error))))
+                }
+
+            case let .writeInput(paneID, data):
+                if let pane = await broker.pane(paneID) {
+                    await pane.write(data)
+                    sendResponse(id: id, payload: .ok)
+                } else {
+                    sendResponse(id: id, payload: .error(.unknownPane))
+                }
+
+            case let .resize(paneID, columns, rows):
+                if let pane = await broker.pane(paneID) {
+                    await pane.resize(columns: columns, rows: rows)
+                    sendResponse(id: id, payload: .ok)
+                } else {
+                    sendResponse(id: id, payload: .error(.unknownPane))
+                }
+
+            case let .subscribeOutput(paneID):
+                if let pane = await broker.pane(paneID) {
+                    let replay = await pane.addSubscriber(sink)
+                    subscriptions.insert(paneID)
+                    sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: replay))
+                } else if let history = await broker.dormantReplay(for: paneID) {
+                    // No live PTY for this pane in this broker generation, but
+                    // there's on-disk scrollback from a previous run. Deliver it
+                    // as a one-shot replay; no live events will follow.
+                    sendResponse(id: id, payload: .subscribed(paneID: paneID, replay: history))
+                } else {
+                    sendResponse(id: id, payload: .error(.unknownPane))
+                }
+
+            case let .unsubscribeOutput(paneID):
+                if let pane = await broker.pane(paneID) {
+                    await pane.removeSubscriber(sink)
+                }
+                subscriptions.remove(paneID)
+                sendResponse(id: id, payload: .ok)
+
+            case let .killPane(paneID):
+                if let pane = await broker.pane(paneID) {
+                    await pane.kill()
+                    await broker.removePane(paneID)
+                    sendResponse(id: id, payload: .ok)
+                } else {
+                    sendResponse(id: id, payload: .error(.unknownPane))
+                }
+
+            case .listPanes:
+                let list = await broker.listPanes()
+                sendResponse(id: id, payload: .panes(list))
+            }
+        }
+
+        func receiveOnce() async -> Data? {
+            await withCheckedContinuation { cont in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+                    if error != nil { cont.resume(returning: nil); return }
+                    if let data, !data.isEmpty { cont.resume(returning: data); return }
+                    if isComplete { cont.resume(returning: nil); return }
+                    cont.resume(returning: Data())
+                }
+            }
+        }
+
+        readLoop: while true {
+            guard let chunk = await receiveOnce() else { break }
+            if chunk.isEmpty { continue }
+            readBuffer.append(chunk)
+            while readBuffer.count >= 4 {
+                let length = readBuffer.prefix(4).withUnsafeBytes { raw -> UInt32 in
+                    var be: UInt32 = 0
+                    memcpy(&be, raw.baseAddress, 4)
+                    return UInt32(bigEndian: be)
+                }
+                if Int(length) > AgentIPC.maxFrameBytes {
+                    break readLoop
+                }
+                let total = 4 + Int(length)
+                if readBuffer.count < total { break }
+                let body = readBuffer.subdata(in: 4..<total)
+                readBuffer.removeSubrange(0..<total)
+                guard let frame = try? decoder.decode(IPCFrame.self, from: body),
+                      case let .request(rid, payload) = frame else {
+                    continue
+                }
+                await handleRequest(id: rid, request: payload)
+            }
+        }
+
+        // Connection closed — drop all subscriptions for this connection. The
+        // panes themselves keep running (broker survives client disconnect).
+        sink.close()
+        for paneID in subscriptions {
+            if let pane = await broker.pane(paneID) {
+                await pane.removeSubscriber(sink)
+            }
+        }
+        connection.cancel()
+    }
+
+    private static func defaultScrollbackRoot() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("Bento", isDirectory: true).appendingPathComponent("scrollback", isDirectory: true)
+    }
+
+    /// Install POSIX signal handlers for SIGTERM and SIGINT that flush pending
+    /// scrollback writes before exiting. Uses `DispatchSource` so the signal is
+    /// handled on a dispatch queue rather than the (very limited) signal context.
+    private static func installShutdownHandlers(persister: ScrollbackPersister) {
+        let queue = DispatchQueue(label: "bento.agent.shutdown", qos: .userInitiated)
+        for sig in [SIGTERM, SIGINT] {
+            // Override the default disposition so the dispatch source can observe
+            // the signal instead of the process being killed immediately.
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+            source.setEventHandler {
+                persister.shutdown()
+                // Re-raise with the default handler so the parent sees the
+                // expected exit status (e.g. 128+SIGTERM).
+                signal(sig, SIG_DFL)
+                raise(sig)
+            }
+            source.resume()
+            // Keep the source alive for the lifetime of the process.
+            Task { await signalSourceKeeper.add(source) }
         }
     }
 }

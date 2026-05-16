@@ -183,6 +183,27 @@ public struct GhosttyBridge: Sendable {
         handle.terminal != nil
     }
 
+    /// Read the shell's current working directory, as reported via the
+    /// OSC 7 sequence (`ESC]7;file://...`). Returns `nil` when the shell
+    /// hasn't reported a cwd yet (i.e. before any prompt or before the
+    /// shell-integration snippet has been sourced).
+    ///
+    /// The string is a *borrowed* pointer that's only valid until the next
+    /// `ghostty_terminal_vt_write` call, so we copy into a Swift `String`
+    /// immediately.
+    public func readCurrentCwd(_ handle: GhosttySessionHandle) throws -> String? {
+        guard let terminal = handle.terminal else {
+            throw GhosttyBridgeError.closedSession
+        }
+        var out = GhosttyString(ptr: nil, len: 0)
+        let result = ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_PWD, &out)
+        guard result == GHOSTTY_SUCCESS, let ptr = out.ptr, out.len > 0 else {
+            return nil
+        }
+        let buffer = UnsafeBufferPointer(start: ptr, count: Int(out.len))
+        return String(bytes: buffer, encoding: .utf8)
+    }
+
     public func close(_ handle: GhosttySessionHandle) throws {
         if let renderState = handle.renderState {
             ghostty_render_state_free(renderState)

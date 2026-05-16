@@ -19,6 +19,7 @@ struct PaneGridView: NSViewRepresentable {
     let fileMap: PaneFileMap
     let agentClient: AgentClient?
     let onGraphChange: (PaneGraph) -> Void
+    let onOpenFile: (URL) -> Void
 
     init(
         theme: ThemeSpec,
@@ -26,7 +27,8 @@ struct PaneGridView: NSViewRepresentable {
         projectRoot: String,
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
-        onGraphChange: @escaping (PaneGraph) -> Void = { _ in }
+        onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
+        onOpenFile: @escaping (URL) -> Void = { _ in }
     ) {
         self.theme = theme
         self.paneGraph = paneGraph
@@ -34,6 +36,7 @@ struct PaneGridView: NSViewRepresentable {
         self.fileMap = fileMap
         self.agentClient = agentClient
         self.onGraphChange = onGraphChange
+        self.onOpenFile = onOpenFile
     }
 
     func makeCoordinator() -> Coordinator {
@@ -49,7 +52,8 @@ struct PaneGridView: NSViewRepresentable {
             projectRoot: projectRoot,
             fileMap: fileMap,
             agentClient: agentClient,
-            onGraphChange: onGraphChange
+            onGraphChange: onGraphChange,
+            onOpenFile: onOpenFile
         )
         // Schedule first-responder grab once we're in a window.
         DispatchQueue.main.async { [weak view] in
@@ -66,7 +70,8 @@ struct PaneGridView: NSViewRepresentable {
             projectRoot: projectRoot,
             fileMap: fileMap,
             agentClient: agentClient,
-            onGraphChange: onGraphChange
+            onGraphChange: onGraphChange,
+            onOpenFile: onOpenFile
         )
     }
 
@@ -161,7 +166,8 @@ final class BentoPaneContainerView: NSView {
         projectRoot: String,
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
-        onGraphChange: @escaping (PaneGraph) -> Void
+        onGraphChange: @escaping (PaneGraph) -> Void,
+        onOpenFile: @escaping (URL) -> Void
     ) {
         self.currentGraph = graph
         self.onGraphChange = onGraphChange
@@ -178,7 +184,15 @@ final class BentoPaneContainerView: NSView {
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
-            }
+            },
+            onSplit: { [weak self] id in
+                self?.requestFocus(id)
+                self?.splitFocused(.right, target: id)
+            },
+            onClose: { [weak self] id in
+                self?.closeFocused(target: id)
+            },
+            onOpenFile: onOpenFile
         )
         let newContent = builder.build(node: graph.rootNode)
 
@@ -207,15 +221,23 @@ final class BentoPaneContainerView: NSView {
         if next != graph { onGraphChange?(next) }
     }
 
-    private func splitFocused(_ direction: SplitDirection) {
+    /// Split a pane. If `target` is `nil`, splits the currently focused pane
+    /// (keyboard shortcut path). If `target` is non-nil, splits that specific
+    /// pane (header `+` button path).
+    private func splitFocused(_ direction: SplitDirection, target: PaneID? = nil) {
         guard let graph = currentGraph else { return }
-        let next = graph.splittingInheriting(graph.focusedPaneID, direction: direction)
+        let id = target ?? graph.focusedPaneID
+        let next = graph.splittingInheriting(id, direction: direction)
         if next != graph { onGraphChange?(next) }
     }
 
-    private func closeFocused() {
+    /// Close a pane. If `target` is `nil`, closes the currently focused pane
+    /// (keyboard shortcut path). If `target` is non-nil, closes that specific
+    /// pane (header `×` button path).
+    private func closeFocused(target: PaneID? = nil) {
         guard let graph = currentGraph else { return }
-        if let next = graph.close(graph.focusedPaneID), next != graph {
+        let id = target ?? graph.focusedPaneID
+        if let next = graph.close(id), next != graph {
             onGraphChange?(next)
         }
     }
@@ -274,6 +296,9 @@ private struct PaneTreeBuilder {
     let agentClient: AgentClient?
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
+    let onSplit: @MainActor (PaneID) -> Void
+    let onClose: @MainActor (PaneID) -> Void
+    let onOpenFile: (URL) -> Void
 
     func build(node: PaneNode) -> NSView {
         switch node {
@@ -317,7 +342,9 @@ private struct PaneTreeBuilder {
             activeColor: NSColor(hex: activeHex),
             inactiveColor: NSColor(hex: inactiveHex),
             chromeBackground: NSColor(hex: theme.chrome.panel.hex),
-            onFocus: onFocus
+            onFocus: onFocus,
+            onSplit: onSplit,
+            onClose: onClose
         )
         shell.installContent(host.view)
         shell.title = pane?.name ?? "pane"
@@ -325,6 +352,11 @@ private struct PaneTreeBuilder {
         shell.headerBackground = NSColor(hex: theme.chrome.background.hex)
         shell.badge = badge(for: pane)
         shell.badgeColor = NSColor(hex: theme.chrome.dimText.hex)
+        shell.applyButtonColors(
+            idle: NSColor(hex: theme.chrome.dimText.hex),
+            hover: NSColor(hex: theme.chrome.text.hex),
+            hoverBackground: NSColor(hex: activeHex).withAlphaComponent(0.15)
+        )
         return shell
     }
 
@@ -332,6 +364,7 @@ private struct PaneTreeBuilder {
         switch pane?.kind {
         case .editor: return "STTextView"
         case .terminal: return "libghostty"
+        case .workspace: return "workspace"
         case .none: return ""
         }
     }
@@ -365,6 +398,19 @@ private struct PaneTreeBuilder {
                 }
             case .editor:
                 EditorPaneView(theme: theme, paneID: pane.id, fileMap: fileMap)
+            case let .workspace(workspace):
+                if let agentClient {
+                    WorkspaceGroupView(
+                        theme: theme,
+                        paneID: pane.id,
+                        workspace: workspace,
+                        fileMap: fileMap,
+                        agentClient: agentClient,
+                        onOpenFile: onOpenFile
+                    )
+                } else {
+                    BrokerConnectingPlaceholder(theme: theme)
+                }
             }
         } else {
             // Defensive fallback: the graph referenced an unknown id. Show
@@ -422,9 +468,13 @@ private final class PaneShellNSView: NSView {
     private let activeColor: NSColor
     private let inactiveColor: NSColor
     private let onFocus: @MainActor (PaneID) -> Void
+    private let onSplit: @MainActor (PaneID) -> Void
+    private let onClose: @MainActor (PaneID) -> Void
     private let header = NSView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let badgeLabel = NSTextField(labelWithString: "")
+    private let splitButton: PaneHeaderButton
+    private let closeButton: PaneHeaderButton
     private let borderLayer = CALayer()
     private var contentContainer = NSView()
 
@@ -468,13 +518,19 @@ private final class PaneShellNSView: NSView {
         activeColor: NSColor,
         inactiveColor: NSColor,
         chromeBackground: NSColor,
-        onFocus: @escaping @MainActor (PaneID) -> Void
+        onFocus: @escaping @MainActor (PaneID) -> Void,
+        onSplit: @escaping @MainActor (PaneID) -> Void,
+        onClose: @escaping @MainActor (PaneID) -> Void
     ) {
         self.paneID = paneID
         self.isFocused = isFocused
         self.activeColor = activeColor
         self.inactiveColor = inactiveColor
         self.onFocus = onFocus
+        self.onSplit = onSplit
+        self.onClose = onClose
+        self.splitButton = PaneHeaderButton(glyph: "+", accessibilityLabel: "Split pane right")
+        self.closeButton = PaneHeaderButton(glyph: "×", accessibilityLabel: "Close pane")
         super.init(frame: .zero)
         self.chromeBackground = chromeBackground
 
@@ -498,6 +554,19 @@ private final class PaneShellNSView: NSView {
         header.addSubview(titleLabel)
         header.addSubview(badgeLabel)
 
+        splitButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        splitButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.onSplit(self.paneID)
+        }
+        closeButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.onClose(self.paneID)
+        }
+        header.addSubview(splitButton)
+        header.addSubview(closeButton)
+
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(contentContainer)
 
@@ -509,14 +578,33 @@ private final class PaneShellNSView: NSView {
 
             titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            badgeLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
             badgeLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+
+            // Buttons sit at the trailing edge; badge sits to their left.
+            closeButton.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -8),
+            closeButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 18),
+            closeButton.heightAnchor.constraint(equalToConstant: 18),
+
+            splitButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+            splitButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            splitButton.widthAnchor.constraint(equalToConstant: 18),
+            splitButton.heightAnchor.constraint(equalToConstant: 18),
+
+            badgeLabel.trailingAnchor.constraint(equalTo: splitButton.leadingAnchor, constant: -8),
 
             contentContainer.topAnchor.constraint(equalTo: header.bottomAnchor),
             contentContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
             contentContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
+    }
+
+    /// Push theme-derived button colors down to the header buttons. Called
+    /// after `init` so the builder can pull all colors from `ThemeSpec` once.
+    func applyButtonColors(idle: NSColor, hover: NSColor, hoverBackground: NSColor) {
+        splitButton.configure(idleColor: idle, hoverColor: hover, hoverBackground: hoverBackground)
+        closeButton.configure(idleColor: idle, hoverColor: hover, hoverBackground: hoverBackground)
     }
 
     @available(*, unavailable)
@@ -545,5 +633,132 @@ private final class PaneShellNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         onFocus(paneID)
         super.mouseDown(with: event)
+    }
+}
+
+// MARK: - Header buttons
+
+/// Small square button for the pane header (`+` split, `×` close).
+///
+/// Implemented as a custom `NSView` rather than `NSButton` so we get a
+/// minimal, theme-driven appearance: no system focus ring, no system
+/// background, and an explicit hover state we drive from
+/// `mouseEntered`/`mouseExited`.
+///
+/// `mouseDown` is consumed locally — it never reaches `PaneShellNSView`,
+/// so clicking a button doesn't also trigger the pane's focus handler
+/// (the split / close action implies focus where it matters).
+private final class PaneHeaderButton: NSView {
+    var onClick: (@MainActor () -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+    private var idleColor: NSColor = .secondaryLabelColor
+    private var hoverColor: NSColor = .labelColor
+    private var hoverBackground: NSColor = NSColor.white.withAlphaComponent(0.1)
+    private var trackingArea: NSTrackingArea?
+    private var isHovering = false {
+        didSet { refreshAppearance() }
+    }
+
+    override var isFlipped: Bool { true }
+    // The button refuses focus by returning false here; `refusesFirstResponder`
+    // is not an `NSView` property (only `NSResponder` and some subclasses
+    // expose it), so we only override the one that exists.
+    override var acceptsFirstResponder: Bool { false }
+
+    init(glyph: String, accessibilityLabel: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 3
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        label.stringValue = glyph
+        label.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.isEditable = false
+        label.isSelectable = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            // Optical centering: the `×` and `+` glyphs sit slightly low
+            // in the cap-height box of the system mono font.
+            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -0.5),
+        ])
+
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(accessibilityLabel)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("PaneHeaderButton does not support NSCoder")
+    }
+
+    func configure(idleColor: NSColor, hoverColor: NSColor, hoverBackground: NSColor) {
+        self.idleColor = idleColor
+        self.hoverColor = hoverColor
+        self.hoverBackground = hoverBackground
+        refreshAppearance()
+    }
+
+    private func refreshAppearance() {
+        label.textColor = isHovering ? hoverColor : idleColor
+        layer?.backgroundColor = (isHovering ? hoverBackground : NSColor.clear).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+        NSCursor.arrow.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+    }
+
+    // Consume the click locally so it never reaches the enclosing
+    // `PaneShellNSView.mouseDown` (which would refocus the pane and then
+    // call `super`, racing the action).
+    override func mouseDown(with event: NSEvent) {
+        // Track press-then-release inside bounds so dragging away cancels,
+        // matching standard button behavior.
+        var pressed = true
+        isHovering = true
+        var current = event
+        while pressed {
+            let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged])
+            guard let next else { break }
+            let location = convert(next.locationInWindow, from: nil)
+            let inside = bounds.contains(location)
+            if next.type == .leftMouseUp {
+                if inside { onClick?() }
+                pressed = false
+            } else {
+                isHovering = inside
+                current = next
+            }
+        }
+        _ = current
+        // Refresh hover state from the final mouse position.
+        if let window {
+            let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            isHovering = bounds.contains(location)
+        }
     }
 }

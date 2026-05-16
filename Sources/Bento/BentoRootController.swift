@@ -56,32 +56,48 @@ final class BentoRootController: ObservableObject {
         self.agentClient = client
     }
 
-    /// Open `url` in an editor pane. Strategy: if the focused pane is
-    /// already an editor, target it; else target the first editor leaf;
-    /// else split the focused pane to add a new editor leaf and target
-    /// that. Either way, the file shows up immediately.
+    /// Open `url` in the focused workspace's editor pane. If the focused
+    /// pane is a workspace, set its `openEditorPath` (which causes the
+    /// `WorkspaceGroupView` to reveal its editor subpane); legacy
+    /// terminal/editor leaves fall back to the old auto-split behavior.
     func openFile(_ url: URL) {
         var graph = state.paneGraph
-        let leaves = graph.leaves()
-        let editorPaneID: PaneID
+        let focusedID = graph.focusedPaneID
+        let focused = graph.pane(focusedID)
 
-        if let focusedEditor = leaves.first(where: { $0.id == graph.focusedPaneID && $0.editor != nil }) {
-            editorPaneID = focusedEditor.id
-        } else if let firstEditor = leaves.first(where: { $0.editor != nil }) {
-            editorPaneID = firstEditor.id
-            graph = graph.focus(firstEditor.id)
+        if let workspace = focused?.workspace {
+            // Update the workspace's editor binding in place — no new split.
+            var updated = workspace
+            updated.openEditorPath = url.path
+            var pane = focused!
+            pane.kind = .workspace(updated)
+            // Rebuild the graph by replacing the pane in-place.
+            graph = graph.replacingPane(pane)
+            fileMap.setFile(url, for: focusedID)
         } else {
-            let newEditor = PaneDescriptor(
-                id: PaneID(),
-                name: url.lastPathComponent,
-                kind: .editor(EditorPane(path: url.path)),
-                isFocused: true
-            )
-            graph = graph.split(graph.focusedPaneID, direction: .right, newPane: newEditor)
-            editorPaneID = newEditor.id
+            // Legacy fallback (terminal/editor leaves): preserve previous
+            // behavior of splitting in an editor pane.
+            let leaves = graph.leaves()
+            let editorPaneID: PaneID
+
+            if let focusedEditor = leaves.first(where: { $0.id == focusedID && $0.editor != nil }) {
+                editorPaneID = focusedEditor.id
+            } else if let firstEditor = leaves.first(where: { $0.editor != nil }) {
+                editorPaneID = firstEditor.id
+                graph = graph.focus(firstEditor.id)
+            } else {
+                let newEditor = PaneDescriptor(
+                    id: PaneID(),
+                    name: url.lastPathComponent,
+                    kind: .editor(EditorPane(path: url.path)),
+                    isFocused: true
+                )
+                graph = graph.split(focusedID, direction: .right, newPane: newEditor)
+                editorPaneID = newEditor.id
+            }
+            fileMap.setFile(url, for: editorPaneID)
         }
 
-        fileMap.setFile(url, for: editorPaneID)
         recordPaneGraph(graph)
 
         var paths = openFilePaths
@@ -141,8 +157,8 @@ final class BentoRootController: ObservableObject {
             ?? ProjectFileTree(name: cwd.lastPathComponent, path: cwd.path, kind: .directory)
         let pane = PaneDescriptor(
             id: PaneID("workspace-root"),
-            name: "shell",
-            kind: .terminal(TerminalPane(command: nil, cwd: cwd.path)),
+            name: "workspace",
+            kind: .workspace(WorkspaceGroup(initialCwd: cwd.path)),
             isFocused: true
         )
         return WorkspaceState(

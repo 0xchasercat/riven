@@ -54,10 +54,21 @@ public extension PaneGraph {
     /// `onGraphChange`.
     func splittingInheriting(_ id: PaneID, direction: SplitDirection) -> PaneGraph {
         guard let parent = panes[id] else { return self }
+        let inheritedCWD = parent.restorableCWD ?? NSHomeDirectory()
+        // Workspaces split into workspaces; legacy terminal/editor leaves
+        // split into legacy terminals (to keep older tests + snapshots
+        // working without surprise kind mutations).
+        let childKind: PaneKind
+        switch parent.kind {
+        case .workspace:
+            childKind = .workspace(WorkspaceGroup(initialCwd: inheritedCWD))
+        default:
+            childKind = .terminal(TerminalPane(command: nil, cwd: inheritedCWD))
+        }
         let child = PaneDescriptor(
             id: PaneID(),
             name: "\(parent.name) copy",
-            kind: .terminal(TerminalPane(command: nil, cwd: parent.restorableCWD ?? NSHomeDirectory())),
+            kind: childKind,
             isFocused: true
         )
         return split(id, direction: direction, newPane: child)
@@ -98,6 +109,17 @@ public extension PaneGraph {
             newPanes[leafID]?.isFocused = (leafID == candidate)
         }
         return PaneGraph(panes: newPanes, rootNode: trimmed, focusedPaneID: candidate)
+    }
+
+    /// Returns a new graph with `pane.id`'s descriptor replaced by `pane`.
+    /// No-op if `pane.id` isn't present. Focus + rootNode are preserved;
+    /// use this for in-place attribute updates (e.g. mutating a workspace
+    /// group's `openEditorPath` or `currentCwd`).
+    func replacingPane(_ pane: PaneDescriptor) -> PaneGraph {
+        guard panes[pane.id] != nil else { return self }
+        var newPanes = panes
+        newPanes[pane.id] = pane
+        return PaneGraph(panes: newPanes, rootNode: rootNode, focusedPaneID: focusedPaneID)
     }
 
     /// Returns a new graph with focus moved to `id`. No-op if the id is
