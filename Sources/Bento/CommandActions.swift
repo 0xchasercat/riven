@@ -1,0 +1,47 @@
+import BentoCore
+import Foundation
+
+/// High-level UI actions the Bento window can dispatch in response to a
+/// `Command` selection in the palette, a keyboard shortcut, or a menu item.
+///
+/// This enum is intentionally distinct from `BentoCore.CommandAction` (which
+/// is just the static identifier on `Command`). The cases here carry the
+/// payloads needed by the orchestrator to actually perform the action.
+public enum CommandAction: Equatable, Sendable {
+    /// Split the focused pane horizontally, placing the new pane to the right.
+    case splitRight
+    /// Split the focused pane vertically, placing the new pane below.
+    case splitDown
+    /// Close the currently focused pane.
+    case closePane
+    /// Move focus to the next pane in the grid.
+    case cycleFocus
+    /// Open the supplied file in the editor surface.
+    case openFile(URL)
+    /// Rotate to the next built-in theme in `ThemeSpec.builtIns`.
+    case cycleTheme
+    /// Reveal the search overlay.
+    case showSearch
+}
+
+public extension CommandAction {
+    /// Maps a palette `Command` to its corresponding dispatchable action.
+    ///
+    /// Some palette entries (for example `.openProject`, `.flipPane`,
+    /// `.zoomPane`, `.restoreSession`) do not yet have an action defined in
+    /// this slice; they return `nil` and the caller should log + no-op.
+    static func from(_ command: Command) -> CommandAction? {
+        switch command.id {
+        case .splitRight:
+            return .splitRight
+        case .splitDown:
+            return .splitDown
+        case .closePane:
+            return .closePane
+        case .search:
+            return .showSearch
+        case .flipPane, .zoomPane, .openProject, .restoreSession:
+            return nil
+        }
+    }
+}

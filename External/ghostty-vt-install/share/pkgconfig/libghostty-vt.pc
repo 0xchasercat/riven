@@ -1,0 +1,12 @@
+prefix=/Users/marcxavier/Bento/External/ghostty/../ghostty-vt-install
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: libghostty-vt
+URL: https://github.com/ghostty-org/ghostty
+Description: Ghostty VT library
+Version: 0.1.0-dev
+Cflags: -I${includedir}
+Libs: -L${libdir} -lghostty-vt
+Libs.private: 
+Requires.private: 

@@ -15,21 +15,24 @@ import SwiftUI
 struct PaneGridView: NSViewRepresentable {
     let theme: ThemeSpec
     let paneGraph: PaneGraph
-    @Binding var openFile: URL?
     let projectRoot: String
+    let fileMap: PaneFileMap
+    let agentClient: AgentClient?
     let onGraphChange: (PaneGraph) -> Void
 
     init(
         theme: ThemeSpec,
         paneGraph: PaneGraph,
-        openFile: Binding<URL?>,
         projectRoot: String,
+        fileMap: PaneFileMap,
+        agentClient: AgentClient?,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in }
     ) {
         self.theme = theme
         self.paneGraph = paneGraph
-        self._openFile = openFile
         self.projectRoot = projectRoot
+        self.fileMap = fileMap
+        self.agentClient = agentClient
         self.onGraphChange = onGraphChange
     }
 
@@ -44,7 +47,8 @@ struct PaneGridView: NSViewRepresentable {
             graph: paneGraph,
             theme: theme,
             projectRoot: projectRoot,
-            openFile: $openFile,
+            fileMap: fileMap,
+            agentClient: agentClient,
             onGraphChange: onGraphChange
         )
         // Schedule first-responder grab once we're in a window.
@@ -60,7 +64,8 @@ struct PaneGridView: NSViewRepresentable {
             graph: paneGraph,
             theme: theme,
             projectRoot: projectRoot,
-            openFile: $openFile,
+            fileMap: fileMap,
+            agentClient: agentClient,
             onGraphChange: onGraphChange
         )
     }
@@ -103,7 +108,8 @@ final class BentoPaneContainerView: NSView {
         graph: PaneGraph,
         theme: ThemeSpec,
         projectRoot: String,
-        openFile: Binding<URL?>,
+        fileMap: PaneFileMap,
+        agentClient: AgentClient?,
         onGraphChange: @escaping (PaneGraph) -> Void
     ) {
         self.currentGraph = graph
@@ -116,7 +122,8 @@ final class BentoPaneContainerView: NSView {
             theme: theme,
             graph: graph,
             projectRoot: projectRoot,
-            openFile: openFile,
+            fileMap: fileMap,
+            agentClient: agentClient,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -212,7 +219,8 @@ private struct PaneTreeBuilder {
     let theme: ThemeSpec
     let graph: PaneGraph
     let projectRoot: String
-    let openFile: Binding<URL?>
+    let fileMap: PaneFileMap
+    let agentClient: AgentClient?
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
 
@@ -293,14 +301,19 @@ private struct PaneTreeBuilder {
         if let pane {
             switch pane.kind {
             case let .terminal(terminal):
-                TerminalPaneView(
-                    theme: theme,
-                    paneID: pane.id,
-                    cwd: terminal.cwd,
-                    command: terminal.command
-                )
+                if let agentClient {
+                    TerminalPaneView(
+                        theme: theme,
+                        paneID: pane.id,
+                        cwd: terminal.cwd,
+                        command: terminal.command,
+                        agentClient: agentClient
+                    )
+                } else {
+                    BrokerConnectingPlaceholder(theme: theme)
+                }
             case .editor:
-                EditorPaneView(theme: theme, openFile: openFile)
+                EditorPaneView(theme: theme, paneID: pane.id, fileMap: fileMap)
             }
         } else {
             // Defensive fallback: the graph referenced an unknown id. Show
@@ -311,6 +324,25 @@ private struct PaneTreeBuilder {
 
     private func leafView(for id: PaneID, pane: PaneDescriptor?) -> AnyView {
         AnyView(leafContent(for: id, pane: pane))
+    }
+}
+
+/// Placeholder shown in a terminal leaf while `AgentClient` is still
+/// connecting. Once the client lands, the leaf re-renders with a real
+/// `TerminalPaneView`.
+private struct BrokerConnectingPlaceholder: View {
+    let theme: ThemeSpec
+
+    var body: some View {
+        VStack {
+            Spacer()
+            Text("connecting to broker…")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(hex: theme.terminal.background.hex))
     }
 }
 

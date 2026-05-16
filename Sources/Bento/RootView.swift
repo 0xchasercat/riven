@@ -7,10 +7,9 @@ struct BentoRootView: View {
     @State private var activeOverlay: Overlay?
     @State private var paletteQuery = ""
     @State private var searchQuery = ""
-    @State private var openFile: URL?
 
     private var theme: ThemeSpec {
-        let id = selectedThemeID ?? controller.preference.selectedTheme.id
+        let id = selectedThemeID ?? controller.state.selectedThemeID
         return ThemeSpec.theme(id: id) ?? ThemeSpec.builtIns[0]
     }
 
@@ -20,14 +19,7 @@ struct BentoRootView: View {
                 SidebarView(
                     theme: theme,
                     fileTree: controller.state.fileTree,
-                    onOpenFile: { url in
-                        openFile = url
-                        var paths = controller.openFilePaths
-                        if !paths.contains(url.path) {
-                            paths.insert(url.path, at: 0)
-                            controller.recordOpenFiles(paths)
-                        }
-                    }
+                    onOpenFile: { controller.openFile($0) }
                 )
                 Divider().background(Color(hex: theme.chrome.border.hex))
                 VStack(spacing: 0) {
@@ -35,8 +27,9 @@ struct BentoRootView: View {
                     PaneGridView(
                         theme: theme,
                         paneGraph: controller.state.paneGraph,
-                        openFile: $openFile,
                         projectRoot: controller.state.projectRoot,
+                        fileMap: controller.fileMap,
+                        agentClient: controller.agentClient,
                         onGraphChange: { controller.recordPaneGraph($0) }
                     )
                     statusBar
@@ -71,6 +64,10 @@ struct BentoRootView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            if controller.agentClient == nil {
+                Text("connecting to broker…")
+                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            }
             if controller.state.restoredFromSnapshot {
                 Text("session restored")
                     .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
@@ -96,14 +93,45 @@ struct BentoRootView: View {
                 theme: theme,
                 query: $paletteQuery,
                 commands: CommandPalette(commands: Command.bentoBuiltIns).search(paletteQuery),
+                onSelect: { dispatch($0) },
                 onClose: { activeOverlay = nil }
             )
         case .search:
             SearchOverlay(
                 theme: theme,
                 query: $searchQuery,
+                search: { try await controller.search($0) },
+                onOpenFile: { url in
+                    activeOverlay = nil
+                    controller.openFile(url)
+                },
                 onClose: { activeOverlay = nil }
             )
+        }
+    }
+
+    private func dispatch(_ action: CommandAction) {
+        switch action {
+        case .splitRight:
+            let next = controller.state.paneGraph.splittingInheriting(controller.state.paneGraph.focusedPaneID, direction: .right)
+            controller.recordPaneGraph(next)
+        case .splitDown:
+            let next = controller.state.paneGraph.splittingInheriting(controller.state.paneGraph.focusedPaneID, direction: .down)
+            controller.recordPaneGraph(next)
+        case .closePane:
+            if let next = controller.state.paneGraph.close(controller.state.paneGraph.focusedPaneID) {
+                controller.recordPaneGraph(next)
+            }
+        case .cycleFocus:
+            controller.recordPaneGraph(controller.state.paneGraph.nextFocus())
+        case .cycleTheme:
+            controller.cycleTheme()
+            selectedThemeID = controller.state.selectedThemeID
+        case .showSearch:
+            activeOverlay = .search
+            searchQuery = ""
+        case .openFile(let url):
+            controller.openFile(url)
         }
     }
 

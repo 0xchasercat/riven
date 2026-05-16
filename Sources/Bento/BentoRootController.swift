@@ -12,9 +12,11 @@ import Foundation
 final class BentoRootController: ObservableObject {
     let preference = ThemePreferenceStore()
     let workspace: WorkspaceController
+    let fileMap = PaneFileMap()
 
     @Published private(set) var state: WorkspaceState
     @Published var openFilePaths: [String] = []
+    @Published private(set) var agentClient: AgentClient?
 
     init() {
         let support = FileManager.default
@@ -47,6 +49,48 @@ final class BentoRootController: ObservableObject {
         }
     }
 
+    /// Hand off the broker connection once `AgentLauncher` finishes its
+    /// startup handshake. Until this fires, terminal panes render a
+    /// "connecting" placeholder.
+    func attachAgentClient(_ client: AgentClient) {
+        self.agentClient = client
+    }
+
+    /// Open `url` in an editor pane. Strategy: if the focused pane is
+    /// already an editor, target it; else target the first editor leaf;
+    /// else split the focused pane to add a new editor leaf and target
+    /// that. Either way, the file shows up immediately.
+    func openFile(_ url: URL) {
+        var graph = state.paneGraph
+        let leaves = graph.leaves()
+        let editorPaneID: PaneID
+
+        if let focusedEditor = leaves.first(where: { $0.id == graph.focusedPaneID && $0.editor != nil }) {
+            editorPaneID = focusedEditor.id
+        } else if let firstEditor = leaves.first(where: { $0.editor != nil }) {
+            editorPaneID = firstEditor.id
+            graph = graph.focus(firstEditor.id)
+        } else {
+            let newEditor = PaneDescriptor(
+                id: PaneID(),
+                name: url.lastPathComponent,
+                kind: .editor(EditorPane(path: url.path)),
+                isFocused: true
+            )
+            graph = graph.split(graph.focusedPaneID, direction: .right, newPane: newEditor)
+            editorPaneID = newEditor.id
+        }
+
+        fileMap.setFile(url, for: editorPaneID)
+        recordPaneGraph(graph)
+
+        var paths = openFilePaths
+        if !paths.contains(url.path) {
+            paths.insert(url.path, at: 0)
+            recordOpenFiles(paths)
+        }
+    }
+
     /// Update the in-memory open-file list and tell the controller so the
     /// next snapshot reflects what the editor surface is showing.
     func recordOpenFiles(_ paths: [String]) {
@@ -62,9 +106,22 @@ final class BentoRootController: ObservableObject {
         Task { [workspace] in
             await workspace.updatePaneGraph(graph)
         }
-        Task { @MainActor in
-            self.state.paneGraph = graph
-        }
+        self.state.paneGraph = graph
+    }
+
+    /// Run a unified search (files + scrollback) against the currently
+    /// open project. Used by the search overlay.
+    func search(_ query: String) async throws -> [UnifiedSearchResult] {
+        try await workspace.search(query)
+    }
+
+    /// Cycle to the next built-in theme. Wired through `CommandAction.cycleTheme`.
+    func cycleTheme() {
+        let all = ThemeSpec.builtIns
+        let current = preference.selectedTheme.id
+        let nextIdx = (all.firstIndex(where: { $0.id == current }).map { $0 + 1 } ?? 0) % all.count
+        try? preference.selectTheme(id: all[nextIdx].id)
+        self.state.selectedThemeID = all[nextIdx].id
     }
 
     private static func fallbackState(cwd: URL, themeID: String) -> WorkspaceState {

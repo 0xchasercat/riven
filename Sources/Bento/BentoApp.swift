@@ -3,9 +3,11 @@ import BentoCore
 import SwiftUI
 
 @main
+@MainActor
 final class BentoApplication: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var rootController: BentoRootController?
+    private var agentLauncher: AgentLauncher?
 
     static func main() {
         let app = NSApplication.shared
@@ -17,8 +19,26 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
+
         let controller = BentoRootController()
         self.rootController = controller
+
+        let launcher = AgentLauncher()
+        self.agentLauncher = launcher
+
+        // Spin up the broker and hand the connected client to the
+        // controller. Until this finishes, terminal panes render a
+        // "connecting to broker" placeholder.
+        Task { [weak controller] in
+            do {
+                try await launcher.start()
+                let client = try await launcher.client()
+                controller?.attachAgentClient(client)
+            } catch {
+                NSLog("BentoAgent launch failed: \(error)")
+            }
+        }
+
         let hosting = NSHostingController(rootView: BentoRootView().environmentObject(controller))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Bento"
@@ -33,17 +53,18 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        guard let controller = rootController else { return }
-        let workspace = controller.workspace
+        let workspace = rootController?.workspace
+        let launcher = agentLauncher
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            try? await workspace.persistSnapshot()
+            if let workspace { try? await workspace.persistSnapshot() }
+            await launcher?.shutdown()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + .seconds(2))
     }
 
-    @MainActor private func installMenu() {
+    private func installMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()

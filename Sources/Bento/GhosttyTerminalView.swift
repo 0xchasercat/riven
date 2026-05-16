@@ -312,44 +312,21 @@ public final class GhosttyTerminalView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.saveGState()
-        defer { ctx.restoreGState() }
-
-        // Background.
-        ctx.setFillColor(configuration.background.cgColor)
-        ctx.fill(bounds)
-
-        guard let session = session, bridge.isAlive(session) else { return }
-
-        // Read the grid as plain text (one string per row).
-        let lines = (try? bridge.readGridText(session)) ?? []
-
-        // Draw each row. We're flipped so y=0 is at the top.
-        // CoreText draws baselines, so we need to flip the CTM for text.
-        ctx.textMatrix = .identity
-        for (rowIdx, line) in lines.enumerated() {
-            let baselineFromTop = CGFloat(rowIdx) * cellHeight + ascent
-            let attr = NSAttributedString(string: line, attributes: textAttributes)
-            let ctLine = CTLineCreateWithAttributedString(attr)
-            ctx.saveGState()
-            ctx.translateBy(x: 0, y: baselineFromTop)
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.textPosition = .zero
-            CTLineDraw(ctLine, ctx)
-            ctx.restoreGState()
-        }
-
-        // Cursor.
-        if let cursor = try? bridge.readCursor(session), cursor.visible {
-            let rect = NSRect(
-                x: CGFloat(cursor.x) * cellWidth,
-                y: CGFloat(cursor.y) * cellHeight,
-                width: cellWidth,
-                height: cellHeight
-            )
-            ctx.setFillColor(configuration.cursor.withAlphaComponent(0.45).cgColor)
-            ctx.fill(rect)
-        }
+        GhosttyRenderer.draw(
+            bridge: bridge,
+            session: session,
+            bounds: bounds,
+            ctx: ctx,
+            style: GhosttyRenderer.Style(
+                foreground: configuration.foreground,
+                background: configuration.background,
+                cursor: configuration.cursor
+            ),
+            textAttributes: textAttributes,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            ascent: ascent
+        )
     }
 
     // MARK: - Keyboard input
