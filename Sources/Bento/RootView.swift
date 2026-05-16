@@ -16,29 +16,33 @@ struct BentoRootView: View {
 
     var body: some View {
         ZStack {
-            HStack(spacing: 0) {
-                SidebarView(
+            // Single column. The global SidebarView is gone — each workspace
+            // owns its own file viewer keyed to its own cwd. The tab bar
+            // sits at the top of the window; the focused workspace renders
+            // full-width below it.
+            VStack(spacing: 0) {
+                WorkspaceTabBar(
                     theme: theme,
-                    fileTree: controller.state.fileTree,
-                    onOpenFile: { controller.openFile($0) }
+                    tabs: controller.state.paneGraph.leaves(),
+                    focusedID: controller.state.paneGraph.focusedPaneID,
+                    onSelect: { controller.focusTab($0) },
+                    onClose: { controller.closeTab($0) },
+                    onAdd: { controller.openNewTab() }
                 )
-                Divider().background(Color(hex: theme.chrome.border.hex))
-                VStack(spacing: 0) {
-                    toolbar
-                    PaneGridView(
-                        theme: theme,
-                        paneGraph: controller.state.paneGraph,
-                        projectRoot: controller.state.projectRoot,
-                        fileMap: controller.fileMap,
-                        agentClient: controller.agentClient,
-                        onGraphChange: { controller.recordPaneGraph($0) },
-                        onOpenFile: { controller.openFile($0) },
-                        onCwdChanged: { paneID, cwd in
-                            controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
-                        }
-                    )
-                    statusBar
-                }
+                toolbar
+                PaneGridView(
+                    theme: theme,
+                    paneGraph: controller.state.paneGraph,
+                    projectRoot: controller.state.projectRoot,
+                    fileMap: controller.fileMap,
+                    agentClient: controller.agentClient,
+                    onGraphChange: { controller.recordPaneGraph($0) },
+                    onOpenFile: { controller.openFile($0) },
+                    onCwdChanged: { paneID, cwd in
+                        controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
+                    }
+                )
+                statusBar
             }
             if !controller.preference.hasExplicitSelection {
                 ThemePicker(theme: theme, onSelect: { id in
@@ -59,6 +63,15 @@ struct BentoRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in
             activeOverlay = .search
             searchQuery = ""
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in
+            controller.openNewTab()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in
+            controller.closeTab(controller.state.paneGraph.focusedPaneID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in
+            controller.closeFocusedEditor()
         }
     }
 
@@ -87,12 +100,12 @@ struct BentoRootView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("cmd+k")
+            Text("⌘K palette · ⌘T new tab")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
         }
         .padding(.horizontal, 16)
-        .frame(height: 38)
+        .frame(height: 32)
         .background(Color(hex: theme.chrome.background.hex))
     }
 
@@ -134,16 +147,12 @@ struct BentoRootView: View {
 
     private func dispatch(_ action: CommandAction) {
         switch action {
-        case .splitRight:
-            let next = controller.state.paneGraph.splittingInheriting(controller.state.paneGraph.focusedPaneID, direction: .right)
-            controller.recordPaneGraph(next)
-        case .splitDown:
-            let next = controller.state.paneGraph.splittingInheriting(controller.state.paneGraph.focusedPaneID, direction: .down)
-            controller.recordPaneGraph(next)
+        case .splitRight, .splitDown:
+            // Splits are gone — treat split commands as "new tab" for
+            // backward palette compatibility.
+            controller.openNewTab()
         case .closePane:
-            if let next = controller.state.paneGraph.close(controller.state.paneGraph.focusedPaneID) {
-                controller.recordPaneGraph(next)
-            }
+            controller.closeTab(controller.state.paneGraph.focusedPaneID)
         case .cycleFocus:
             controller.recordPaneGraph(controller.state.paneGraph.nextFocus())
         case .cycleTheme:
@@ -177,7 +186,7 @@ struct BentoRootView: View {
     private var statusBar: some View {
         HStack(spacing: 14) {
             Text(URL(fileURLWithPath: controller.state.projectRoot).lastPathComponent)
-            Text("\(controller.openFilePaths.count) open")
+            Text("\(controller.state.paneGraph.leaves().count) tab\(controller.state.paneGraph.leaves().count == 1 ? "" : "s")")
             Text("theme: \(theme.name)")
             Spacer()
             Text("0 telemetry")
@@ -185,7 +194,7 @@ struct BentoRootView: View {
         .font(.system(size: 10, design: .monospaced))
         .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
         .padding(.horizontal, 12)
-        .frame(height: 24)
+        .frame(height: 22)
         .background(Color(hex: theme.chrome.background.hex))
     }
 }

@@ -147,6 +147,52 @@ final class BentoRootController: ObservableObject {
         try await workspace.search(query)
     }
 
+    /// Add a brand-new workspace tab rooted at the project's cwd and
+    /// focus it. Wired to Cmd+T / Cmd+N. Top-level "tabs" are pane-graph
+    /// leaves; the UI renders one at a time full-width (no squeeze).
+    func openNewTab() {
+        let cwd = URL(fileURLWithPath: state.projectRoot).path
+        let newPane = PaneDescriptor(
+            id: PaneID(),
+            name: "workspace",
+            kind: .workspace(WorkspaceGroup(initialCwd: cwd)),
+            isFocused: true
+        )
+        let graph = state.paneGraph.split(
+            state.paneGraph.focusedPaneID,
+            direction: .right,
+            newPane: newPane
+        )
+        recordPaneGraph(graph)
+    }
+
+    /// Close a workspace tab. If it's the last tab the call is a no-op
+    /// (graph never goes empty). Otherwise focus moves to a neighbour.
+    func closeTab(_ id: PaneID) {
+        guard let next = state.paneGraph.close(id) else { return }
+        recordPaneGraph(next)
+    }
+
+    /// Move keyboard focus to the given workspace tab.
+    func focusTab(_ id: PaneID) {
+        let next = state.paneGraph.focus(id)
+        if next != state.paneGraph { recordPaneGraph(next) }
+    }
+
+    /// Close the focused workspace's open editor (if any). The editor
+    /// column hides; the terminal stays put. No-op when the focused pane
+    /// isn't a workspace or the workspace has no editor open.
+    func closeFocusedEditor() {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace,
+              workspace.openEditorPath != nil else {
+            return
+        }
+        workspace.openEditorPath = nil
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
     /// Trust the currently open project so its `.bento/session.yml` task
     /// panes will auto-start now and on every future open. Wired through
     /// the trust prompt overlay's "Trust this project" button.

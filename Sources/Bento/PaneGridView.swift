@@ -30,8 +30,13 @@ struct PaneGridView: NSViewRepresentable {
         agentClient: AgentClient?,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
-        onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in }
+        onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
+        onCloseEditor: @escaping () -> Void = { }
     ) {
+        // `onCloseEditor` is accepted for API symmetry; the actual close
+        // signal flows via NotificationCenter (`bentoCloseEditor`) so we
+        // don't thread the closure through six layers of nested workspace
+        // views.
         self.theme = theme
         self.paneGraph = paneGraph
         self.projectRoot = projectRoot
@@ -397,12 +402,11 @@ private struct PaneTreeBuilder {
     }
 
     private func badge(for pane: PaneDescriptor?) -> String {
-        switch pane?.kind {
-        case .editor: return "STTextView"
-        case .terminal: return "libghostty"
-        case .workspace: return "workspace"
-        case .none: return ""
-        }
+        // Backend-engine badges ("workspace" / "libghostty" / "STTextView")
+        // were internal jargon that competed with the pane title for
+        // attention. The pane chrome shows the title; the engine is an
+        // implementation detail the user doesn't need surfaced here.
+        return ""
     }
 
     private func hostingController(for id: PaneID, pane: PaneDescriptor?) -> NSHostingController<AnyView> {
@@ -609,20 +613,21 @@ private final class PaneShellNSView: NSView {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         header.addSubview(titleLabel)
 
-        // Pill-shaped badge capsule. Background = accentSoft, text = accent.
+        // Subtle uppercase letter-spaced metadata label — NOT a filled pill.
+        // The old accent-on-accentSoft pill had unreadable contrast; this
+        // reads as 'this is metadata about the surface' without competing
+        // for attention with content.
         badgeContainer.wantsLayer = true
-        badgeContainer.layer?.cornerRadius = BentoRadius.small
-        badgeContainer.layer?.backgroundColor = NSColor(hex: theme.chrome.accentSoft.hex).cgColor
+        badgeContainer.layer?.cornerRadius = 0
+        badgeContainer.layer?.backgroundColor = NSColor.clear.cgColor
         badgeContainer.translatesAutoresizingMaskIntoConstraints = false
         badgeContainer.setContentHuggingPriority(.required, for: .horizontal)
         badgeContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
-        // BentoType.micro() is a SwiftUI font; mirror it directly in AppKit
-        // so the badge type matches the rest of the design system.
         badgeLabel.font = NSFont.monospacedSystemFont(
             ofSize: BentoType.caption,
             weight: .semibold
         )
-        badgeLabel.textColor = NSColor(hex: theme.chrome.accent.hex)
+        badgeLabel.textColor = NSColor(hex: theme.chrome.tertiaryText.hex)
         badgeLabel.translatesAutoresizingMaskIntoConstraints = false
         badgeLabel.isEditable = false
         badgeLabel.isSelectable = false

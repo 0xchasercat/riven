@@ -54,8 +54,14 @@ struct WorkspaceGroupView: View {
         fileMap: PaneFileMap,
         agentClient: AgentClient,
         onOpenFile: @escaping (URL) -> Void = { _ in },
-        onCwdChanged: @escaping (String) -> Void = { _ in }
+        onCwdChanged: @escaping (String) -> Void = { _ in },
+        onCloseEditor: @escaping () -> Void = { }
     ) {
+        // The editor close action is forwarded via NotificationCenter
+        // (`bentoCloseEditor`) so it doesn't have to thread through six
+        // layers of NSSplitView / NSHostingController plumbing inside
+        // the workspace view. We accept the parameter for API symmetry
+        // with the orchestrator but route through notifications.
         self.theme = theme
         self.paneID = paneID
         self.workspace = workspace
@@ -897,6 +903,18 @@ private struct WorkspaceEditorColumn: View {
     let openPath: String?
     let fileMap: PaneFileMap
 
+    @State private var isCloseHovered = false
+
+    /// Close action: posts a notification the orchestrator listens for and
+    /// translates into `BentoRootController.closeFocusedEditor()`. We use
+    /// notifications instead of a callback parameter because plumbing one
+    /// through `WorkspaceContainerView` / `rebuildTree` / `hostEditor` /
+    /// `editorView` would require six layers of parameter additions for a
+    /// single click handler.
+    private func onClose() {
+        NotificationCenter.default.post(name: .bentoCloseEditor, object: nil)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -916,6 +934,25 @@ private struct WorkspaceEditorColumn: View {
                 .foregroundStyle(Color(hex: theme.chrome.text.hex))
                 .lineLimit(1)
                 .truncationMode(.middle)
+            Button(action: onClose) {
+                Text("×")
+                    .font(BentoType.chrome(13, weight: .medium))
+                    .foregroundStyle(Color(hex: isCloseHovered
+                        ? theme.chrome.text.hex
+                        : theme.chrome.tertiaryText.hex))
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                            .fill(Color(hex: theme.chrome.accentSoft.hex)
+                                .opacity(isCloseHovered ? 1 : 0))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .onHover { isCloseHovered = $0 }
+            .help("Close editor (the file stays on disk)")
+            .animation(BentoMotion.hover, value: isCloseHovered)
         }
         .padding(.horizontal, BentoSpacing.m)
         .frame(height: 32)

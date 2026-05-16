@@ -33,7 +33,7 @@ struct CommandBarView: View {
     /// the [singleLineHeight, maxHeight] range below before we use it as
     /// the SwiftUI frame height. Keeping the raw value in `@State` lets
     /// transitions be smooth — we only animate the clamped output.
-    @State private var contentHeight: CGFloat = CommandBarMetrics.singleLineHeight
+    @State private var contentHeight: CGFloat = CommandBarMetrics.singleLineInputHeight
     /// `true` when the embedded `NSTextView` is the window's first
     /// responder. Driven from the AppKit layer; powers the focus underline
     /// and the bolder prompt glyph.
@@ -50,14 +50,18 @@ struct CommandBarView: View {
     }
 
     var body: some View {
-        let clampedHeight = clampHeight(contentHeight)
-        // The full bar height = the text input's clamped height plus the
-        // vertical padding we add around the text container. Used by the
-        // backgrounds + borders so they animate in lockstep with growth.
-        let barHeight = clampedHeight + BentoSpacing.s * 2
+        // Clamped input height — what we actually allocate to the
+        // NSTextView. Includes the text container's own vertical insets,
+        // so a "single line" already has breathing room top and bottom.
+        let inputHeight = clampHeight(contentHeight)
+        // The bar's full height tracks the input directly; padding lives
+        // inside the text container (textInsetY) rather than on the
+        // HStack, so the prompt + submit glyphs sit perfectly centered on
+        // the same baseline as a single line of typed text.
+        let barHeight = inputHeight
         let hasText = !text.isEmpty
 
-        HStack(alignment: .top, spacing: BentoSpacing.s) {
+        HStack(alignment: .center, spacing: BentoSpacing.s) {
             promptGlyph
 
             CommandBarTextView(
@@ -69,15 +73,16 @@ struct CommandBarView: View {
                 onHistoryRequest: handleHistoryRequest,
                 onCancel: handleCancel
             )
-            .frame(height: clampedHeight)
+            .frame(height: inputHeight)
 
             submitAffordance(hasText: hasText)
         }
         .padding(.leading, BentoSpacing.s)
         .padding(.trailing, BentoSpacing.s)
-        .padding(.vertical, BentoSpacing.s)
         .frame(height: barHeight)
         .background(
+            // One notch above the panel so the bar visually pops as the
+            // input zone instead of melting into the terminal grid.
             Color(hex: theme.chrome.elevated.hex)
         )
         .overlay(alignment: .top) {
@@ -88,14 +93,16 @@ struct CommandBarView: View {
         .overlay(alignment: .bottom) {
             // Focus underline. We always render a 1pt rectangle so the
             // animation can smoothly cross-fade between the resting
-            // (clear) and focused (accent) states.
+            // (clear) and focused (accent) states. No bottom border in
+            // the resting state — the bar sits flush against the pane
+            // bottom so an idle line would only add visual noise.
             Rectangle()
                 .fill(Color(hex: theme.chrome.accent.hex))
                 .frame(height: 1)
                 .opacity(isFocused ? 1 : 0)
                 .animation(BentoMotion.hover, value: isFocused)
         }
-        .animation(.easeOut(duration: 0.12), value: clampedHeight)
+        .animation(.easeOut(duration: 0.12), value: inputHeight)
     }
 
     // MARK: - Decorations
@@ -105,12 +112,13 @@ struct CommandBarView: View {
     private var promptGlyph: some View {
         // U+276F (HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT) is
         // the canonical chevron glyph. SF Mono ships it on every modern
-        // macOS so the fallback path is purely defensive.
+        // macOS, so this renders consistently across themes.
         Text("\u{276F}")
             .font(BentoType.mono(BentoType.body, weight: isFocused ? .bold : .semibold))
             .foregroundStyle(Color(hex: theme.chrome.accent.hex))
-            .frame(width: 14, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+            .frame(width: CommandBarMetrics.promptWidth, alignment: .center)
             .animation(BentoMotion.hover, value: isFocused)
+            .accessibilityHidden(true)
     }
 
     /// Return-key affordance on the right edge. Dim by default; when
@@ -122,14 +130,14 @@ struct CommandBarView: View {
             .foregroundStyle(
                 Color(hex: hasText ? theme.chrome.accent.hex : theme.chrome.tertiaryText.hex)
             )
-            .frame(width: 24, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+            .frame(width: CommandBarMetrics.submitWidth, alignment: .center)
             .animation(BentoMotion.hover, value: hasText)
             .accessibilityLabel(hasText ? "Run command" : "Return")
     }
 
     private func clampHeight(_ raw: CGFloat) -> CGFloat {
-        let minH = CommandBarMetrics.singleLineHeight
-        let maxH = CommandBarMetrics.maxHeight
+        let minH = CommandBarMetrics.singleLineInputHeight
+        let maxH = CommandBarMetrics.maxInputHeight
         if raw.isNaN || raw <= 0 { return minH }
         return min(max(raw, minH), maxH)
     }
@@ -141,7 +149,7 @@ struct CommandBarView: View {
         // delegate that's still mid-event.
         let payload = value
         text = ""
-        contentHeight = CommandBarMetrics.singleLineHeight
+        contentHeight = CommandBarMetrics.singleLineInputHeight
         onSubmit(payload)
     }
 
@@ -151,31 +159,51 @@ struct CommandBarView: View {
 
     private func handleCancel() {
         text = ""
-        contentHeight = CommandBarMetrics.singleLineHeight
+        contentHeight = CommandBarMetrics.singleLineInputHeight
     }
 }
 
 /// Layout constants. Centralized so the AppKit text view, the SwiftUI
 /// frame, and the prompt glyph stay aligned.
+///
+/// All sizes derive from `BentoSpacing` / `BentoType` tokens so the bar
+/// stays in lockstep with the rest of the design system if those scales
+/// shift. The only "magic" left is the per-line growth estimate, which
+/// is intentionally a measurement of the SF Mono cap height at the body
+/// type size — there is no token for that.
 private enum CommandBarMetrics {
-    /// Resting height of the text container at a single line of text.
-    /// Tuned to fit `BentoType.mono`-sized text comfortably with the
-    /// `textInsetY` padding inside the scroll view.
-    static let singleLineHeight: CGFloat = 24
-    /// Approximate per-line growth used for the cap calculation.
-    static let lineHeight: CGFloat = 17
-    /// Cap so the bar can't swallow the terminal grid: starting at the
-    /// resting height plus seven extra lines = roughly eight rows tall.
-    static let maxHeight: CGFloat = singleLineHeight + 7 * lineHeight
-    /// Font size for the input + placeholder. Matches `BentoType.body`
-    /// so the input feels related to the rest of the chrome typography.
-    static let fontSize: CGFloat = BentoType.body
     /// Horizontal inset inside the scroll view. The HStack already pads
     /// the bar; we don't want the text to drift further off the prompt.
     static let textInsetX: CGFloat = 0
-    /// Vertical inset inside the scroll view. Centers single-line text
-    /// in the resting height and keeps the cursor off the top/bottom edge.
-    static let textInsetY: CGFloat = BentoSpacing.xs
+    /// Vertical inset inside the scroll view. 8 pt top + 8 pt bottom
+    /// centers single-line text in the resting bar height and keeps the
+    /// cursor off the top/bottom edge during multi-line growth.
+    static let textInsetY: CGFloat = BentoSpacing.s
+
+    /// Approximate per-line growth used for the cap calculation. SF Mono
+    /// at `BentoType.body` measures roughly 14 pt of advance per line.
+    static let lineHeight: CGFloat = 14
+
+    /// Resting input height at a single line of text. ~32 pt: 14 pt for
+    /// the glyph row plus 16 pt of vertical inset above and below.
+    static let singleLineInputHeight: CGFloat = lineHeight + textInsetY * 2
+
+    /// Cap so the bar can't swallow the terminal grid. ~140 pt: room for
+    /// roughly nine wrapped lines at the body type size before scrolling
+    /// kicks in.
+    static let maxInputHeight: CGFloat = 140
+
+    /// Font size for the input + placeholder. Matches `BentoType.body`
+    /// so the input feels related to the rest of the chrome typography.
+    static let fontSize: CGFloat = BentoType.body
+
+    /// Width reserved for the leading prompt glyph. Big enough for the
+    /// chevron at body weight without crowding the cursor.
+    static let promptWidth: CGFloat = 14
+
+    /// Width reserved for the trailing return-key affordance, including
+    /// its right-side breathing room.
+    static let submitWidth: CGFloat = 24
 }
 
 // MARK: - AppKit bridge
@@ -244,6 +272,7 @@ private struct CommandBarTextView: NSViewRepresentable {
             .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
         textView.placeholderString = "Type a command — \u{23CE} run, \u{21E7}\u{23CE} newline, \u{2191}\u{2193} history, esc clear"
+        textView.placeholderFont = monospacedFont
         textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
 
         // A horizontally-resizing container with line wrapping is what
@@ -286,6 +315,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         textView.textColor = NSColor(hex: theme.chrome.text.hex)
         textView.insertionPointColor = NSColor(hex: theme.chrome.accent.hex)
         textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
+        textView.placeholderFont = monospacedFont
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
@@ -534,7 +564,7 @@ private struct CommandBarTextView: NSViewRepresentable {
             layoutManager.ensureLayout(for: textContainer)
             let used = layoutManager.usedRect(for: textContainer)
             let measured = ceil(used.height) + CommandBarMetrics.textInsetY * 2
-            let target = max(measured, CommandBarMetrics.singleLineHeight)
+            let target = max(measured, CommandBarMetrics.singleLineInputHeight)
             let binding = contentHeightBinding
             // Only republish on a meaningful change to avoid thrash.
             if abs(binding.wrappedValue - target) > 0.5 {
@@ -560,6 +590,11 @@ fileprivate final class CommandInputTextView: NSTextView {
     /// `NSTextField` does.
     var placeholderString: String?
     var placeholderColor: NSColor = .secondaryLabelColor
+    /// Font used to draw the placeholder. Defaults to the text view's
+    /// own font, but we let callers override so we can guarantee the
+    /// placeholder uses the same monospaced face as typed input even
+    /// before any text has been set.
+    var placeholderFont: NSFont?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -612,7 +647,7 @@ fileprivate final class CommandInputTextView: NSTextView {
         let storage = textStorage
         storage?.beginEditing()
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .font: font ?? NSFont.monospacedSystemFont(ofSize: CommandBarMetrics.fontSize, weight: .regular),
             .foregroundColor: textColor ?? NSColor.textColor
         ]
         storage?.setAttributedString(NSAttributedString(string: value, attributes: attrs))
@@ -626,7 +661,9 @@ fileprivate final class CommandInputTextView: NSTextView {
               let placeholderString,
               !placeholderString.isEmpty else { return }
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .font: placeholderFont
+                ?? font
+                ?? NSFont.monospacedSystemFont(ofSize: CommandBarMetrics.fontSize, weight: .regular),
             .foregroundColor: placeholderColor
         ]
         let attributed = NSAttributedString(string: placeholderString, attributes: attrs)

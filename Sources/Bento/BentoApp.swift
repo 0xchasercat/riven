@@ -72,6 +72,18 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
         main.addItem(appItem)
 
+        // File → New Tab / New Workspace. We use Cmd+T and Cmd+N (instead
+        // of Ctrl-prefixed) because Cmd is the macOS standard. Both fire
+        // the same action: append a fresh workspace tab to the strip.
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(NSMenuItem(title: "New Tab", action: #selector(newTab), keyEquivalent: "t"))
+        fileMenu.addItem(NSMenuItem(title: "New Workspace", action: #selector(newTab), keyEquivalent: "n"))
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(NSMenuItem(title: "Close Tab", action: #selector(closeTab), keyEquivalent: "w"))
+        fileItem.submenu = fileMenu
+        main.addItem(fileItem)
+
         let commandItem = NSMenuItem()
         let commandMenu = NSMenu(title: "Commands")
         commandMenu.addItem(NSMenuItem(title: "Command Palette", action: #selector(showCommandPalette), keyEquivalent: "k"))
@@ -88,9 +100,20 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     @objc private func showSearch() {
         NotificationCenter.default.post(name: .bentoShowSearch, object: nil)
     }
+
+    @objc private func newTab() {
+        NotificationCenter.default.post(name: .bentoNewTab, object: nil)
+    }
+
+    @objc private func closeTab() {
+        NotificationCenter.default.post(name: .bentoCloseTab, object: nil)
+    }
 }
 
 extension Notification.Name {
     static let bentoShowCommandPalette = Notification.Name("BentoShowCommandPalette")
     static let bentoShowSearch = Notification.Name("BentoShowSearch")
+    static let bentoNewTab = Notification.Name("BentoNewTab")
+    static let bentoCloseTab = Notification.Name("BentoCloseTab")
+    static let bentoCloseEditor = Notification.Name("BentoCloseEditor")
 }
