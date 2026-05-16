@@ -8,16 +8,20 @@ import SwiftUI
 /// opens it in the workspace's own editor pane (created on demand).
 ///
 /// Layout is built on two real `NSSplitView`s wrapped in an
-/// `NSViewRepresentable` so the user gets native divider dragging:
+/// `NSViewRepresentable` so the user gets native divider dragging. Each
+/// column reads as a distinct surface (sidebar = `chrome.panel`,
+/// terminal = `terminal.background`, editor = blended editor surface) but
+/// they share the same hairline dividers and section headers so the three
+/// areas feel like one coherent workspace.
 ///
 ///   ┌───────────────────────────────────────────────────────┐
-///   │ sidebar │ terminal area               │  editor (opt) │
-///   │         │  ┌──────────────────────┐   │               │
-///   │         │  │ TerminalPaneView     │   │  EditorPane   │
-///   │         │  └──────────────────────┘   │               │
-///   │         │  ┌──────────────────────┐   │               │
-///   │         │  │ CommandBarView slot  │   │               │
-///   │         │  └──────────────────────┘   │               │
+///   │ FILES   …/cwd │ TerminalPaneView   │ EDITING  foo.swift │
+///   │ ──────────────┼────────────────────┼────────────────── │
+///   │  ▸ src        │ ┌────────────────┐ │  …editor body…    │
+///   │  ▸ Tests      │ │  terminal grid │ │                    │
+///   │               │ └────────────────┘ │                    │
+///   │               │ ──── hairline ──── │                    │
+///   │               │ ░ command bar  ░░░ │                    │
 ///   └───────────────────────────────────────────────────────┘
 ///
 /// - The outer split is horizontal: `sidebar | (terminal-area | editor?)`.
@@ -25,15 +29,15 @@ import SwiftUI
 ///   the editor column. The editor column is only added to the split when
 ///   `workspace.openEditorPath != nil`; the split rebuilds on flip.
 /// - The terminal column itself is a vertical stack (terminal on top,
-///   command bar slot pinned to the bottom). The command bar is a slim
-///   placeholder for now — the orchestrator will swap it for the real
-///   `CommandBarView` once that surface lands.
+///   a hairline + the `CommandBarView` wrapped in a thin elevated band
+///   pinned to the bottom). The command bar reads as part of the
+///   terminal experience rather than a tacked-on widget.
 ///
 /// `currentCwd` is read straight from the model. OSC 7 plumbing from the
-/// broker bridge up to here is a follow-up: when the orchestrator wires
-/// it, it will call `onCwdChanged(newPath)` which the parent controller
-/// uses to mutate `workspace.currentCwd`. The sidebar re-renders any time
-/// the workspace value changes via SwiftUI's normal diffing.
+/// broker bridge up to here lands in `onCwdChanged` and the parent
+/// controller mutates `workspace.currentCwd`. The sidebar animates the
+/// file-list refresh with `BentoMotion.pane` so `cd`-driven re-renders
+/// feel smooth rather than jarring.
 struct WorkspaceGroupView: View {
     let theme: ThemeSpec
     let paneID: PaneID
@@ -71,7 +75,10 @@ struct WorkspaceGroupView: View {
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
-        .background(Color(hex: theme.chrome.border.hex))
+        // The split-view background bleeds through the 1pt divider strips,
+        // so colour it with the hairline token to match the in-view
+        // dividers and section underlines.
+        .background(Color(hex: theme.chrome.hairline.hex))
     }
 }
 
@@ -194,7 +201,7 @@ private final class WorkspaceContainerView: NSView {
         let needsRebuild = outerSplit == nil
             || hasEditorColumn != (workspace.openEditorPath != nil)
 
-        layer?.backgroundColor = NSColor(hex: theme.chrome.border.hex).cgColor
+        layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
 
         if needsRebuild {
             rebuildTree(
@@ -249,7 +256,7 @@ private final class WorkspaceContainerView: NSView {
         let sidebarPane = NSView()
         sidebarPane.translatesAutoresizingMaskIntoConstraints = false
         sidebarPane.wantsLayer = true
-        sidebarPane.layer?.backgroundColor = NSColor(hex: theme.chrome.background.hex).cgColor
+        sidebarPane.layer?.backgroundColor = NSColor(hex: theme.chrome.panel.hex).cgColor
         embed(sidebarHost.view, in: sidebarPane)
         sidebarContainer = sidebarPane
 
@@ -270,7 +277,7 @@ private final class WorkspaceContainerView: NSView {
             paneID: paneID,
             agentClient: agentClient
         )
-        embedTerminalColumn(terminalHost.view, commandBar: commandBar, in: terminalPane)
+        embedTerminalColumn(terminalHost.view, commandBar: commandBar, in: terminalPane, theme: theme)
         terminalColumn = terminalPane
         commandBarHost = commandBar
 
@@ -281,6 +288,7 @@ private final class WorkspaceContainerView: NSView {
             let editorHost = hostEditor(
                 theme: theme,
                 paneID: paneID,
+                workspace: workspace,
                 fileMap: fileMap
             )
             let editorPane = NSView()
@@ -290,7 +298,7 @@ private final class WorkspaceContainerView: NSView {
             embed(editorHost.view, in: editorPane)
             editorColumn = editorPane
 
-            let inner = BentoWorkspaceSplitView()
+            let inner = BentoWorkspaceSplitView(theme: theme)
             inner.isVertical = true // vertical divider == side by side
             inner.dividerStyle = .thin
             inner.translatesAutoresizingMaskIntoConstraints = false
@@ -308,7 +316,7 @@ private final class WorkspaceContainerView: NSView {
         rightContainer = right
 
         // Outer split: sidebar | right.
-        let outer = BentoWorkspaceSplitView()
+        let outer = BentoWorkspaceSplitView(theme: theme)
         outer.isVertical = true
         outer.dividerStyle = .thin
         outer.translatesAutoresizingMaskIntoConstraints = false
@@ -339,7 +347,7 @@ private final class WorkspaceContainerView: NSView {
            let sidebarPos = pendingSidebarPosition,
            outer.arrangedSubviews.count == 2,
            outer.bounds.width > 0 {
-            let target = max(120, min(sidebarPos, outer.bounds.width - 200))
+            let target = max(160, min(sidebarPos, outer.bounds.width - 240))
             outer.setPosition(target, ofDividerAt: 0)
             pendingSidebarPosition = nil
         }
@@ -348,7 +356,7 @@ private final class WorkspaceContainerView: NSView {
            inner.arrangedSubviews.count == 2,
            inner.bounds.width > 0 {
             // editor occupies the right side; divider sits at total - editorWidth.
-            let target = max(160, min(inner.bounds.width - editorPos, inner.bounds.width - 160))
+            let target = max(200, min(inner.bounds.width - editorPos, inner.bounds.width - 200))
             inner.setPosition(target, ofDividerAt: 0)
             pendingEditorPosition = nil
         }
@@ -389,9 +397,13 @@ private final class WorkspaceContainerView: NSView {
         )
         if workspace.openEditorPath != nil {
             coordinator?.editorHost?.rootView = AnyView(
-                editorView(theme: theme, paneID: paneID, fileMap: fileMap)
+                editorView(theme: theme, paneID: paneID, workspace: workspace, fileMap: fileMap)
             )
         }
+        // Refresh divider colour on themed split views in case the theme
+        // changed since the last layout pass.
+        outerSplit?.theme = theme
+        innerSplit?.theme = theme
     }
 
     // MARK: - Hosting helpers
@@ -441,9 +453,10 @@ private final class WorkspaceContainerView: NSView {
     private func hostEditor(
         theme: ThemeSpec,
         paneID: PaneID,
+        workspace: WorkspaceGroup,
         fileMap: PaneFileMap
     ) -> NSHostingController<AnyView> {
-        let root = AnyView(editorView(theme: theme, paneID: paneID, fileMap: fileMap))
+        let root = AnyView(editorView(theme: theme, paneID: paneID, workspace: workspace, fileMap: fileMap))
         if let existing = coordinator?.editorHost {
             existing.rootView = root
             return existing
@@ -465,6 +478,7 @@ private final class WorkspaceContainerView: NSView {
         WorkspaceSidebarView(
             theme: theme,
             currentCwd: workspace.currentCwd,
+            activePath: workspace.openEditorPath,
             onOpenFile: onOpenFile
         )
     }
@@ -495,9 +509,15 @@ private final class WorkspaceContainerView: NSView {
     private func editorView(
         theme: ThemeSpec,
         paneID: PaneID,
+        workspace: WorkspaceGroup,
         fileMap: PaneFileMap
     ) -> some View {
-        EditorPaneView(theme: theme, paneID: paneID, fileMap: fileMap)
+        WorkspaceEditorColumn(
+            theme: theme,
+            paneID: paneID,
+            openPath: workspace.openEditorPath,
+            fileMap: fileMap
+        )
     }
 
     // MARK: - Layout helpers
@@ -513,34 +533,47 @@ private final class WorkspaceContainerView: NSView {
         ])
     }
 
-    /// Stacks `terminal` on top of `commandBar` inside `parent`. The
-    /// command bar pins to the bottom with its intrinsic height; the
-    /// terminal fills the remaining space.
-    private func embedTerminalColumn(_ terminal: NSView, commandBar: NSView, in parent: NSView) {
+    /// Stacks `terminal` on top of `commandBar` inside `parent`, separated
+    /// by a 1pt hairline so the command bar reads as a deliberate input
+    /// strip rather than being flush against the terminal grid.
+    private func embedTerminalColumn(
+        _ terminal: NSView,
+        commandBar: NSView,
+        in parent: NSView,
+        theme: ThemeSpec
+    ) {
         terminal.translatesAutoresizingMaskIntoConstraints = false
         commandBar.translatesAutoresizingMaskIntoConstraints = false
+
+        let hairline = NSView()
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        hairline.wantsLayer = true
+        hairline.layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
+
         parent.addSubview(terminal)
+        parent.addSubview(hairline)
         parent.addSubview(commandBar)
         NSLayoutConstraint.activate([
             terminal.topAnchor.constraint(equalTo: parent.topAnchor),
             terminal.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
             terminal.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
-            terminal.bottomAnchor.constraint(equalTo: commandBar.topAnchor),
+            terminal.bottomAnchor.constraint(equalTo: hairline.topAnchor),
+
+            hairline.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
+            hairline.bottomAnchor.constraint(equalTo: commandBar.topAnchor),
+            hairline.heightAnchor.constraint(equalToConstant: 1),
+
             commandBar.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
             commandBar.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
             commandBar.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
         ])
     }
 
-    /// Slim 0-height placeholder for the command bar. Another agent owns
-    /// `CommandBarView`; the orchestrator will swap this rect for the
-    /// real surface once it lands. Keeping a placeholder NSView (rather
-    /// than just an empty constraint) means the orchestrator can install
-    /// the real bar with a single `replaceSubview` without surgery on
-    /// this file's layout constraints.
     /// Build the Warp-style command bar at the bottom of the terminal
-    /// column. Each workspace has its own per-pane `CommandHistory` (held
-    /// on the coordinator) so Up/Down arrows walk a per-shell history.
+    /// column. The bar itself is hosted inside a thin `elevated`-coloured
+    /// band so it visually pops as the input area without competing with
+    /// the terminal grid above.
     /// On submit, the typed text + a trailing newline is written into the
     /// broker pane via `AgentClient.writeInput`.
     private func makeCommandBar(
@@ -548,7 +581,7 @@ private final class WorkspaceContainerView: NSView {
         paneID: PaneID,
         agentClient: AgentClient
     ) -> NSView {
-        let bar = CommandBarView(
+        let bar = CommandBarBand(
             theme: theme,
             onSubmit: { text in
                 // Append a trailing newline so the shell treats the line as
@@ -565,14 +598,46 @@ private final class WorkspaceContainerView: NSView {
     }
 }
 
+// MARK: - Command bar band
+
+/// Wraps `CommandBarView` in a thin `chrome.elevated`-coloured band so it
+/// reads as the workspace's dedicated input strip rather than sitting
+/// flush against the terminal grid.
+private struct CommandBarBand: View {
+    let theme: ThemeSpec
+    let onSubmit: (String) -> Void
+
+    var body: some View {
+        CommandBarView(theme: theme, onSubmit: onSubmit)
+            .padding(.vertical, BentoSpacing.xxs)
+            .padding(.horizontal, BentoSpacing.xxs)
+            .background(Color(hex: theme.chrome.elevated.hex))
+    }
+}
+
 // MARK: - Themed split view
 
-/// `NSSplitView` subclass that paints a 1-px divider in the chrome border
-/// colour so the workspace reads as one coherent surface rather than three
-/// disconnected boxes. Matches the look of `PaneGridView`'s split.
+/// `NSSplitView` subclass that paints a 1-px divider in the chrome
+/// hairline colour so the workspace reads as one coherent surface rather
+/// than three disconnected boxes. The colour follows the active theme so
+/// switching themes mid-session repaints the divider too.
 private final class BentoWorkspaceSplitView: NSSplitView {
+    var theme: ThemeSpec {
+        didSet { needsDisplay = true }
+    }
+
+    init(theme: ThemeSpec) {
+        self.theme = theme
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("BentoWorkspaceSplitView does not support NSCoder")
+    }
+
     override var dividerColor: NSColor {
-        NSColor.black.withAlphaComponent(0.35)
+        NSColor(hex: theme.chrome.hairline.hex)
     }
 
     override var dividerThickness: CGFloat { 1 }
@@ -584,69 +649,110 @@ private final class BentoWorkspaceSplitView: NSSplitView {
 /// `task(id:)` so the I/O happens off the main view body, and falls back
 /// to a friendly empty state if the path doesn't exist (or the scan
 /// throws — e.g. permission denied on the workspace root).
+///
+/// Header on top (`FILES` + middle-truncated cwd), file list below with
+/// hover/active states, all painted on `chrome.panel`. The cwd-driven
+/// refresh animates via `BentoMotion.pane` so `cd`-in-the-shell feels
+/// smooth rather than a hard cut.
 private struct WorkspaceSidebarView: View {
     let theme: ThemeSpec
     let currentCwd: String
+    let activePath: String?
     let onOpenFile: (URL) -> Void
 
     @State private var tree: ProjectFileTree?
     @State private var loadError: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                header
-                if let tree {
-                    ForEach(tree.children) { node in
-                        FileTreeRow(node: node, theme: theme, onOpenFile: onOpenFile)
-                    }
-                } else if let loadError {
-                    Text(loadError)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                        .padding(.top, 4)
-                } else {
-                    Text("Loading…")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                        .padding(.top, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Hairline(theme: theme)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    contentBody
                 }
+                .padding(.horizontal, BentoSpacing.s)
+                .padding(.vertical, BentoSpacing.s)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .animation(BentoMotion.pane, value: tree)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(Color(hex: theme.chrome.background.hex))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(hex: theme.chrome.panel.hex))
         .task(id: currentCwd) {
             await loadTree(for: currentCwd)
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("WORKSPACE")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                .padding(.top, 14)
-            Text(displayName(for: currentCwd))
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.text.hex))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(currentCwd)
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                .lineLimit(1)
-                .truncationMode(.head)
+    @ViewBuilder
+    private var contentBody: some View {
+        if let tree {
+            if tree.children.isEmpty {
+                emptyState
+            } else {
+                ForEach(tree.children) { node in
+                    WorkspaceFileRow(
+                        node: node,
+                        theme: theme,
+                        depth: 0,
+                        activePath: activePath,
+                        onOpenFile: onOpenFile
+                    )
+                }
+            }
+        } else if let loadError {
+            Text(loadError)
+                .font(BentoType.mono(BentoType.small))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                .padding(.top, BentoSpacing.xs)
+        } else {
+            Text("Loading…")
+                .font(BentoType.mono(BentoType.small))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                .padding(.top, BentoSpacing.xs)
         }
     }
 
-    private func displayName(for path: String) -> String {
-        let trimmed = path.hasSuffix("/") && path.count > 1
-            ? String(path.dropLast())
-            : path
-        let last = (trimmed as NSString).lastPathComponent
-        return last.isEmpty ? "/" : last
+    private var emptyState: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Text("(empty)")
+                .font(BentoType.mono(BentoType.small))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, BentoSpacing.l)
+    }
+
+    /// 32 pt sticky-feeling header — `FILES` on the left, a middle-
+    /// truncated breadcrumb of the workspace cwd on the right. Drawn
+    /// outside the ScrollView so it stays fixed when the file list scrolls.
+    private var header: some View {
+        HStack(spacing: BentoSpacing.s) {
+            SectionLabel(theme: theme, "FILES")
+            Spacer(minLength: BentoSpacing.s)
+            Text(breadcrumb(for: currentCwd))
+                .font(BentoType.mono(BentoType.small))
+                .foregroundStyle(Color(hex: theme.chrome.accent.hex).opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, BentoSpacing.m)
+        .frame(height: 32)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Renders the cwd as a tilde-prefixed breadcrumb if it lives under
+    /// `$HOME`, falling back to the raw absolute path otherwise. The
+    /// truncation mode handles ellipsising the middle when the column is
+    /// narrow.
+    private func breadcrumb(for path: String) -> String {
+        let home = NSString(string: NSHomeDirectory()).expandingTildeInPath
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") {
+            return "~/" + String(path.dropFirst(home.count + 1))
+        }
+        return path
     }
 
     private func loadTree(for cwd: String) async {
@@ -668,5 +774,159 @@ private struct WorkspaceSidebarView: View {
                 self.loadError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
+    }
+}
+
+// MARK: - Sidebar row
+
+/// One row in the workspace sidebar's file tree. Owns its expand/collapse
+/// state, paints a hover / active background using the design system's
+/// `accentSoft` slot, and indents children by `BentoSpacing.m` per depth
+/// level so nesting reads cleanly without horizontal scroll.
+private struct WorkspaceFileRow: View {
+    let node: ProjectFileTree
+    let theme: ThemeSpec
+    let depth: Int
+    let activePath: String?
+    let onOpenFile: (URL) -> Void
+
+    @State private var isExpanded: Bool = true
+    @State private var isHovering: Bool = false
+
+    private var isActive: Bool {
+        node.kind == .file && activePath == node.path
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BentoSpacing.xxs) {
+            row
+            if isExpanded, !node.children.isEmpty {
+                ForEach(node.children) { child in
+                    WorkspaceFileRow(
+                        node: child,
+                        theme: theme,
+                        depth: depth + 1,
+                        activePath: activePath,
+                        onOpenFile: onOpenFile
+                    )
+                }
+            }
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: BentoSpacing.xs) {
+            disclosure
+            Text(node.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(Color(hex: foregroundHex))
+        }
+        .font(BentoType.mono(BentoType.body, weight: node.kind == .directory ? .medium : .regular))
+        .padding(.leading, indent)
+        .padding(.trailing, BentoSpacing.xs)
+        .frame(height: 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                .fill(rowBackground)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(BentoMotion.hover) {
+                isHovering = hovering
+            }
+        }
+        .onTapGesture {
+            switch node.kind {
+            case .directory:
+                withAnimation(BentoMotion.standard) { isExpanded.toggle() }
+            case .file:
+                onOpenFile(URL(fileURLWithPath: node.path))
+            }
+        }
+    }
+
+    private var disclosure: some View {
+        Text(disclosureGlyph)
+            .font(BentoType.mono(BentoType.caption))
+            .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+            .frame(width: 10, alignment: .leading)
+    }
+
+    private var disclosureGlyph: String {
+        switch node.kind {
+        case .directory: return isExpanded ? "v" : ">"
+        case .file: return " "
+        }
+    }
+
+    /// Per-depth indent. `BentoSpacing.m` (12 pt) per level matches the
+    /// spec — deep enough to read as nesting, narrow enough that a 220 pt
+    /// sidebar can show ~4 levels before truncation kicks in.
+    private var indent: CGFloat {
+        BentoSpacing.s + CGFloat(depth) * BentoSpacing.m
+    }
+
+    private var foregroundHex: String {
+        if isActive { return theme.chrome.accent.hex }
+        switch node.kind {
+        case .directory: return theme.chrome.text.hex
+        case .file: return theme.chrome.dimText.hex
+        }
+    }
+
+    private var rowBackground: Color {
+        if isActive || isHovering {
+            return Color(hex: theme.chrome.accentSoft.hex)
+        }
+        return Color.clear
+    }
+}
+
+// MARK: - Editor column
+
+/// Editor sub-surface shown to the right of the terminal column when
+/// `workspace.openEditorPath` is non-nil. Adds a 32 pt header
+/// (`EDITING` + the file's `lastPathComponent`) and a hairline above the
+/// `EditorPaneView` body so the editor reads as a deliberate sibling of
+/// the terminal and sidebar surfaces rather than a bare text box.
+private struct WorkspaceEditorColumn: View {
+    let theme: ThemeSpec
+    let paneID: PaneID
+    let openPath: String?
+    let fileMap: PaneFileMap
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Hairline(theme: theme)
+            EditorPaneView(theme: theme, paneID: paneID, fileMap: fileMap)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(hex: theme.chrome.panel.hex))
+    }
+
+    private var header: some View {
+        HStack(spacing: BentoSpacing.s) {
+            SectionLabel(theme: theme, "EDITING")
+            Spacer(minLength: BentoSpacing.s)
+            Text(fileName)
+                .font(BentoType.mono(BentoType.small, weight: .medium))
+                .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, BentoSpacing.m)
+        .frame(height: 32)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// `lastPathComponent` of `openEditorPath` — never the full path, per
+    /// the spec. The full path is implied by the sidebar's breadcrumb and
+    /// active-row highlight, so the editor header stays terse.
+    private var fileName: String {
+        guard let openPath, !openPath.isEmpty else { return "—" }
+        return URL(fileURLWithPath: openPath).lastPathComponent
     }
 }

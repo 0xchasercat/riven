@@ -379,32 +379,20 @@ private struct PaneTreeBuilder {
     private func makeLeaf(id: PaneID) -> NSView {
         let pane = graph.pane(id)
         let isFocused = (id == graph.focusedPaneID)
-        let activeHex = theme.chrome.activeBorder.hex
-        let inactiveHex = theme.chrome.border.hex
 
         let host = hostingController(for: id, pane: pane)
 
         let shell = PaneShellNSView(
             paneID: id,
             isFocused: isFocused,
-            activeColor: NSColor(hex: activeHex),
-            inactiveColor: NSColor(hex: inactiveHex),
-            chromeBackground: NSColor(hex: theme.chrome.panel.hex),
+            theme: theme,
             onFocus: onFocus,
             onSplit: onSplit,
             onClose: onClose
         )
         shell.installContent(host.view)
         shell.title = pane?.name ?? "pane"
-        shell.titleColor = NSColor(hex: theme.chrome.text.hex)
-        shell.headerBackground = NSColor(hex: theme.chrome.background.hex)
         shell.badge = badge(for: pane)
-        shell.badgeColor = NSColor(hex: theme.chrome.dimText.hex)
-        shell.applyButtonColors(
-            idle: NSColor(hex: theme.chrome.dimText.hex),
-            hover: NSColor(hex: theme.chrome.text.hex),
-            hoverBackground: NSColor(hex: activeHex).withAlphaComponent(0.15)
-        )
         return shell
     }
 
@@ -508,54 +496,60 @@ private final class BentoSplitView: NSSplitView {
 // MARK: - Per-pane chrome / click-to-focus
 
 /// Container view for a single leaf. Draws a 1-px border (active or
-/// inactive depending on focus), a small header strip with the pane
-/// name + backend badge, and forwards clicks anywhere inside the pane
-/// to `onFocus` so the user can click between panes to move focus.
+/// inactive depending on focus), a 32 pt header strip with the pane
+/// name + a pill-style backend badge + `+`/`×` buttons, and a 2-pt
+/// accent indicator bar UNDER the header when the pane is focused
+/// (inactive panes get a hairline divider instead).
+///
+/// Clicks anywhere on the chrome (header or border) that don't land on
+/// a button forward to `onFocus`. Header buttons consume their own
+/// clicks so `+`/`×` never double-fire as focus.
+///
+/// All sizes, fonts, and colors come from `BentoSpacing`, `BentoType`,
+/// `BentoRadius`, `BentoMotion`, and `ThemeChrome` — no magic numbers.
 private final class PaneShellNSView: NSView {
     let paneID: PaneID
     private let isFocused: Bool
-    private let activeColor: NSColor
-    private let inactiveColor: NSColor
+    private let theme: ThemeSpec
     private let onFocus: @MainActor (PaneID) -> Void
     private let onSplit: @MainActor (PaneID) -> Void
     private let onClose: @MainActor (PaneID) -> Void
+
     private let header = NSView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let badgeContainer = NSView()
     private let badgeLabel = NSTextField(labelWithString: "")
+    private let headerIndicator = NSView()
     private let splitButton: PaneHeaderButton
     private let closeButton: PaneHeaderButton
     private let borderLayer = CALayer()
     private var contentContainer = NSView()
+
+    // Header is fixed at 32 pt, with 12 pt horizontal padding inside.
+    private static let headerHeight: CGFloat = 32
+    // 2-pt active indicator bar under the header on focused pane.
+    private static let activeIndicatorHeight: CGFloat = 2
+    // 1-pt hairline divider under the header on inactive panes.
+    private static let inactiveDividerHeight: CGFloat = 1
+    // Pill badge geometry.
+    private static let badgeHeight: CGFloat = 18
+    private static let badgeHPadding: CGFloat = 6
+    // Header buttons: 22x22 hit area, 14x14 visual.
+    private static let buttonHitSize: CGFloat = 22
+    private static let buttonVisualSize: CGFloat = 14
 
     var title: String {
         get { titleLabel.stringValue }
         set { titleLabel.stringValue = newValue }
     }
 
-    var titleColor: NSColor {
-        get { titleLabel.textColor ?? .labelColor }
-        set { titleLabel.textColor = newValue }
-    }
-
     var badge: String {
         get { badgeLabel.stringValue }
-        set { badgeLabel.stringValue = newValue }
-    }
-
-    var badgeColor: NSColor {
-        get { badgeLabel.textColor ?? .secondaryLabelColor }
-        set { badgeLabel.textColor = newValue }
-    }
-
-    var headerBackground: NSColor = .windowBackgroundColor {
-        didSet {
-            header.layer?.backgroundColor = headerBackground.cgColor
-        }
-    }
-
-    var chromeBackground: NSColor = .windowBackgroundColor {
-        didSet {
-            layer?.backgroundColor = chromeBackground.cgColor
+        set {
+            badgeLabel.stringValue = newValue
+            // Hide the entire pill when there's no badge text so we don't
+            // render an empty capsule.
+            badgeContainer.isHidden = newValue.isEmpty
         }
     }
 
@@ -564,47 +558,89 @@ private final class PaneShellNSView: NSView {
     init(
         paneID: PaneID,
         isFocused: Bool,
-        activeColor: NSColor,
-        inactiveColor: NSColor,
-        chromeBackground: NSColor,
+        theme: ThemeSpec,
         onFocus: @escaping @MainActor (PaneID) -> Void,
         onSplit: @escaping @MainActor (PaneID) -> Void,
         onClose: @escaping @MainActor (PaneID) -> Void
     ) {
         self.paneID = paneID
         self.isFocused = isFocused
-        self.activeColor = activeColor
-        self.inactiveColor = inactiveColor
+        self.theme = theme
         self.onFocus = onFocus
         self.onSplit = onSplit
         self.onClose = onClose
         self.splitButton = PaneHeaderButton(glyph: "+", accessibilityLabel: "Split pane right")
         self.closeButton = PaneHeaderButton(glyph: "×", accessibilityLabel: "Close pane")
         super.init(frame: .zero)
-        self.chromeBackground = chromeBackground
 
         wantsLayer = true
-        layer?.backgroundColor = chromeBackground.cgColor
+        // The pane body uses the standard panel surface; the header sits
+        // on top with `elevated` when focused for a subtle depth cue.
+        layer?.backgroundColor = NSColor(hex: theme.chrome.panel.hex).cgColor
 
+        // Border around the whole pane: accent at 1-pt when focused,
+        // hairline at 1-pt otherwise.
         borderLayer.borderWidth = 1
-        borderLayer.borderColor = (isFocused ? activeColor : inactiveColor).cgColor
+        borderLayer.borderColor = (
+            isFocused
+                ? NSColor(hex: theme.chrome.accent.hex)
+                : NSColor(hex: theme.chrome.hairline.hex)
+        ).cgColor
         borderLayer.backgroundColor = NSColor.clear.cgColor
         layer?.addSublayer(borderLayer)
 
+        // Header surface: elevated on the focused pane, panel otherwise.
         header.wantsLayer = true
-        header.layer?.backgroundColor = headerBackground.cgColor
+        header.layer?.backgroundColor = headerSurfaceColor.cgColor
         header.translatesAutoresizingMaskIntoConstraints = false
         addSubview(header)
 
-        titleLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: isFocused ? .semibold : .regular)
+        // Title sits flush-left in the header.
+        titleLabel.font = NSFont.systemFont(
+            ofSize: BentoType.body,
+            weight: isFocused ? .semibold : .medium
+        )
+        titleLabel.textColor = NSColor(
+            hex: isFocused ? theme.chrome.text.hex : theme.chrome.dimText.hex
+        )
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        badgeLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         header.addSubview(titleLabel)
-        header.addSubview(badgeLabel)
+
+        // Pill-shaped badge capsule. Background = accentSoft, text = accent.
+        badgeContainer.wantsLayer = true
+        badgeContainer.layer?.cornerRadius = BentoRadius.small
+        badgeContainer.layer?.backgroundColor = NSColor(hex: theme.chrome.accentSoft.hex).cgColor
+        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
+        badgeContainer.setContentHuggingPriority(.required, for: .horizontal)
+        badgeContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // BentoType.micro() is a SwiftUI font; mirror it directly in AppKit
+        // so the badge type matches the rest of the design system.
+        badgeLabel.font = NSFont.monospacedSystemFont(
+            ofSize: BentoType.caption,
+            weight: .semibold
+        )
+        badgeLabel.textColor = NSColor(hex: theme.chrome.accent.hex)
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeLabel.isEditable = false
+        badgeLabel.isSelectable = false
+        badgeContainer.addSubview(badgeLabel)
+        header.addSubview(badgeContainer)
 
         splitButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.translatesAutoresizingMaskIntoConstraints = false
+        splitButton.configure(
+            idleColor: NSColor(hex: theme.chrome.tertiaryText.hex),
+            hoverColor: NSColor(hex: theme.chrome.text.hex),
+            hoverBackground: NSColor(hex: theme.chrome.accentSoft.hex)
+        )
+        closeButton.configure(
+            idleColor: NSColor(hex: theme.chrome.tertiaryText.hex),
+            hoverColor: NSColor(hex: theme.chrome.text.hex),
+            hoverBackground: NSColor(hex: theme.chrome.accentSoft.hex)
+        )
         splitButton.onClick = { [weak self] in
             guard let self else { return }
             self.onSplit(self.paneID)
@@ -616,44 +652,92 @@ private final class PaneShellNSView: NSView {
         header.addSubview(splitButton)
         header.addSubview(closeButton)
 
+        // Indicator under the header. 2-pt accent bar when focused;
+        // 1-pt hairline divider when inactive.
+        headerIndicator.wantsLayer = true
+        headerIndicator.layer?.backgroundColor = (
+            isFocused
+                ? NSColor(hex: theme.chrome.accent.hex)
+                : NSColor(hex: theme.chrome.hairline.hex)
+        ).cgColor
+        headerIndicator.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerIndicator)
+
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(contentContainer)
+
+        let indicatorHeight = isFocused
+            ? Self.activeIndicatorHeight
+            : Self.inactiveDividerHeight
 
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor),
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 26),
+            header.heightAnchor.constraint(equalToConstant: Self.headerHeight),
 
-            titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
+            // Title — flush left at BentoSpacing.m (12 pt) from the edge.
+            titleLabel.leadingAnchor.constraint(
+                equalTo: header.leadingAnchor,
+                constant: BentoSpacing.m
+            ),
             titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            badgeLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
 
-            // Buttons sit at the trailing edge; badge sits to their left.
-            closeButton.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -8),
+            // Close button — trailing edge at BentoSpacing.s (8 pt) inset,
+            // so the 22-pt hit area still sits comfortably inside the 12-pt
+            // visual padding zone.
+            closeButton.trailingAnchor.constraint(
+                equalTo: header.trailingAnchor,
+                constant: -BentoSpacing.s
+            ),
             closeButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 18),
-            closeButton.heightAnchor.constraint(equalToConstant: 18),
+            closeButton.widthAnchor.constraint(equalToConstant: Self.buttonHitSize),
+            closeButton.heightAnchor.constraint(equalToConstant: Self.buttonHitSize),
 
-            splitButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+            splitButton.trailingAnchor.constraint(
+                equalTo: closeButton.leadingAnchor,
+                constant: -BentoSpacing.xxs
+            ),
             splitButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            splitButton.widthAnchor.constraint(equalToConstant: 18),
-            splitButton.heightAnchor.constraint(equalToConstant: 18),
+            splitButton.widthAnchor.constraint(equalToConstant: Self.buttonHitSize),
+            splitButton.heightAnchor.constraint(equalToConstant: Self.buttonHitSize),
 
-            badgeLabel.trailingAnchor.constraint(equalTo: splitButton.leadingAnchor, constant: -8),
+            // Badge pill sits immediately LEFT of the buttons.
+            badgeContainer.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            badgeContainer.heightAnchor.constraint(equalToConstant: Self.badgeHeight),
+            badgeContainer.trailingAnchor.constraint(
+                equalTo: splitButton.leadingAnchor,
+                constant: -BentoSpacing.s
+            ),
+            badgeContainer.leadingAnchor.constraint(
+                greaterThanOrEqualTo: titleLabel.trailingAnchor,
+                constant: BentoSpacing.s
+            ),
 
-            contentContainer.topAnchor.constraint(equalTo: header.bottomAnchor),
+            badgeLabel.leadingAnchor.constraint(
+                equalTo: badgeContainer.leadingAnchor,
+                constant: Self.badgeHPadding
+            ),
+            badgeLabel.trailingAnchor.constraint(
+                equalTo: badgeContainer.trailingAnchor,
+                constant: -Self.badgeHPadding
+            ),
+            badgeLabel.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
+
+            headerIndicator.topAnchor.constraint(equalTo: header.bottomAnchor),
+            headerIndicator.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerIndicator.trailingAnchor.constraint(equalTo: trailingAnchor),
+            headerIndicator.heightAnchor.constraint(equalToConstant: indicatorHeight),
+
+            contentContainer.topAnchor.constraint(equalTo: headerIndicator.bottomAnchor),
             contentContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
             contentContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
 
-    /// Push theme-derived button colors down to the header buttons. Called
-    /// after `init` so the builder can pull all colors from `ThemeSpec` once.
-    func applyButtonColors(idle: NSColor, hover: NSColor, hoverBackground: NSColor) {
-        splitButton.configure(idleColor: idle, hoverColor: hover, hoverBackground: hoverBackground)
-        closeButton.configure(idleColor: idle, hoverColor: hover, hoverBackground: hoverBackground)
+    private var headerSurfaceColor: NSColor {
+        NSColor(hex: isFocused ? theme.chrome.elevated.hex : theme.chrome.panel.hex)
     }
 
     @available(*, unavailable)
@@ -678,7 +762,10 @@ private final class PaneShellNSView: NSView {
         borderLayer.frame = bounds
     }
 
-    // Click anywhere on the chrome (border or header) to focus this pane.
+    // Click anywhere on the chrome (border or header gap) that doesn't
+    // hit a button forwards to focus. `PaneHeaderButton.mouseDown` is
+    // self-consuming and never bubbles here, so `+`/`×` clicks don't
+    // also trigger a focus event.
     override func mouseDown(with event: NSEvent) {
         onFocus(paneID)
         super.mouseDown(with: event)
@@ -689,25 +776,38 @@ private final class PaneShellNSView: NSView {
 
 /// Small square button for the pane header (`+` split, `×` close).
 ///
-/// Implemented as a custom `NSView` rather than `NSButton` so we get a
-/// minimal, theme-driven appearance: no system focus ring, no system
-/// background, and an explicit hover state we drive from
-/// `mouseEntered`/`mouseExited`.
+/// 22x22 pt hit area with a 14x14 pt visual square inside. Default state
+/// renders just the glyph in `tertiaryText`; on hover the inner square
+/// fills with `accentSoft` (animated over `BentoMotion.hover`'s ~0.10s)
+/// and the glyph shifts to `text`. Pressed-state is the same as hover
+/// for now.
+///
+/// Implemented as a custom `NSView` (not `NSButton`) so we get a
+/// minimal, theme-driven look: no system focus ring, no system background.
 ///
 /// `mouseDown` is consumed locally — it never reaches `PaneShellNSView`,
-/// so clicking a button doesn't also trigger the pane's focus handler
-/// (the split / close action implies focus where it matters).
+/// so clicking a button doesn't also trigger the pane's focus handler.
 private final class PaneHeaderButton: NSView {
     var onClick: (@MainActor () -> Void)?
 
+    private let backdrop = NSView()
     private let label = NSTextField(labelWithString: "")
     private var idleColor: NSColor = .secondaryLabelColor
     private var hoverColor: NSColor = .labelColor
     private var hoverBackground: NSColor = NSColor.white.withAlphaComponent(0.1)
     private var trackingArea: NSTrackingArea?
     private var isHovering = false {
-        didSet { refreshAppearance() }
+        didSet {
+            guard oldValue != isHovering else { return }
+            refreshAppearance(animated: true)
+        }
     }
+
+    /// Matches `BentoMotion.hover` (SwiftUI 0.10s easeInOut). We can't
+    /// reuse the SwiftUI Animation token directly on a CALayer, so we
+    /// mirror its duration here.
+    private static let hoverAnimationDuration: CFTimeInterval = 0.10
+    private static let visualSize: CGFloat = 14
 
     override var isFlipped: Bool { true }
     // The button refuses focus by returning false here; `refusesFirstResponder`
@@ -718,21 +818,36 @@ private final class PaneHeaderButton: NSView {
     init(glyph: String, accessibilityLabel: String) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 3
         layer?.backgroundColor = NSColor.clear.cgColor
 
+        // The hover background lives on an inner 14x14 backdrop so the
+        // full 22x22 view is the hit area but the visible fill is just
+        // the inner square (matches the design spec).
+        backdrop.wantsLayer = true
+        backdrop.layer?.cornerRadius = BentoRadius.small
+        backdrop.layer?.backgroundColor = NSColor.clear.cgColor
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backdrop)
+
         label.stringValue = glyph
-        label.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        label.font = NSFont.systemFont(ofSize: BentoType.small, weight: .medium)
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         label.isEditable = false
         label.isSelectable = false
+        // Label sits on top of (but not inside) the backdrop, so the
+        // backdrop's corner radius doesn't clip glyph descenders.
         addSubview(label)
 
         NSLayoutConstraint.activate([
+            backdrop.centerXAnchor.constraint(equalTo: centerXAnchor),
+            backdrop.centerYAnchor.constraint(equalTo: centerYAnchor),
+            backdrop.widthAnchor.constraint(equalToConstant: Self.visualSize),
+            backdrop.heightAnchor.constraint(equalToConstant: Self.visualSize),
+
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             // Optical centering: the `×` and `+` glyphs sit slightly low
-            // in the cap-height box of the system mono font.
+            // in the cap-height box of the system font.
             label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -0.5),
         ])
 
@@ -749,12 +864,27 @@ private final class PaneHeaderButton: NSView {
         self.idleColor = idleColor
         self.hoverColor = hoverColor
         self.hoverBackground = hoverBackground
-        refreshAppearance()
+        refreshAppearance(animated: false)
     }
 
-    private func refreshAppearance() {
-        label.textColor = isHovering ? hoverColor : idleColor
-        layer?.backgroundColor = (isHovering ? hoverBackground : NSColor.clear).cgColor
+    private func refreshAppearance(animated: Bool) {
+        let textColor = isHovering ? hoverColor : idleColor
+        let bgColor = (isHovering ? hoverBackground : NSColor.clear).cgColor
+        if animated {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Self.hoverAnimationDuration)
+            backdrop.layer?.backgroundColor = bgColor
+            CATransaction.commit()
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            backdrop.layer?.backgroundColor = bgColor
+            CATransaction.commit()
+        }
+        // Text color isn't animatable through NSTextField cleanly, so we
+        // just switch it (the change is small enough that a hard cut reads
+        // fine against the animated background).
+        label.textColor = textColor
     }
 
     override func updateTrackingAreas() {
@@ -785,8 +915,9 @@ private final class PaneHeaderButton: NSView {
     // `PaneShellNSView.mouseDown` (which would refocus the pane and then
     // call `super`, racing the action).
     override func mouseDown(with event: NSEvent) {
-        // Track press-then-release inside bounds so dragging away cancels,
-        // matching standard button behavior.
+        // Track press-then-release inside the 22-pt hit area so dragging
+        // away cancels, matching standard button behavior. The full
+        // `bounds` is the hit zone, not just the visible 14x14 backdrop.
         var pressed = true
         isHovering = true
         var current = event

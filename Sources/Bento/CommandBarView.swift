@@ -2,14 +2,20 @@ import AppKit
 import BentoCore
 import SwiftUI
 
-/// Composable command bar pinned at the bottom of a terminal pane.
+/// Warp-style command bar pinned at the bottom of a terminal pane.
+///
+/// Visually, the bar reads as the "input zone": a prompt glyph anchors the
+/// left edge, a real `NSTextView` carries the buffer (full Cocoa key
+/// bindings, undo, multi-line composition, paste-as-text, history walk),
+/// and a return-key affordance on the right confirms that pressing Enter
+/// will actually do something. The whole bar lifts above the pane with
+/// the `elevated` chrome and gets a subtle accent underline when focused.
 ///
 /// Today every keystroke goes straight to the PTY, which means the
 /// shell's own line editor is the only editing model the user gets. This
-/// view replaces that experience with a real macOS text input: full
-/// emacs/Cocoa key bindings, undo, multi-line composition, paste-as-text,
-/// and history walk. Pressing Enter (no modifier) submits the buffer to
-/// the orchestrator via `onSubmit`, which forwards it to the PTY.
+/// view replaces that experience with a real macOS text input. Pressing
+/// Enter (no modifier) submits the buffer to the orchestrator via
+/// `onSubmit`, which forwards it to the PTY.
 ///
 /// The view manages its own buffer state. After a submit it clears.
 /// History is opt-in: callers wire `onHistoryRequest` to whatever store
@@ -28,6 +34,10 @@ struct CommandBarView: View {
     /// the SwiftUI frame height. Keeping the raw value in `@State` lets
     /// transitions be smooth — we only animate the clamped output.
     @State private var contentHeight: CGFloat = CommandBarMetrics.singleLineHeight
+    /// `true` when the embedded `NSTextView` is the window's first
+    /// responder. Driven from the AppKit layer; powers the focus underline
+    /// and the bolder prompt glyph.
+    @State private var isFocused: Bool = false
 
     init(
         theme: ThemeSpec,
@@ -41,48 +51,80 @@ struct CommandBarView: View {
 
     var body: some View {
         let clampedHeight = clampHeight(contentHeight)
+        // The full bar height = the text input's clamped height plus the
+        // vertical padding we add around the text container. Used by the
+        // backgrounds + borders so they animate in lockstep with growth.
+        let barHeight = clampedHeight + BentoSpacing.s * 2
+        let hasText = !text.isEmpty
 
-        HStack(alignment: .top, spacing: 8) {
-            // Prompt glyph mirrors the shell's PS1-ish look. We pin it
-            // to the top so multi-line input grows downward instead of
-            // pushing the prompt around.
-            Text(">")
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.terminal.prompt.hex).opacity(0.65))
-                .frame(width: 14, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+        HStack(alignment: .top, spacing: BentoSpacing.s) {
+            promptGlyph
 
             CommandBarTextView(
                 theme: theme,
                 text: $text,
                 contentHeight: $contentHeight,
+                isFocused: $isFocused,
                 onSubmit: handleSubmit,
                 onHistoryRequest: handleHistoryRequest,
                 onCancel: handleCancel
             )
             .frame(height: clampedHeight)
+
+            submitAffordance(hasText: hasText)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(barBackground)
+        .padding(.leading, BentoSpacing.s)
+        .padding(.trailing, BentoSpacing.s)
+        .padding(.vertical, BentoSpacing.s)
+        .frame(height: barHeight)
+        .background(
+            Color(hex: theme.chrome.elevated.hex)
+        )
         .overlay(alignment: .top) {
-            // 1pt top border: separates the bar from the terminal grid
-            // above. Drawn as an overlay so it sits flush against the
-            // top edge regardless of padding.
+            // Hairline divider separating the bar from the terminal grid
+            // above. The Hairline helper uses theme.chrome.hairline.
+            Hairline(theme: theme, axis: .horizontal)
+        }
+        .overlay(alignment: .bottom) {
+            // Focus underline. We always render a 1pt rectangle so the
+            // animation can smoothly cross-fade between the resting
+            // (clear) and focused (accent) states.
             Rectangle()
-                .fill(Color(hex: theme.chrome.border.hex))
+                .fill(Color(hex: theme.chrome.accent.hex))
                 .frame(height: 1)
+                .opacity(isFocused ? 1 : 0)
+                .animation(BentoMotion.hover, value: isFocused)
         }
         .animation(.easeOut(duration: 0.12), value: clampedHeight)
     }
 
-    /// Background = terminal background blended slightly toward the
-    /// chrome panel so the bar reads as part of the terminal pane but
-    /// is visually separable from the scrollback area.
-    private var barBackground: some View {
-        ZStack {
-            Color(hex: theme.terminal.background.hex)
-            Color(hex: theme.chrome.panel.hex).opacity(0.35)
-        }
+    // MARK: - Decorations
+
+    /// Prompt glyph on the left. Subtly bolder when the input is focused
+    /// so the eye follows the bar's active state without screaming.
+    private var promptGlyph: some View {
+        // U+276F (HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT) is
+        // the canonical chevron glyph. SF Mono ships it on every modern
+        // macOS so the fallback path is purely defensive.
+        Text("\u{276F}")
+            .font(BentoType.mono(BentoType.body, weight: isFocused ? .bold : .semibold))
+            .foregroundStyle(Color(hex: theme.chrome.accent.hex))
+            .frame(width: 14, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+            .animation(BentoMotion.hover, value: isFocused)
+    }
+
+    /// Return-key affordance on the right edge. Dim by default; when
+    /// there's text in the buffer it brightens to accent — a visual
+    /// confirmation that pressing Enter will do something.
+    private func submitAffordance(hasText: Bool) -> some View {
+        Text("\u{21A9}")
+            .font(BentoType.mono(BentoType.caption))
+            .foregroundStyle(
+                Color(hex: hasText ? theme.chrome.accent.hex : theme.chrome.tertiaryText.hex)
+            )
+            .frame(width: 24, height: CommandBarMetrics.singleLineHeight, alignment: .center)
+            .animation(BentoMotion.hover, value: hasText)
+            .accessibilityLabel(hasText ? "Run command" : "Return")
     }
 
     private func clampHeight(_ raw: CGFloat) -> CGFloat {
@@ -116,31 +158,38 @@ struct CommandBarView: View {
 /// Layout constants. Centralized so the AppKit text view, the SwiftUI
 /// frame, and the prompt glyph stay aligned.
 private enum CommandBarMetrics {
-    /// Resting height of the bar with a single line of text. ~32pt is
-    /// slightly taller than Cocoa's default text-field height to fit
-    /// monospaced 13pt comfortably with breathing room top and bottom.
-    static let singleLineHeight: CGFloat = 28
+    /// Resting height of the text container at a single line of text.
+    /// Tuned to fit `BentoType.mono`-sized text comfortably with the
+    /// `textInsetY` padding inside the scroll view.
+    static let singleLineHeight: CGFloat = 24
     /// Approximate per-line growth used for the cap calculation.
     static let lineHeight: CGFloat = 17
     /// Cap so the bar can't swallow the terminal grid: starting at the
     /// resting height plus seven extra lines = roughly eight rows tall.
     static let maxHeight: CGFloat = singleLineHeight + 7 * lineHeight
-    static let fontSize: CGFloat = 13
-    static let textInsetX: CGFloat = 2
-    static let textInsetY: CGFloat = 4
+    /// Font size for the input + placeholder. Matches `BentoType.body`
+    /// so the input feels related to the rest of the chrome typography.
+    static let fontSize: CGFloat = BentoType.body
+    /// Horizontal inset inside the scroll view. The HStack already pads
+    /// the bar; we don't want the text to drift further off the prompt.
+    static let textInsetX: CGFloat = 0
+    /// Vertical inset inside the scroll view. Centers single-line text
+    /// in the resting height and keeps the cursor off the top/bottom edge.
+    static let textInsetY: CGFloat = BentoSpacing.xs
 }
 
 // MARK: - AppKit bridge
 
 /// Thin `NSViewRepresentable` wrapping an `NSTextView` inside an
 /// `NSScrollView`. The coordinator owns key interception (Enter,
-/// Shift+Enter, Up/Down, Escape) and reports content height changes
-/// back to SwiftUI via the `contentHeight` binding so the bar can grow
-/// and shrink with the buffer.
+/// Shift+Enter, Up/Down, Escape) and reports content height + focus
+/// changes back to SwiftUI via bindings so the bar can grow, shrink,
+/// and light up with the buffer.
 private struct CommandBarTextView: NSViewRepresentable {
     let theme: ThemeSpec
     @Binding var text: String
     @Binding var contentHeight: CGFloat
+    @Binding var isFocused: Bool
     let onSubmit: (String) -> Void
     let onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
     let onCancel: () -> Void
@@ -149,6 +198,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         Coordinator(
             text: $text,
             contentHeight: $contentHeight,
+            isFocused: $isFocused,
             onSubmit: onSubmit,
             onHistoryRequest: onHistoryRequest,
             onCancel: onCancel
@@ -188,13 +238,13 @@ private struct CommandBarTextView: NSViewRepresentable {
             height: CommandBarMetrics.textInsetY
         )
         textView.font = monospacedFont
-        textView.textColor = NSColor(hex: theme.terminal.foreground.hex)
-        textView.insertionPointColor = NSColor(hex: theme.terminal.cursor.hex)
+        textView.textColor = NSColor(hex: theme.chrome.text.hex)
+        textView.insertionPointColor = NSColor(hex: theme.chrome.accent.hex)
         textView.selectedTextAttributes = [
-            .backgroundColor: NSColor(hex: theme.chrome.activeBorder.hex).withAlphaComponent(0.32)
+            .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
-        textView.placeholderString = "type a command, ⏎ to run, ⇧⏎ for newline"
-        textView.placeholderColor = NSColor(hex: theme.chrome.dimText.hex)
+        textView.placeholderString = "Type a command — \u{23CE} run, \u{21E7}\u{23CE} newline, \u{2191}\u{2193} history, esc clear"
+        textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
 
         // A horizontally-resizing container with line wrapping is what
         // gives us multi-line behavior without a manual line-break pass.
@@ -233,11 +283,11 @@ private struct CommandBarTextView: NSViewRepresentable {
         )
         guard let textView = scrollView.documentView as? CommandInputTextView else { return }
         textView.font = monospacedFont
-        textView.textColor = NSColor(hex: theme.terminal.foreground.hex)
-        textView.insertionPointColor = NSColor(hex: theme.terminal.cursor.hex)
-        textView.placeholderColor = NSColor(hex: theme.chrome.dimText.hex)
+        textView.textColor = NSColor(hex: theme.chrome.text.hex)
+        textView.insertionPointColor = NSColor(hex: theme.chrome.accent.hex)
+        textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
         textView.selectedTextAttributes = [
-            .backgroundColor: NSColor(hex: theme.chrome.activeBorder.hex).withAlphaComponent(0.32)
+            .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
 
         // Sync the AppKit buffer with the SwiftUI state when SwiftUI is
@@ -267,6 +317,7 @@ private struct CommandBarTextView: NSViewRepresentable {
     final class Coordinator: NSObject, @MainActor NSTextViewDelegate {
         private let textBinding: Binding<String>
         private let contentHeightBinding: Binding<CGFloat>
+        private let isFocusedBinding: Binding<Bool>
         private var onSubmit: (String) -> Void
         private var onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
         private var onCancel: () -> Void
@@ -283,12 +334,14 @@ private struct CommandBarTextView: NSViewRepresentable {
         init(
             text: Binding<String>,
             contentHeight: Binding<CGFloat>,
+            isFocused: Binding<Bool>,
             onSubmit: @escaping (String) -> Void,
             onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
             onCancel: @escaping () -> Void
         ) {
             self.textBinding = text
             self.contentHeightBinding = contentHeight
+            self.isFocusedBinding = isFocused
             self.onSubmit = onSubmit
             self.onHistoryRequest = onHistoryRequest
             self.onCancel = onCancel
@@ -323,6 +376,20 @@ private struct CommandBarTextView: NSViewRepresentable {
                 }
             }
             recomputeContentHeight()
+        }
+
+        // MARK: Focus reporting
+
+        /// Pushes a focus state change up to SwiftUI on the next tick.
+        /// Called by `CommandInputTextView` on first-responder transitions
+        /// so the bar's focus underline + prompt weight can react.
+        func reportFocus(_ focused: Bool) {
+            let binding = isFocusedBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != focused {
+                    binding.wrappedValue = focused
+                }
+            }
         }
 
         // MARK: Key intercept entry points (called from NSTextView subclass)
@@ -500,12 +567,19 @@ fileprivate final class CommandInputTextView: NSTextView {
         let result = super.becomeFirstResponder()
         // Repaint to clear the placeholder if we just got focus.
         needsDisplay = true
+        // Tell SwiftUI the focus state changed so the bar can light up.
+        if result {
+            coordinator?.reportFocus(true)
+        }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
         needsDisplay = true
+        if result {
+            coordinator?.reportFocus(false)
+        }
         return result
     }
 
@@ -565,8 +639,8 @@ fileprivate final class CommandInputTextView: NSTextView {
         attributed.draw(at: origin)
     }
 
-    /// Disable the focus ring entirely; the bar's top border is the
-    /// only visual focus affordance we want.
+    /// Disable the focus ring entirely; the bar's bottom accent underline
+    /// is the only visual focus affordance we want.
     override var focusRingType: NSFocusRingType {
         get { .none }
         set { _ = newValue }

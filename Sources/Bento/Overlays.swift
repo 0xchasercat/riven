@@ -8,6 +8,191 @@ enum Overlay {
     case trust
 }
 
+// MARK: - Shared overlay chrome
+
+/// Width tokens for overlays. The picker is wider because its preview
+/// tiles need horizontal room; everything else uses the standard width.
+enum OverlayWidth {
+    static let standard: CGFloat = 640
+    static let picker: CGFloat = 760
+}
+
+/// Top margin from the window top. Keeps overlays anchored at a
+/// consistent vertical position regardless of content.
+enum OverlayLayout {
+    static let topMargin: CGFloat = 88
+    static let headerHeight: CGFloat = 56
+    static let rowHeight: CGFloat = 36
+    static let footerHeight: CGFloat = 34
+}
+
+/// Header bar used at the top of every overlay (title row with optional
+/// trailing hint, separated from the body by a hairline).
+struct OverlayHeader<Trailing: View>: View {
+    let theme: ThemeSpec
+    let title: String
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: BentoSpacing.s) {
+                Text(title)
+                    .font(BentoType.chrome(15, weight: .semibold))
+                    .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                    .lineLimit(1)
+                Spacer(minLength: BentoSpacing.s)
+                trailing
+                    .font(BentoType.mono(11))
+                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            }
+            .padding(.horizontal, BentoSpacing.l)
+            .frame(height: OverlayLayout.headerHeight)
+            Hairline(theme: theme)
+        }
+    }
+}
+
+extension OverlayHeader where Trailing == EmptyView {
+    init(theme: ThemeSpec, title: String) {
+        self.init(theme: theme, title: title, trailing: { EmptyView() })
+    }
+}
+
+/// Header variant that hosts an inline text field (palette, search). The
+/// title slot is replaced by the field; the trailing slot carries the
+/// hint/count.
+struct OverlayInputHeader<Trailing: View>: View {
+    let theme: ThemeSpec
+    let leading: String
+    @Binding var text: String
+    let placeholder: String
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: BentoSpacing.s) {
+                Text(leading)
+                    .font(BentoType.mono(13, weight: .semibold))
+                    .foregroundStyle(Color(hex: theme.chrome.accent.hex))
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(BentoType.mono(15))
+                    .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                Spacer(minLength: BentoSpacing.s)
+                trailing
+                    .font(BentoType.mono(11))
+                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            }
+            .padding(.horizontal, BentoSpacing.l)
+            .frame(height: OverlayLayout.headerHeight)
+            Hairline(theme: theme)
+        }
+    }
+}
+
+/// Footer hint bar shown at the bottom of every overlay. Free-form text
+/// in the monospaced micro size; rendered above a top hairline.
+struct OverlayFooter<Content: View>: View {
+    let theme: ThemeSpec
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Hairline(theme: theme)
+            HStack(spacing: BentoSpacing.s) {
+                content
+                    .font(BentoType.mono(10))
+                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, BentoSpacing.l)
+            .padding(.vertical, BentoSpacing.s)
+            .frame(minHeight: OverlayLayout.footerHeight)
+        }
+    }
+}
+
+/// Selectable list row used by palette + search. Owns the highlight
+/// background, hover animation, and horizontal padding so children only
+/// supply content.
+struct OverlayRow<Content: View>: View {
+    let theme: ThemeSpec
+    let isHighlighted: Bool
+    let height: CGFloat
+    @ViewBuilder var content: Content
+
+    init(
+        theme: ThemeSpec,
+        isHighlighted: Bool,
+        height: CGFloat = OverlayLayout.rowHeight,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.theme = theme
+        self.isHighlighted = isHighlighted
+        self.height = height
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, BentoSpacing.l)
+            .frame(minHeight: height)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(hex: theme.chrome.accentSoft.hex)
+                    .opacity(isHighlighted ? 1 : 0)
+            )
+            .animation(BentoMotion.hover, value: isHighlighted)
+            .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Shared overlay buttons
+
+/// Primary filled button used by overlays (e.g. trust prompt's "Trust").
+struct OverlayPrimaryButton: View {
+    let theme: ThemeSpec
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(BentoType.chrome(12, weight: .semibold))
+                .foregroundStyle(Color(hex: theme.chrome.invertedText.hex))
+                .padding(.horizontal, BentoSpacing.m)
+                .padding(.vertical, BentoSpacing.s)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(Color(hex: theme.chrome.accent.hex))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Secondary outline button used by overlays (e.g. trust prompt's "Not yet").
+struct OverlaySecondaryButton: View {
+    let theme: ThemeSpec
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(BentoType.chrome(12, weight: .medium))
+                .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                .padding(.horizontal, BentoSpacing.m)
+                .padding(.vertical, BentoSpacing.s)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .strokeBorder(Color(hex: theme.chrome.border.hex), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Command palette
 
 struct CommandPaletteOverlay: View {
@@ -19,63 +204,47 @@ struct CommandPaletteOverlay: View {
 
     @State private var highlightedIndex: Int = 0
 
+    /// Flat list of rows we render: section headers + commands. Built from
+    /// the input list by collapsing consecutive commands sharing a group.
+    private enum PaletteRow {
+        case header(String)
+        case command(index: Int, command: Command)
+    }
+
+    private var rows: [PaletteRow] {
+        var out: [PaletteRow] = []
+        var lastGroup: String?
+        for (index, command) in commands.enumerated() {
+            if command.group != lastGroup {
+                out.append(.header(command.group))
+                lastGroup = command.group
+            }
+            out.append(.command(index: index, command: command))
+        }
+        return out
+    }
+
     var body: some View {
-        OverlayBackdrop(theme: theme, onClose: onClose) {
+        OverlayBackdrop(theme: theme, width: OverlayWidth.standard, onClose: onClose) {
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Text(">")
-                        .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
-                    TextField("command", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15, design: .monospaced))
-                    Text("\(commands.count)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                }
-                .padding(.horizontal, 16)
-                .frame(height: 54)
-                .background(Color(hex: theme.chrome.background.hex))
+                OverlayInputHeader(
+                    theme: theme,
+                    leading: ">",
+                    text: $query,
+                    placeholder: "command",
+                    trailing: { Text("\(commands.count)") }
+                )
 
                 if commands.isEmpty {
-                    Text("no matches")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    emptyState
                 } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
-                                    CommandPaletteRow(
-                                        theme: theme,
-                                        command: command,
-                                        isHighlighted: index == highlightedIndex
-                                    )
-                                    .id(command.id)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        highlightedIndex = index
-                                        dispatchHighlighted()
-                                    }
-                                    .onHover { hovering in
-                                        if hovering { highlightedIndex = index }
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 8)
-                        }
-                        .frame(maxHeight: 360)
-                        .onChange(of: highlightedIndex) { _, newValue in
-                            guard commands.indices.contains(newValue) else { return }
-                            withAnimation(.easeInOut(duration: 0.08)) {
-                                proxy.scrollTo(commands[newValue].id, anchor: .center)
-                            }
-                        }
-                    }
+                    body(for: rows)
+                }
+
+                OverlayFooter(theme: theme) {
+                    Text("↑↓ navigate · ⏎ select · esc dismiss · \(commands.count) commands")
                 }
             }
-            .frame(width: 620)
         }
         .background(KeyEventHandling(handler: handleKey))
         .onChange(of: query) { _, _ in
@@ -83,6 +252,60 @@ struct CommandPaletteOverlay: View {
         }
         .onChange(of: commands.map(\.id)) { _, _ in
             highlightedIndex = min(highlightedIndex, max(commands.count - 1, 0))
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: BentoSpacing.xs) {
+            Text("No matching commands")
+                .font(BentoType.chrome(13, weight: .medium))
+                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            Text("try a different query")
+                .font(BentoType.mono(11))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, BentoSpacing.xl)
+    }
+
+    private func body(for rows: [PaletteRow]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        switch row {
+                        case .header(let group):
+                            SectionLabel(theme: theme, group)
+                                .padding(.horizontal, BentoSpacing.l)
+                                .padding(.top, BentoSpacing.m)
+                                .padding(.bottom, BentoSpacing.xs)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case .command(let index, let command):
+                            CommandPaletteRow(
+                                theme: theme,
+                                command: command,
+                                isHighlighted: index == highlightedIndex
+                            )
+                            .id(command.id)
+                            .onTapGesture {
+                                highlightedIndex = index
+                                dispatchHighlighted()
+                            }
+                            .onHover { hovering in
+                                if hovering { highlightedIndex = index }
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, BentoSpacing.s)
+            }
+            .frame(maxHeight: 360)
+            .onChange(of: highlightedIndex) { _, newValue in
+                guard commands.indices.contains(newValue) else { return }
+                withAnimation(BentoMotion.hover) {
+                    proxy.scrollTo(commands[newValue].id, anchor: .center)
+                }
+            }
         }
     }
 
@@ -127,25 +350,23 @@ private struct CommandPaletteRow: View {
     let isHighlighted: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text(command.group.uppercased())
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                .frame(width: 72, alignment: .leading)
-            Text(command.title)
-                .font(.system(size: 13, weight: .medium))
-            Spacer()
-            if let shortcut = command.shortcut {
-                Text(shortcut)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+        OverlayRow(theme: theme, isHighlighted: isHighlighted) {
+            HStack(spacing: BentoSpacing.m) {
+                Text(command.title)
+                    .font(BentoType.chrome(13, weight: .medium))
+                    .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                Spacer(minLength: BentoSpacing.s)
+                if let shortcut = command.shortcut {
+                    Text(shortcut)
+                        .font(BentoType.mono(10))
+                        .foregroundStyle(
+                            Color(hex: isHighlighted
+                                ? theme.chrome.dimText.hex
+                                : theme.chrome.tertiaryText.hex)
+                        )
+                }
             }
         }
-        .padding(.horizontal, 16)
-        .frame(height: 36)
-        .background(isHighlighted
-            ? Color(hex: theme.chrome.activeBorder.hex).opacity(0.18)
-            : .clear)
     }
 }
 
@@ -177,26 +398,22 @@ struct SearchOverlay: View {
     }
 
     var body: some View {
-        OverlayBackdrop(theme: theme, onClose: onClose) {
+        OverlayBackdrop(theme: theme, width: OverlayWidth.standard, onClose: onClose) {
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Text("RG")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
-                    TextField("search files and scrollback", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15, design: .monospaced))
-                    Text(statusText)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                }
-                .padding(.horizontal, 16)
-                .frame(height: 54)
-                .background(Color(hex: theme.chrome.background.hex))
+                OverlayInputHeader(
+                    theme: theme,
+                    leading: "/",
+                    text: $query,
+                    placeholder: "search files and scrollback",
+                    trailing: { Text(statusText) }
+                )
 
                 resultsBody
+
+                OverlayFooter(theme: theme) {
+                    Text("↑↓ navigate · ⏎ open · esc dismiss")
+                }
             }
-            .frame(width: 780)
         }
         .background(KeyEventHandling(handler: handleKey))
         .onChange(of: query) { _, newValue in
@@ -218,7 +435,7 @@ struct SearchOverlay: View {
 
     private var statusText: String {
         if let lastError { return "error: \(lastError)" }
-        if isSearching { return "searching..." }
+        if isSearching { return "searching…" }
         if query.isEmpty { return "files + scrollback" }
         return "\(results.count) results"
     }
@@ -226,42 +443,32 @@ struct SearchOverlay: View {
     @ViewBuilder
     private var resultsBody: some View {
         if query.isEmpty {
-            VStack(spacing: 6) {
-                Text("type to search project files and pane scrollback")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(24)
+            emptyHint("Type to search project files and pane scrollback")
         } else if results.isEmpty {
-            Text(isSearching ? "searching..." : "no matches")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                .frame(maxWidth: .infinity)
-                .padding(24)
+            emptyHint(isSearching ? "Searching…" : "No matches")
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if !fileResults.isEmpty {
-                            sectionHeader("files (\(fileResults.count))")
+                            sectionHeader("FILES", count: fileResults.count)
                             ForEach(fileResults, id: \.offset) { entry in
                                 rowView(for: entry.result, index: entry.offset)
                             }
                         }
                         if !scrollbackResults.isEmpty {
-                            sectionHeader("scrollback (\(scrollbackResults.count))")
+                            sectionHeader("SCROLLBACK", count: scrollbackResults.count)
                             ForEach(scrollbackResults, id: \.offset) { entry in
                                 rowView(for: entry.result, index: entry.offset)
                             }
                         }
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, BentoSpacing.s)
                 }
                 .frame(maxHeight: 420)
                 .onChange(of: highlightedIndex) { _, newValue in
                     guard results.indices.contains(newValue) else { return }
-                    withAnimation(.easeInOut(duration: 0.08)) {
+                    withAnimation(BentoMotion.hover) {
                         proxy.scrollTo(newValue, anchor: .center)
                     }
                 }
@@ -269,13 +476,25 @@ struct SearchOverlay: View {
         }
     }
 
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
+    private func emptyHint(_ text: String) -> some View {
+        Text(text)
+            .font(BentoType.chrome(12))
+            .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, BentoSpacing.xxl)
+    }
+
+    private func sectionHeader(_ text: String, count: Int) -> some View {
+        HStack(spacing: BentoSpacing.s) {
+            SectionLabel(theme: theme, text)
+            Text("\(count)")
+                .font(BentoType.mono(10))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, BentoSpacing.l)
+        .padding(.top, BentoSpacing.m)
+        .padding(.bottom, BentoSpacing.xs)
     }
 
     @ViewBuilder
@@ -286,7 +505,6 @@ struct SearchOverlay: View {
             isHighlighted: index == highlightedIndex
         )
         .id(index)
-        .contentShape(Rectangle())
         .onTapGesture {
             highlightedIndex = index
             dispatchHighlighted()
@@ -374,30 +592,29 @@ private struct SearchResultRow: View {
     let isHighlighted: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(sourceText)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                .frame(width: 220, alignment: .leading)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(titleText)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        OverlayRow(theme: theme, isHighlighted: isHighlighted, height: 44) {
+            HStack(alignment: .firstTextBaseline, spacing: BentoSpacing.m) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(titleText)
+                        .font(BentoType.mono(12, weight: .semibold))
+                        .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                        .lineLimit(1)
+                    Text(detailText)
+                        .font(BentoType.mono(11))
+                        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: BentoSpacing.s)
+                Text(sourceText)
+                    .font(BentoType.mono(10))
+                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
                     .lineLimit(1)
-                Text(detailText)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 220, alignment: .trailing)
             }
-            Spacer(minLength: 0)
+            .padding(.vertical, BentoSpacing.xs)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .background(isHighlighted
-            ? Color(hex: theme.chrome.activeBorder.hex).opacity(0.18)
-            : .clear)
     }
 
     private var sourceText: String {
@@ -405,7 +622,7 @@ private struct SearchResultRow: View {
         case .file(let path, _, _):
             return path
         case .scrollback(let match):
-            return "scrollback: \(match.paneID.rawValue)"
+            return "pane \(match.paneID.rawValue)"
         }
     }
 
@@ -430,21 +647,51 @@ private struct SearchResultRow: View {
 
 // MARK: - Backdrop
 
+/// Modal-level backdrop + container. Provides the dim scrim, the elevated
+/// surface, and consistent placement; the caller fills the inner content
+/// with header / body / footer slots.
 struct OverlayBackdrop<Content: View>: View {
     let theme: ThemeSpec
+    let width: CGFloat
     let onClose: () -> Void
     @ViewBuilder var content: Content
 
+    init(
+        theme: ThemeSpec,
+        width: CGFloat = OverlayWidth.standard,
+        onClose: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.theme = theme
+        self.width = width
+        self.onClose = onClose
+        self.content = content()
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.opacity(0.45)
+            Color(hex: theme.chrome.overlay.hex)
+                .opacity(0.55)
                 .ignoresSafeArea()
                 .onTapGesture(perform: onClose)
             content
-                .background(Color(hex: theme.chrome.panel.hex))
-                .overlay(Rectangle().stroke(Color(hex: theme.chrome.border.hex), lineWidth: 1))
-                .shadow(color: .black.opacity(0.42), radius: 38, y: 24)
-                .padding(.top, 76)
+                .frame(width: width)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous)
+                        .fill(Color(hex: theme.chrome.elevated.hex))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous)
+                        .strokeBorder(Color(hex: theme.chrome.border.hex), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous))
+                .shadow(
+                    color: BentoElevation.modal.color,
+                    radius: BentoElevation.modal.radius,
+                    x: BentoElevation.modal.x,
+                    y: BentoElevation.modal.y
+                )
+                .padding(.top, OverlayLayout.topMargin)
         }
     }
 }
@@ -455,7 +702,7 @@ struct OverlayBackdrop<Content: View>: View {
 /// return, and escape even while the embedded `TextField` is the first
 /// responder. The handler returns `nil` to swallow the event or the event
 /// itself to let it propagate (e.g. to keep regular text input working).
-private struct KeyEventHandling: NSViewRepresentable {
+struct KeyEventHandling: NSViewRepresentable {
     let handler: (NSEvent) -> NSEvent?
 
     func makeNSView(context: Context) -> KeyEventMonitorView {
@@ -471,7 +718,7 @@ private struct KeyEventHandling: NSViewRepresentable {
     }
 }
 
-private final class KeyEventMonitorView: NSView {
+final class KeyEventMonitorView: NSView {
     var handler: (NSEvent) -> NSEvent?
     nonisolated(unsafe) private var monitor: Any?
 
