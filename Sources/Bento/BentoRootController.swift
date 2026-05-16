@@ -116,6 +116,22 @@ final class BentoRootController: ObservableObject {
         }
     }
 
+    /// Update the `currentCwd` of a workspace pane in response to an OSC 7
+    /// report from its shell. Re-publishes the pane graph so the workspace's
+    /// sidebar re-scans the new path. No-op if the pane isn't a workspace
+    /// (or the cwd didn't actually change).
+    func updateWorkspaceCwd(paneID: PaneID, cwd: String) {
+        guard var pane = state.paneGraph.pane(paneID),
+              var workspace = pane.workspace,
+              workspace.currentCwd != cwd else {
+            return
+        }
+        workspace.currentCwd = cwd
+        pane.kind = .workspace(workspace)
+        let graph = state.paneGraph.replacingPane(pane)
+        recordPaneGraph(graph)
+    }
+
     /// Replace the tracked pane graph after a UI-driven mutation (split,
     /// focus change, pane close).
     func recordPaneGraph(_ graph: PaneGraph) {

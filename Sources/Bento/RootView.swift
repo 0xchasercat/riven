@@ -32,7 +32,10 @@ struct BentoRootView: View {
                         fileMap: controller.fileMap,
                         agentClient: controller.agentClient,
                         onGraphChange: { controller.recordPaneGraph($0) },
-                        onOpenFile: { controller.openFile($0) }
+                        onOpenFile: { controller.openFile($0) },
+                        onCwdChanged: { paneID, cwd in
+                            controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
+                        }
                     )
                     statusBar
                 }

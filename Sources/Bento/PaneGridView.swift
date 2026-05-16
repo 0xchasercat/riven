@@ -20,6 +20,7 @@ struct PaneGridView: NSViewRepresentable {
     let agentClient: AgentClient?
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
+    let onCwdChanged: (PaneID, String) -> Void
 
     init(
         theme: ThemeSpec,
@@ -28,7 +29,8 @@ struct PaneGridView: NSViewRepresentable {
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
-        onOpenFile: @escaping (URL) -> Void = { _ in }
+        onOpenFile: @escaping (URL) -> Void = { _ in },
+        onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in }
     ) {
         self.theme = theme
         self.paneGraph = paneGraph
@@ -37,6 +39,7 @@ struct PaneGridView: NSViewRepresentable {
         self.agentClient = agentClient
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
+        self.onCwdChanged = onCwdChanged
     }
 
     func makeCoordinator() -> Coordinator {
@@ -53,7 +56,8 @@ struct PaneGridView: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             onGraphChange: onGraphChange,
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
         // Schedule first-responder grab once we're in a window.
         DispatchQueue.main.async { [weak view] in
@@ -71,7 +75,8 @@ struct PaneGridView: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             onGraphChange: onGraphChange,
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
     }
 
@@ -167,7 +172,8 @@ final class BentoPaneContainerView: NSView {
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
         onGraphChange: @escaping (PaneGraph) -> Void,
-        onOpenFile: @escaping (URL) -> Void
+        onOpenFile: @escaping (URL) -> Void,
+        onCwdChanged: @escaping (PaneID, String) -> Void
     ) {
         self.currentGraph = graph
         self.onGraphChange = onGraphChange
@@ -192,7 +198,8 @@ final class BentoPaneContainerView: NSView {
             onClose: { [weak self] id in
                 self?.closeFocused(target: id)
             },
-            onOpenFile: onOpenFile
+            onOpenFile: onOpenFile,
+            onCwdChanged: onCwdChanged
         )
         let newContent = builder.build(node: graph.rootNode)
 
@@ -299,6 +306,7 @@ private struct PaneTreeBuilder {
     let onSplit: @MainActor (PaneID) -> Void
     let onClose: @MainActor (PaneID) -> Void
     let onOpenFile: (URL) -> Void
+    let onCwdChanged: (PaneID, String) -> Void
 
     func build(node: PaneNode) -> NSView {
         switch node {
@@ -446,7 +454,8 @@ private struct PaneTreeBuilder {
                         workspace: workspace,
                         fileMap: fileMap,
                         agentClient: agentClient,
-                        onOpenFile: onOpenFile
+                        onOpenFile: onOpenFile,
+                        onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )
                 } else {
                     BrokerConnectingPlaceholder(theme: theme)
