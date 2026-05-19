@@ -14,6 +14,14 @@ struct BentoRootView: View {
     /// Set when the prompt opens; never cleared. The user can dismiss
     /// and the toolbar pill remains as the always-available re-entry.
     @State private var autoPromptedTrustForProjects: Set<String> = []
+    /// Live draft of the toolbar's workspace-path field. Re-synced to
+    /// the focused workspace's `initialCwd` via `.onChange(of:)`, so
+    /// switching workspaces (or new-workspace) flips the field's
+    /// contents to match — no stale path from a previous workspace.
+    @State private var workspacePathDraft: String = ""
+    /// `true` immediately after a failed commit; the toolbar shows a
+    /// 1-line "path doesn't exist" hint for ~3s. Cleared on next edit.
+    @State private var workspacePathRejected: Bool = false
 
     private var theme: ThemeSpec {
         let id = selectedThemeID ?? controller.state.selectedThemeID
@@ -118,12 +126,19 @@ struct BentoRootView: View {
         let requires: Bool
     }
 
+    /// The focused workspace's root cwd — what the toolbar input edits.
+    /// Falls back to the project root when no workspace is focused
+    /// (defensive; shouldn't happen in normal use).
+    private var focusedWorkspaceCwd: String {
+        controller.state.paneGraph
+            .pane(controller.state.paneGraph.focusedPaneID)?
+            .workspace?.initialCwd
+            ?? controller.state.projectRoot
+    }
+
     private var toolbar: some View {
-        HStack {
-            Text(controller.state.projectRoot)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
+        HStack(spacing: BentoSpacing.s) {
+            workspacePathField
             Spacer()
             if controller.agentClient == nil {
                 Text("connecting to broker…")
@@ -143,6 +158,10 @@ struct BentoRootView: View {
                 }
                 .buttonStyle(.plain)
             }
+            if workspacePathRejected {
+                Text("path doesn't exist")
+                    .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
+            }
             Text("⌘⇧P palette · ⌘K clear · ⌘T new tab · ⌘N new workspace")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
@@ -150,6 +169,54 @@ struct BentoRootView: View {
         .padding(.horizontal, 16)
         .frame(height: 32)
         .background(Color(hex: theme.chrome.background.hex))
+        .onAppear {
+            // Seed the draft on first render so the field shows the
+            // focused workspace's path, not an empty string.
+            if workspacePathDraft.isEmpty {
+                workspacePathDraft = focusedWorkspaceCwd
+            }
+        }
+        .onChange(of: focusedWorkspaceCwd) { _, new in
+            // Re-sync when the focused workspace changes (Cmd+N, click
+            // another tab, etc.) so the field never shows a stale path.
+            workspacePathDraft = new
+            workspacePathRejected = false
+        }
+    }
+
+    private var workspacePathField: some View {
+        TextField("", text: $workspacePathDraft, onCommit: commitWorkspacePath)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(Color(hex: workspacePathRejected
+                ? theme.chrome.activeBorder.hex
+                : theme.chrome.text.hex))
+            .frame(maxWidth: 460, alignment: .leading)
+            .help("Workspace path · enter to rebind sidebar, ⎋ to cancel")
+            .onSubmit(commitWorkspacePath)
+            .onExitCommand {
+                // Escape: revert to current cwd, drop focus.
+                workspacePathDraft = focusedWorkspaceCwd
+                workspacePathRejected = false
+            }
+            .onChange(of: workspacePathDraft) { _, _ in
+                // Any keystroke clears the rejection hint.
+                if workspacePathRejected { workspacePathRejected = false }
+            }
+    }
+
+    /// Hand the typed path to the controller; on rejection (path doesn't
+    /// exist), flip the rejected flag so the toolbar shows the hint.
+    /// Auto-clears after 3s so the user isn't stuck looking at it.
+    private func commitWorkspacePath() {
+        let ok = controller.setFocusedWorkspaceCwd(workspacePathDraft)
+        if !ok {
+            workspacePathRejected = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                workspacePathRejected = false
+            }
+        }
     }
 
     @ViewBuilder

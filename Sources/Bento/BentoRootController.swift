@@ -188,6 +188,48 @@ final class BentoRootController: ObservableObject {
         openNewWorkspace(at: NSHomeDirectory())
     }
 
+    /// Rebind the focused workspace's root (sidebar source + cwd cache)
+    /// to a new directory. Used by the editable toolbar path field.
+    ///
+    /// Note: this does NOT `cd` the running shell. The PTY keeps its
+    /// own working directory; OSC 7 will continue to drive
+    /// `currentCwd` from whatever the shell actually does. We only
+    /// retarget the workspace-level fields that the sidebar / window
+    /// title key off of.
+    ///
+    /// Path normalization:
+    ///   - leading `~` expands to `$HOME`
+    ///   - relative paths resolve against the previous initialCwd
+    ///   - the resolved path must exist as a directory; otherwise the
+    ///     call is a no-op and returns `false` so the toolbar can flag
+    ///     the bad input.
+    @discardableResult
+    func setFocusedWorkspaceCwd(_ raw: String) -> Bool {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace else { return false }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        let resolved: String
+        if expanded.hasPrefix("/") {
+            resolved = (expanded as NSString).standardizingPath
+        } else {
+            let base = URL(fileURLWithPath: workspace.initialCwd)
+            resolved = base.appendingPathComponent(expanded)
+                .standardizedFileURL.path
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        workspace.initialCwd = resolved
+        workspace.currentCwd = resolved
+        pane.kind = .workspace(workspace)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+        return true
+    }
+
     /// Add a new workspace rooted at `cwd` and focus it.
     func openNewWorkspace(at cwd: String) {
         let newPane = PaneDescriptor(
