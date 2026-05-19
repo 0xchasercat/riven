@@ -34,7 +34,7 @@ struct InnerTabStrip: View {
             Spacer(minLength: 0)
             AddInnerTabButton(theme: theme)
         }
-        .frame(height: 30)
+        .frame(height: 36)
         .background(Color(hex: theme.chrome.background.hex))
     }
 }
@@ -59,12 +59,12 @@ private struct InnerTabChip: View {
                 // tabs at a glance without reading the label. `›_` for
                 // terminal (prompt-shaped), `✎` for editor.
                 Text(kindGlyph)
-                    .font(BentoType.mono(BentoType.small, weight: .semibold))
+                    .font(BentoType.mono(BentoType.body, weight: .semibold))
                     .foregroundStyle(Color(hex: isActive
                         ? theme.chrome.accent.hex
                         : theme.chrome.tertiaryText.hex))
                 Text(tab.displayName)
-                    .font(BentoType.chrome(11, weight: isActive ? .semibold : .medium))
+                    .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(Color(hex: isActive
                         ? theme.chrome.text.hex
                         : theme.chrome.dimText.hex))
@@ -78,9 +78,9 @@ private struct InnerTabChip: View {
                         )
                     } label: {
                         Text("×")
-                            .font(BentoType.chrome(11, weight: .medium))
+                            .font(BentoType.chrome(13, weight: .medium))
                             .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-                            .frame(width: 14, height: 14)
+                            .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
                             .background(
                                 RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
@@ -92,8 +92,8 @@ private struct InnerTabChip: View {
                     .focusable(false)
                 }
             }
-            .padding(.horizontal, BentoSpacing.s)
-            .frame(height: 30)
+            .padding(.horizontal, BentoSpacing.m)
+            .frame(height: 36)
             .background(
                 ZStack(alignment: .bottom) {
                     Color(hex: isActive
@@ -134,11 +134,11 @@ private struct AddInnerTabButton: View {
             NotificationCenter.default.post(name: .bentoNewTab, object: nil)
         } label: {
             Text("+")
-                .font(BentoType.chrome(13, weight: .medium))
+                .font(BentoType.chrome(15, weight: .medium))
                 .foregroundStyle(Color(hex: isHovered
                     ? theme.chrome.text.hex
                     : theme.chrome.tertiaryText.hex))
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background(
                     Color(hex: theme.chrome.accentSoft.hex).opacity(isHovered ? 1 : 0)
                 )

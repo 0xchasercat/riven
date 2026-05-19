@@ -40,7 +40,7 @@ struct WorkspaceTabBar: View {
             Spacer(minLength: 0)
             AddTabButton(theme: theme, action: onAdd)
         }
-        .frame(height: 36)
+        .frame(height: 44)
         .background(Color(hex: theme.chrome.background.hex))
         .overlay(alignment: .bottom) {
             Hairline(theme: theme)
@@ -74,7 +74,7 @@ private struct TabChip: View {
         Button(action: onSelect) {
             HStack(spacing: BentoSpacing.s) {
                 Text(label)
-                    .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
+                    .font(BentoType.chrome(13, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(Color(hex: isActive
                         ? theme.chrome.text.hex
                         : theme.chrome.dimText.hex))
@@ -83,9 +83,9 @@ private struct TabChip: View {
                 if canClose {
                     Button(action: onClose) {
                         Text("×")
-                            .font(BentoType.chrome(13, weight: .medium))
+                            .font(BentoType.chrome(14, weight: .medium))
                             .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-                            .frame(width: 16, height: 16)
+                            .frame(width: 18, height: 18)
                             .contentShape(Rectangle())
                             .background(
                                 RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
@@ -96,8 +96,8 @@ private struct TabChip: View {
                     .focusable(false)
                 }
             }
-            .padding(.horizontal, BentoSpacing.m)
-            .frame(height: 36)
+            .padding(.horizontal, BentoSpacing.l)
+            .frame(height: 44)
             .background(
                 ZStack(alignment: .bottom) {
                     Color(hex: isActive
@@ -128,11 +128,11 @@ private struct AddTabButton: View {
     var body: some View {
         Button(action: action) {
             Text("+")
-                .font(BentoType.chrome(15, weight: .medium))
+                .font(BentoType.chrome(17, weight: .medium))
                 .foregroundStyle(Color(hex: isHovered
                     ? theme.chrome.text.hex
                     : theme.chrome.tertiaryText.hex))
-                .frame(width: 36, height: 36)
+                .frame(width: 44, height: 44)
                 .background(
                     Color(hex: theme.chrome.accentSoft.hex).opacity(isHovered ? 1 : 0)
                 )
