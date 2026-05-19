@@ -252,6 +252,7 @@ struct BentoRootView: View {
             Text("\(controller.state.paneGraph.leaves().count) tab\(controller.state.paneGraph.leaves().count == 1 ? "" : "s")")
             Text("theme: \(theme.name)")
             Spacer()
+            ScratchEditorButton(theme: theme) { controller.openScratchEditor() }
             Text("0 telemetry")
         }
         .font(.system(size: 10, design: .monospaced))
@@ -259,6 +260,41 @@ struct BentoRootView: View {
         .padding(.horizontal, 12)
         .frame(height: 22)
         .background(Color(hex: theme.chrome.background.hex))
+    }
+}
+
+/// Small chip-button in the status bar that opens an unsaved scratch
+/// editor tab. Useful for a quick "let me write something" surface
+/// without first creating a file on disk.
+private struct ScratchEditorButton: View {
+    let theme: ThemeSpec
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text("\u{270E}") // pencil — matches editor-tab glyph
+                Text("scratch")
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .foregroundStyle(Color(hex: isHovered
+                ? theme.chrome.text.hex
+                : theme.chrome.dimText.hex))
+            .background(
+                RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                    .fill(Color(hex: theme.chrome.accentSoft.hex)
+                        .opacity(isHovered ? 1 : 0))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help("Open a scratch editor tab (no file on disk)")
+        .animation(BentoMotion.hover, value: isHovered)
     }
 }
 

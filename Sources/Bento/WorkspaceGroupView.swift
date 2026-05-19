@@ -619,10 +619,17 @@ private final class WorkspaceContainerView: NSView {
 /// before the editor mounts. The seeding happens in `task(id:)` so a
 /// later focus-back-to-this-tab restores the binding cleanly even if the
 /// map entry was evicted.
+///
+/// `path` is optional: nil means the tab is a scratch buffer (no file on
+/// disk yet). The file map is cleared for the virtual paneID in that case
+/// so EditorPaneView shows an empty buffer. Cmd+S on a scratch buffer
+/// still saves to disk via EditorPaneView's existing save path, which
+/// pops NSSavePanel when there's no URL bound (TODO: implement that
+/// branch — currently Cmd+S on a scratch is a no-op).
 private struct EditorTabContent: View {
     let theme: ThemeSpec
     let tabID: TabID
-    let path: String
+    let path: String?
     @ObservedObject var fileMap: PaneFileMap
 
     /// Stable virtual paneID — `editor-tab-<tab uuid>`. Survives focus
@@ -633,8 +640,14 @@ private struct EditorTabContent: View {
     var body: some View {
         EditorPaneView(theme: theme, paneID: virtualPaneID, fileMap: fileMap)
             .background(Color(hex: theme.chrome.panel.hex))
-            .task(id: "\(tabID.rawValue)|\(path)") {
-                fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
+            .task(id: "\(tabID.rawValue)|\(path ?? "")") {
+                if let path {
+                    fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
+                } else {
+                    // Scratch tab — make sure no stale URL is bound from
+                    // a prior file-backed editor reusing this paneID.
+                    fileMap.setFile(nil, for: virtualPaneID)
+                }
             }
     }
 }

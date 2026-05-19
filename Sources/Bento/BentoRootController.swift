@@ -259,6 +259,38 @@ final class BentoRootController: ObservableObject {
         openNewInnerTab()
     }
 
+    /// Append a fresh, unsaved scratch editor tab to the focused
+    /// workspace (or fall back to creating a new workspace if no
+    /// workspace is focused). The tab has a nil path until the user
+    /// saves it; the display name is auto-numbered (Untitled-1,
+    /// Untitled-2, …) per workspace so multiple scratch tabs read
+    /// distinctly in the tab strip.
+    func openScratchEditor() {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else {
+            openNewWorkspace()
+            return
+        }
+        // Auto-number against existing Untitled-N tabs so the user's
+        // own renamed tabs don't get clobbered. Find the next free
+        // index by scanning the workspace's editor-scratch displayNames.
+        let existingNumbers: [Int] = workspace.tabs.compactMap { tab in
+            guard tab.editorPath == nil, tab.isEditor else { return nil }
+            let prefix = "Untitled-"
+            guard tab.displayName.hasPrefix(prefix) else { return nil }
+            return Int(tab.displayName.dropFirst(prefix.count))
+        }
+        let nextN = (existingNumbers.max() ?? 0) + 1
+        let scratch = WorkspaceInnerTab(
+            id: TabID(),
+            displayName: "Untitled-\(nextN)",
+            kind: .editor(path: nil),
+            cwd: workspace.initialCwd
+        )
+        pane.kind = .workspace(workspace.appendingTab(scratch))
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
     /// Send a Ctrl+L (FF, 0x0C) byte to the focused workspace's focused
     /// terminal tab — the binding every shell already interprets as
     /// "clear screen". Editor tabs are a no-op for this command.

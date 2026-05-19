@@ -240,10 +240,19 @@ public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
         return nil
     }
 
-    /// The file path for editor tabs.
+    /// The file path for editor tabs (nil = scratch / unsaved buffer
+    /// OR the tab isn't an editor at all — distinguish via `isEditor`).
     public var editorPath: String? {
         if case let .editor(path) = kind { return path }
         return nil
+    }
+
+    /// `true` when this tab is an editor (scratch or file-backed).
+    /// Use this to differentiate "scratch tab" from "not an editor"
+    /// when both return nil from `editorPath`.
+    public var isEditor: Bool {
+        if case .editor = kind { return true }
+        return false
     }
 
     // MARK: - Codable
@@ -283,12 +292,13 @@ public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
 
 /// What a `WorkspaceInnerTab` is. A `.terminal` tab carries its own
 /// broker `PaneID` (the address of its PTY) and an optional shell
-/// command; an `.editor` tab carries the file path the editor is bound
-/// to. Persisted in snapshots so each tab survives a restart with its
-/// surface kind intact.
+/// command; an `.editor` tab carries an optional file path the editor
+/// is bound to (`nil` = an unsaved scratch buffer). Persisted in
+/// snapshots so each tab survives a restart with its surface kind
+/// intact.
 public enum WorkspaceInnerTabKind: Hashable, Codable, Sendable {
     case terminal(paneID: PaneID, command: String?)
-    case editor(path: String)
+    case editor(path: String?)
 }
 
 /// Stable identifier for inner tabs. Lives across renders so the broker

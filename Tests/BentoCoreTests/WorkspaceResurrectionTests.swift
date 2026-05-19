@@ -223,6 +223,60 @@ struct WorkspaceResurrectionTests {
         #expect(restoredWorkspace.tabs[1].editorPath == project.appendingPathComponent("Hello.md").path)
     }
 
+    @Test("scratch editor tab (nil path) round-trips through the snapshot")
+    func scratchEditorTabRoundtrips() throws {
+        let project = try temporaryProject()
+        let snapshotRoot = project.appendingPathComponent(".snapshots")
+        let store = WorkspaceSnapshotStore(root: snapshotRoot)
+
+        let shell = WorkspaceInnerTab(
+            id: TabID("shell"),
+            displayName: "shell",
+            kind: .terminal(paneID: PaneID("pane-shell"), command: nil),
+            cwd: project.standardizedFileURL.path
+        )
+        let scratch = WorkspaceInnerTab(
+            id: TabID("scratch-1"),
+            displayName: "Untitled-1",
+            kind: .editor(path: nil),
+            cwd: project.standardizedFileURL.path
+        )
+        let workspace = WorkspaceGroup(
+            initialCwd: project.standardizedFileURL.path,
+            tabs: [shell, scratch],
+            focusedTabID: scratch.id
+        )
+        let pane = PaneDescriptor(
+            id: PaneID("workspace-root"),
+            name: "workspace",
+            kind: .workspace(workspace),
+            isFocused: true
+        )
+        let snapshot = WorkspaceSnapshot(
+            projectRoot: project.standardizedFileURL.path,
+            selectedThemeID: "bento",
+            paneGraph: PaneGraph(root: pane),
+            openFiles: []
+        )
+        try store.save(snapshot)
+
+        let restored = try store.load(projectRoot: project.standardizedFileURL.path)
+        guard let restoredWorkspace = restored?.paneGraph.pane(PaneID("workspace-root"))?.workspace else {
+            Issue.record("expected restored snapshot to contain the workspace pane")
+            return
+        }
+
+        #expect(restoredWorkspace.tabs.count == 2)
+        #expect(restoredWorkspace.focusedTabID == scratch.id)
+        let restoredScratch = restoredWorkspace.tabs[1]
+        #expect(restoredScratch.id == TabID("scratch-1"))
+        #expect(restoredScratch.isEditor == true)
+        // The defining property of a scratch tab: editorPath is nil
+        // even though the tab IS an editor.
+        #expect(restoredScratch.editorPath == nil)
+        #expect(restoredScratch.displayName == "Untitled-1")
+    }
+
     @Test("legacy snapshot with openEditorPath promotes the file to an editor tab")
     func legacyOpenEditorPathMigratesToInnerTab() throws {
         // Stand in for a snapshot written before the editor became an
