@@ -249,9 +249,10 @@ private final class WorkspaceContainerView: NSView {
         // tree is intact, we just want the divider to snap to the new
         // collapsed/expanded width. Queue a position update.
         if lastSidebarState != workspace.sidebarState {
-            pendingSidebarPosition = workspace.sidebarState == .collapsed
-                ? 140
-                : workspace.sidebarWidth
+            pendingSidebarPosition = WorkspaceContainerView.sidebarWidth(
+                state: workspace.sidebarState,
+                expanded: workspace.sidebarWidth
+            )
             lastSidebarState = workspace.sidebarState
             DispatchQueue.main.async { [weak self] in
                 self?.applyPendingDividers()
@@ -350,12 +351,14 @@ private final class WorkspaceContainerView: NSView {
         outer.addArrangedSubview(sidebarPane)
         outer.addArrangedSubview(tabPane)
         outerSplit = outer
-        // Collapsed sidebar = narrow strip (~140 pt — enough for top-level
-        // names without burning real estate). Expanded = the user's saved
-        // width. Both are applied via setPosition after layout.
-        pendingSidebarPosition = workspace.sidebarState == .collapsed
-            ? 140
-            : workspace.sidebarWidth
+        // Collapsed sidebar = a narrow icon rail (56 pt — wide enough
+        // for a 32-pt tile centered in the column with 12 pt gutters).
+        // Expanded = the user's saved width (220 pt default), clamped
+        // to a 240 pt floor for the new design's readable padding.
+        pendingSidebarPosition = WorkspaceContainerView.sidebarWidth(
+            state: workspace.sidebarState,
+            expanded: workspace.sidebarWidth
+        )
 
         // Pin outer split to fill self.
         outer.translatesAutoresizingMaskIntoConstraints = false
@@ -379,12 +382,28 @@ private final class WorkspaceContainerView: NSView {
            let sidebarPos = pendingSidebarPosition,
            outer.arrangedSubviews.count == 2,
            outer.bounds.width > 0 {
-            // Allow a narrow minimum (~100) so the collapsed strip can
-            // actually sit at ~140 pt. The previous min of 160 forced the
-            // divider open even when the user collapsed.
-            let target = max(100, min(sidebarPos, outer.bounds.width - 240))
+            // Allow the collapsed rail to clamp down to 48 pt minimum
+            // (enough for the 32-pt icon tile centered in the rail).
+            // Expanded clamps up against `outer.width - 240` so the
+            // tab area can never go below a comfortable terminal width.
+            let target = max(48, min(sidebarPos, outer.bounds.width - 240))
             outer.setPosition(target, ofDividerAt: 0)
             pendingSidebarPosition = nil
+        }
+    }
+
+    /// Single source of truth for the sidebar's resting width per state.
+    /// Picked here so both `apply` (state change) and `rebuildTree`
+    /// (initial layout) read the same constants.
+    static func sidebarWidth(state: WorkspaceSidebarState, expanded: CGFloat) -> CGFloat {
+        switch state {
+        case .collapsed:
+            // 56 pt = 32 pt tile + 12 pt left/right gutter.
+            return 56
+        case .expanded:
+            // 240 pt floor: tighter than that and 3+ levels of indent
+            // start losing names to truncation.
+            return max(240, expanded)
         }
     }
 
@@ -727,7 +746,10 @@ private struct WorkspaceSidebarView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     contentBody
                 }
-                .padding(.horizontal, BentoSpacing.s)
+                // Collapsed: zero horizontal padding — the icon tiles
+                // self-center inside the 56 pt rail. Expanded: standard
+                // sidebar horizontal padding.
+                .padding(.horizontal, isCollapsed ? 0 : BentoSpacing.s)
                 .padding(.vertical, BentoSpacing.s)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .animation(BentoMotion.pane, value: tree)
@@ -746,11 +768,13 @@ private struct WorkspaceSidebarView: View {
             if tree.children.isEmpty {
                 emptyState
             } else if isCollapsed {
-                // Collapsed: top-level entries only, no expand chevrons,
-                // tighter rows. Enough visual context to know what's in
-                // the workspace without burning horizontal real estate.
+                // Collapsed: a vertical icon rail. Each top-level entry
+                // is a 32-pt tile centered in the 56-pt column — no
+                // labels, no chevrons, no indents. Click a directory
+                // tile to expand the sidebar AND drill in; click a file
+                // tile to open it.
                 ForEach(tree.children) { node in
-                    CollapsedSidebarRow(
+                    CollapsedIconTile(
                         node: node,
                         theme: theme,
                         activePath: activePath,
@@ -769,11 +793,15 @@ private struct WorkspaceSidebarView: View {
                 }
             }
         } else if let loadError {
-            Text(loadError)
-                .font(BentoType.mono(BentoType.small))
-                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-                .padding(.top, BentoSpacing.xs)
-        } else {
+            // Loading error: only show in the expanded state — the
+            // 56 pt icon rail has no room for prose.
+            if !isCollapsed {
+                Text(loadError)
+                    .font(BentoType.mono(BentoType.small))
+                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                    .padding(.top, BentoSpacing.xs)
+            }
+        } else if !isCollapsed {
             Text("Loading…")
                 .font(BentoType.mono(BentoType.small))
                 .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
@@ -792,10 +820,10 @@ private struct WorkspaceSidebarView: View {
         .padding(.vertical, BentoSpacing.l)
     }
 
-    /// 36 pt sticky-feeling header. When expanded: `FILES` label + cwd
-    /// breadcrumb + toggle. When collapsed: just a toggle button so the
-    /// narrow strip stays usable. Toggle posts `bentoToggleSidebar` and
-    /// the controller flips the workspace's `sidebarState`.
+    /// 36 pt header. Position is invariant across states: toggle is
+    /// always trailing-aligned so the chevron stays in the same place
+    /// when collapsing / expanding. In the collapsed rail the toggle
+    /// just centers within the 56-pt column.
     private var header: some View {
         HStack(spacing: BentoSpacing.s) {
             if !isCollapsed {
@@ -806,14 +834,16 @@ private struct WorkspaceSidebarView: View {
                     .foregroundStyle(Color(hex: theme.chrome.accent.hex).opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Spacer(minLength: 0)
             } else {
                 Spacer(minLength: 0)
             }
             SidebarToggleButton(theme: theme, isCollapsed: isCollapsed)
+            if !isCollapsed { Spacer().frame(width: 0) }
         }
-        .padding(.horizontal, BentoSpacing.s)
+        .padding(.horizontal, isCollapsed ? 0 : BentoSpacing.s)
         .frame(height: 36)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
     }
 
     /// Renders the cwd as a tilde-prefixed breadcrumb if it lives under
@@ -888,12 +918,14 @@ private struct SidebarToggleButton: View {
     }
 }
 
-// MARK: - Collapsed sidebar row
+// MARK: - Collapsed sidebar tile
 
-/// Row used in the collapsed sidebar state. Shows the first letter (or
-/// first 4 chars) of the directory/file name, vertically centered. Clicking
-/// a file still opens it; clicking a directory expands the sidebar.
-private struct CollapsedSidebarRow: View {
+/// Square tile in the collapsed icon rail. Renders a single SF Symbol
+/// (folder for directories, doc-shaped variant for files) centered in
+/// a 32-pt square. Tooltip on hover gives the entry's name so the user
+/// can target without expanding the sidebar. Clicking a file opens it;
+/// clicking a directory expands the sidebar so the user can drill in.
+private struct CollapsedIconTile: View {
     let node: ProjectFileTree
     let theme: ThemeSpec
     let activePath: String?
@@ -912,32 +944,34 @@ private struct CollapsedSidebarRow: View {
                 NotificationCenter.default.post(name: .bentoToggleSidebar, object: nil)
             }
         } label: {
-            HStack(spacing: BentoSpacing.xs) {
-                Text(node.kind == .directory ? "▸" : " ")
-                    .font(BentoType.mono(BentoType.caption))
-                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-                Text(node.name)
-                    .font(BentoType.mono(BentoType.caption,
-                        weight: node.kind == .directory ? .semibold : .regular))
-                    .foregroundStyle(Color(hex: isActive
-                        ? theme.chrome.accent.hex
-                        : theme.chrome.dimText.hex))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, BentoSpacing.xs)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
-                    .fill(rowBackground)
-            )
-            .contentShape(Rectangle())
+            Image(systemName: iconName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color(hex: foregroundHex))
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(tileBackground)
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusable(false)
         .onHover { isHovered = $0 }
+        .help(node.name)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity)
         .animation(BentoMotion.hover, value: isHovered)
+    }
+
+    /// SF Symbol id per node kind. Files get a generic "doc.text" so the
+    /// icon reads as "document" without spending effort guessing
+    /// language-specific glyphs in this iteration. Directories get
+    /// "folder.fill" to read as solid against the panel.
+    private var iconName: String {
+        switch node.kind {
+        case .directory: return isActive ? "folder.fill" : "folder"
+        case .file: return "doc.text"
+        }
     }
 
     private var isActive: Bool {
@@ -945,7 +979,16 @@ private struct CollapsedSidebarRow: View {
         return activePath == node.path
     }
 
-    private var rowBackground: Color {
+    private var foregroundHex: String {
+        if isActive { return theme.chrome.accent.hex }
+        if isHovered { return theme.chrome.text.hex }
+        switch node.kind {
+        case .directory: return theme.chrome.text.hex
+        case .file: return theme.chrome.dimText.hex
+        }
+    }
+
+    private var tileBackground: Color {
         if isActive || isHovered {
             return Color(hex: theme.chrome.accentSoft.hex)
         }
