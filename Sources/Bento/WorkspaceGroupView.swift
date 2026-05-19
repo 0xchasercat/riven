@@ -543,6 +543,17 @@ private final class WorkspaceContainerView: NSView {
     ) -> some View {
         switch tab.kind {
         case let .terminal(paneID, command):
+            // Inset the terminal grid from the workspace's chrome edges
+            // so the shell prompt isn't flush against the divider.
+            // SwiftUI shrinks the hosted NSView for us, and
+            // BrokeredTerminalView's computeGridSize reads its own
+            // bounds — so the cell count tracks the available area
+            // after padding without renderer changes.
+            //
+            // The terminal-background color extends edge-to-edge via
+            // the parent `.background(...)`, so the inset reads as
+            // breathing room around the glyphs rather than a visible
+            // gutter.
             TerminalPaneView(
                 theme: theme,
                 paneID: paneID,
@@ -551,6 +562,8 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 onCwdChanged: onCwdChanged
             )
+            .padding(.horizontal, BentoSpacing.m)
+            .padding(.top, BentoSpacing.s)
         case let .editor(path):
             EditorTabContent(theme: theme, tabID: tab.id, path: path, fileMap: fileMap)
         }
