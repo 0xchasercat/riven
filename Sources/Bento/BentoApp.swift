@@ -134,6 +134,28 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         fileItem.submenu = fileMenu
         main.addItem(fileItem)
 
+        // Standard Edit menu. Without this, Cmd+A/C/V/X/Z don't work
+        // inside the command bar's NSTextView (or anywhere else with a
+        // text editor) — macOS dispatches the standard edit commands
+        // through menu key equivalents, not through individual views'
+        // performKeyEquivalent. Each NSMenuItem uses nil action so the
+        // selector resolves dynamically against the first responder,
+        // which is the canonical pattern for the responder-chain-driven
+        // edit menu.
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: #selector(UndoManager.undo), keyEquivalent: "z"))
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(UndoManager.redo), keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redoItem)
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = editMenu
+        main.addItem(editItem)
+
         let commandItem = NSMenuItem()
         let commandMenu = NSMenu(title: "Commands")
         // Cmd+Shift+P — matches VSCode's command-palette muscle memory.
