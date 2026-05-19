@@ -44,6 +44,7 @@ struct BentoRootView: View {
             onCloseTab: { controller.closeTab(controller.state.paneGraph.focusedPaneID) },
             onCloseEditor: { controller.closeFocusedEditor() },
             onToggleSidebar: { controller.toggleFocusedSidebar() },
+            onClearTerminal: { controller.clearFocusedTerminal() },
             onFocusInnerTab: { controller.focusInnerTab($0) },
             onCloseInnerTab: { controller.closeInnerTab($0) }
         ))
@@ -141,7 +142,7 @@ struct BentoRootView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("⌘K palette · ⌘T new tab · ⌘N new workspace")
+            Text("⌘⇧P palette · ⌘K clear · ⌘T new tab · ⌘N new workspace")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
         }
@@ -271,6 +272,7 @@ private struct NotificationWiring: ViewModifier {
     let onCloseTab: () -> Void
     let onCloseEditor: () -> Void
     let onToggleSidebar: () -> Void
+    let onClearTerminal: () -> Void
     let onFocusInnerTab: (TabID) -> Void
     let onCloseInnerTab: (TabID) -> Void
 
@@ -284,6 +286,7 @@ private struct NotificationWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in onCloseTab() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in onCloseEditor() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in onToggleSidebar() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoClearFocusedTerminal)) { _ in onClearTerminal() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoFocusInnerTab)) { note in
                 if let id = note.object as? TabID { onFocusInnerTab(id) }
             }

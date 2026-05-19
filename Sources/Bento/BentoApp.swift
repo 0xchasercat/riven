@@ -136,8 +136,27 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
 
         let commandItem = NSMenuItem()
         let commandMenu = NSMenu(title: "Commands")
-        commandMenu.addItem(NSMenuItem(title: "Command Palette", action: #selector(showCommandPalette), keyEquivalent: "k"))
+        // Cmd+Shift+P — matches VSCode's command-palette muscle memory.
+        // Freed up Cmd+K for the "clear focused terminal" binding below.
+        let paletteItem = NSMenuItem(
+            title: "Command Palette",
+            action: #selector(showCommandPalette),
+            keyEquivalent: "p"
+        )
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        commandMenu.addItem(paletteItem)
         commandMenu.addItem(NSMenuItem(title: "Search Files and Scrollback", action: #selector(showSearch), keyEquivalent: "F"))
+        // Cmd+K → clear focused terminal. We send a Ctrl+L (0x0C) byte to
+        // the focused workspace's terminal tab, which is what every shell
+        // is already wired to treat as "clear screen". Editor tabs are a
+        // no-op for this binding.
+        let clearItem = NSMenuItem(
+            title: "Clear Terminal",
+            action: #selector(clearTerminal),
+            keyEquivalent: "k"
+        )
+        clearItem.keyEquivalentModifierMask = [.command]
+        commandMenu.addItem(clearItem)
         commandItem.submenu = commandMenu
         main.addItem(commandItem)
         NSApplication.shared.mainMenu = main
@@ -166,6 +185,10 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     @objc private func openProject() {
         NotificationCenter.default.post(name: .bentoOpenProject, object: nil)
     }
+
+    @objc private func clearTerminal() {
+        NotificationCenter.default.post(name: .bentoClearFocusedTerminal, object: nil)
+    }
 }
 
 extension Notification.Name {
@@ -177,4 +200,5 @@ extension Notification.Name {
     static let bentoCloseEditor = Notification.Name("BentoCloseEditor")
     static let bentoToggleSidebar = Notification.Name("BentoToggleSidebar")
     static let bentoOpenProject = Notification.Name("BentoOpenProject")
+    static let bentoClearFocusedTerminal = Notification.Name("BentoClearFocusedTerminal")
 }

@@ -254,6 +254,24 @@ final class BentoRootController: ObservableObject {
         openNewInnerTab()
     }
 
+    /// Send a Ctrl+L (FF, 0x0C) byte to the focused workspace's focused
+    /// terminal tab — the binding every shell already interprets as
+    /// "clear screen". Editor tabs are a no-op for this command.
+    ///
+    /// Wired to Cmd+K (see `BentoApp.installMenu`) and routed through
+    /// the `.bentoClearFocusedTerminal` notification so menu, palette,
+    /// and any future entry point can converge on one path.
+    func clearFocusedTerminal() {
+        guard
+            let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+            let workspace = pane.workspace,
+            let paneID = workspace.focusedTab.terminalPaneID,
+            let client = agentClient
+        else { return }
+        let payload = Data([0x0C])
+        Task { try? await client.writeInput(paneID: paneID, data: payload) }
+    }
+
     /// Toggle the focused workspace's sidebar between collapsed and
     /// expanded. Used by the sidebar header's toggle button.
     func toggleFocusedSidebar() {
