@@ -23,7 +23,19 @@ import SwiftUI
 struct CommandBarView: View {
     enum HistoryDirection { case previous, next }
 
+    /// Which key submits the buffer and which one inserts a newline.
+    /// User-toggleable preference, default `.enterIsNewline` (Slack /
+    /// Discord / Claude pattern — good for multi-line composition).
+    enum SubmitMode: Equatable {
+        /// Enter inserts "\n", Cmd+Enter submits.
+        case enterIsNewline
+        /// Enter submits, Cmd+Enter inserts "\n". Closer to a real
+        /// shell prompt.
+        case enterSubmits
+    }
+
     private let theme: ThemeSpec
+    private let submitMode: SubmitMode
     private let onSubmit: (String) -> Void
     private let onHistoryRequest: (HistoryDirection) -> String?
 
@@ -41,10 +53,12 @@ struct CommandBarView: View {
 
     init(
         theme: ThemeSpec,
+        submitMode: SubmitMode = .enterIsNewline,
         onSubmit: @escaping (String) -> Void,
         onHistoryRequest: @escaping (HistoryDirection) -> String? = { _ in nil }
     ) {
         self.theme = theme
+        self.submitMode = submitMode
         self.onSubmit = onSubmit
         self.onHistoryRequest = onHistoryRequest
     }
@@ -66,6 +80,7 @@ struct CommandBarView: View {
 
             CommandBarTextView(
                 theme: theme,
+                submitMode: submitMode,
                 text: $text,
                 contentHeight: $contentHeight,
                 isFocused: $isFocused,
@@ -218,6 +233,7 @@ private enum CommandBarMetrics {
 /// and light up with the buffer.
 private struct CommandBarTextView: NSViewRepresentable {
     let theme: ThemeSpec
+    let submitMode: CommandBarView.SubmitMode
     @Binding var text: String
     @Binding var contentHeight: CGFloat
     @Binding var isFocused: Bool
@@ -227,6 +243,7 @@ private struct CommandBarTextView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            submitMode: submitMode,
             text: $text,
             contentHeight: $contentHeight,
             isFocused: $isFocused,
@@ -274,7 +291,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
-        textView.placeholderString = "Type a command — \u{23CE} run, \u{21E7}\u{23CE} newline, \u{2191}\u{2193} history, esc clear"
+        textView.placeholderString = Self.placeholderText(for: submitMode)
         textView.placeholderFont = monospacedFont
         textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
 
@@ -309,6 +326,7 @@ private struct CommandBarTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.update(
+            submitMode: submitMode,
             onSubmit: onSubmit,
             onHistoryRequest: onHistoryRequest,
             onCancel: onCancel
@@ -319,6 +337,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         textView.insertionPointColor = NSColor(hex: theme.chrome.accent.hex)
         textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
         textView.placeholderFont = monospacedFont
+        textView.placeholderString = Self.placeholderText(for: submitMode)
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
         ]
@@ -330,6 +349,18 @@ private struct CommandBarTextView: NSViewRepresentable {
         if textView.string != text {
             textView.applyExternalText(text)
             context.coordinator.recomputeContentHeight()
+        }
+    }
+
+    /// Placeholder hint that mirrors the live submit mode so a user can
+    /// see at a glance which key actually submits. Switches between
+    /// "⏎ newline, ⌘⏎ run" (default) and "⏎ run, ⌘⏎ newline" (toggle on).
+    static func placeholderText(for mode: CommandBarView.SubmitMode) -> String {
+        switch mode {
+        case .enterIsNewline:
+            return "Type a command — \u{23CE} newline, \u{2318}\u{23CE} run, \u{2191}\u{2193} history, esc clear"
+        case .enterSubmits:
+            return "Type a command — \u{23CE} run, \u{2318}\u{23CE} newline, \u{2191}\u{2193} history, esc clear"
         }
     }
 
@@ -348,6 +379,7 @@ private struct CommandBarTextView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, @MainActor NSTextViewDelegate {
+        private var submitMode: CommandBarView.SubmitMode
         private let textBinding: Binding<String>
         private let contentHeightBinding: Binding<CGFloat>
         private let isFocusedBinding: Binding<Bool>
@@ -365,6 +397,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         var isApplyingHistory: Bool = false
 
         init(
+            submitMode: CommandBarView.SubmitMode,
             text: Binding<String>,
             contentHeight: Binding<CGFloat>,
             isFocused: Binding<Bool>,
@@ -372,6 +405,7 @@ private struct CommandBarTextView: NSViewRepresentable {
             onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
             onCancel: @escaping () -> Void
         ) {
+            self.submitMode = submitMode
             self.textBinding = text
             self.contentHeightBinding = contentHeight
             self.isFocusedBinding = isFocused
@@ -386,10 +420,12 @@ private struct CommandBarTextView: NSViewRepresentable {
         }
 
         func update(
+            submitMode: CommandBarView.SubmitMode,
             onSubmit: @escaping (String) -> Void,
             onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
             onCancel: @escaping () -> Void
         ) {
+            self.submitMode = submitMode
             self.onSubmit = onSubmit
             self.onHistoryRequest = onHistoryRequest
             self.onCancel = onCancel
@@ -439,17 +475,29 @@ private struct CommandBarTextView: NSViewRepresentable {
 
             switch event.keyCode {
             case 36, 76: // return / numpad enter
-                if isCommand || isOption || isControl {
-                    // Let upstream key handlers (e.g. Cmd+Return for
+                if isOption || isControl {
+                    // Let upstream key handlers (e.g. Ctrl+Return for
                     // pane flip) get a shot at the event.
                     return false
                 }
                 if isShift {
-                    // Shift+Enter inserts a literal newline.
+                    // Shift+Enter always inserts a literal newline.
+                    // Standard chat convention — works the same way
+                    // regardless of submitMode.
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 }
-                submitCurrentBuffer()
+                // Decide submit vs newline from the active mode:
+                //   .enterIsNewline (default): Enter = newline,
+                //     Cmd+Enter = submit.
+                //   .enterSubmits:             Enter = submit,
+                //     Cmd+Enter = newline.
+                switch (submitMode, isCommand) {
+                case (.enterIsNewline, false), (.enterSubmits, true):
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                case (.enterIsNewline, true), (.enterSubmits, false):
+                    submitCurrentBuffer()
+                }
                 return true
 
             case 53: // escape

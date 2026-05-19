@@ -43,6 +43,10 @@ struct WorkspaceGroupView: View {
     /// watchdog respawn). Stamped into terminal tab `.id(...)` so the
     /// BrokeredTerminalView is rebuilt against the fresh client.
     let brokerEpoch: Int
+    /// Which key submits the command bar. Threaded down from the root
+    /// so the user's palette-toggle takes effect immediately on every
+    /// live command bar.
+    let submitMode: CommandBarView.SubmitMode
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -53,6 +57,7 @@ struct WorkspaceGroupView: View {
         fileMap: PaneFileMap,
         agentClient: AgentClient,
         brokerEpoch: Int = 0,
+        submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (String) -> Void = { _ in },
         onCloseEditor: @escaping () -> Void = { }
@@ -68,6 +73,7 @@ struct WorkspaceGroupView: View {
         self.fileMap = fileMap
         self.agentClient = agentClient
         self.brokerEpoch = brokerEpoch
+        self.submitMode = submitMode
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
     }
@@ -80,6 +86,7 @@ struct WorkspaceGroupView: View {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -105,6 +112,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let fileMap: PaneFileMap
     let agentClient: AgentClient
     let brokerEpoch: Int
+    let submitMode: CommandBarView.SubmitMode
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -122,6 +130,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -137,6 +146,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -206,6 +216,7 @@ private final class WorkspaceContainerView: NSView {
         fileMap: PaneFileMap,
         agentClient: AgentClient,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -255,6 +266,7 @@ private final class WorkspaceContainerView: NSView {
                 fileMap: fileMap,
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
+                submitMode: submitMode,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -268,6 +280,7 @@ private final class WorkspaceContainerView: NSView {
                 fileMap: fileMap,
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
+                submitMode: submitMode,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -285,6 +298,7 @@ private final class WorkspaceContainerView: NSView {
         fileMap: PaneFileMap,
         agentClient: AgentClient,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -317,6 +331,7 @@ private final class WorkspaceContainerView: NSView {
             workspace: workspace,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             fileMap: fileMap,
             onCwdChanged: onCwdChanged
         )
@@ -392,6 +407,7 @@ private final class WorkspaceContainerView: NSView {
         fileMap: PaneFileMap,
         agentClient: AgentClient,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -405,6 +421,7 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
+                submitMode: submitMode,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -438,6 +455,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
@@ -448,6 +466,7 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
+                submitMode: submitMode,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -493,6 +512,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
@@ -521,12 +541,16 @@ private final class WorkspaceContainerView: NSView {
             // commands at a file doesn't make sense.
             if case .terminal = tab.kind {
                 Hairline(theme: theme)
-                CommandBarBand(theme: theme, onSubmit: { text in
-                    guard let paneID = tab.terminalPaneID else { return }
-                    let payload = text + "\n"
-                    let data = Data(payload.utf8)
-                    Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
-                })
+                CommandBarBand(
+                    theme: theme,
+                    submitMode: submitMode,
+                    onSubmit: { text in
+                        guard let paneID = tab.terminalPaneID else { return }
+                        let payload = text + "\n"
+                        let data = Data(payload.utf8)
+                        Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
+                    }
+                )
             }
         }
         .background(Color(hex: theme.terminal.background.hex))
@@ -622,10 +646,11 @@ private struct EditorTabContent: View {
 /// flush against the terminal grid.
 private struct CommandBarBand: View {
     let theme: ThemeSpec
+    let submitMode: CommandBarView.SubmitMode
     let onSubmit: (String) -> Void
 
     var body: some View {
-        CommandBarView(theme: theme, onSubmit: onSubmit)
+        CommandBarView(theme: theme, submitMode: submitMode, onSubmit: onSubmit)
             .padding(.vertical, BentoSpacing.xxs)
             .padding(.horizontal, BentoSpacing.xxs)
             .background(Color(hex: theme.chrome.elevated.hex))

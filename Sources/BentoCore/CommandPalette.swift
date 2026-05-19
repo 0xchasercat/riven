@@ -11,6 +11,9 @@ public enum CommandAction: String, Codable, Sendable {
     case restoreSession
     case search
     case trustProject
+    /// Toggle the command-bar's submission key between Enter and
+    /// Cmd+Enter. The preference is persisted in ThemePreferenceStore.
+    case toggleSubmitOnEnter
 }
 
 public struct Command: Equatable, Codable, Sendable, Identifiable {
@@ -36,7 +39,8 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
         Command(id: .openFile, group: "Project", title: "Open file…", shortcut: "cmd+p"),
         Command(id: .trustProject, group: "Project", title: "Trust this project"),
         Command(id: .restoreSession, group: "Project", title: "Restore last session"),
-        Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f")
+        Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f"),
+        Command(id: .toggleSubmitOnEnter, group: "Input", title: "Toggle Enter behavior in command bar")
     ]
 }
 

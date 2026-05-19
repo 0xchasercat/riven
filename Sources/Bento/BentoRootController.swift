@@ -23,6 +23,10 @@ final class BentoRootController: ObservableObject {
     /// SwiftUI `.id(...)` so they tear down + rebuild against the fresh
     /// client when the broker is respawned.
     @Published private(set) var brokerEpoch: Int = 0
+    /// Mirrors `preference.submitsOnEnter` so SwiftUI views see the change
+    /// the moment the user toggles via the palette. `false` (default) =
+    /// Enter inserts a newline, Cmd+Enter submits — Slack/Claude pattern.
+    @Published private(set) var submitsOnEnter: Bool = false
 
     init() {
         let support = FileManager.default
@@ -45,6 +49,7 @@ final class BentoRootController: ObservableObject {
         // parses session.yml, scans the tree) on the next runloop tick.
         self.state = Self.fallbackState(cwd: cwd, themeID: themeID)
         self.openFilePaths = self.state.openFiles
+        self.submitsOnEnter = preference.submitsOnEnter
 
         Task { [weak self] in
             guard let self else { return }
@@ -326,6 +331,16 @@ final class BentoRootController: ObservableObject {
                 self.state = new
             }
         }
+    }
+
+    /// Flip the Enter / Cmd+Enter binding in the command bar. Persists
+    /// the new state via `ThemePreferenceStore` and republishes the
+    /// mirrored `@Published` so live SwiftUI views see the change
+    /// without restarting the session. Wired through the palette
+    /// (`CommandAction.toggleSubmitOnEnter`).
+    func toggleSubmitsOnEnter() {
+        preference.toggleSubmitsOnEnter()
+        submitsOnEnter = preference.submitsOnEnter
     }
 
     /// Cycle to the next built-in theme. Wired through `CommandAction.cycleTheme`.

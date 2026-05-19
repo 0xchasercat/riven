@@ -80,6 +80,7 @@ struct BentoRootView: View {
                 fileMap: controller.fileMap,
                 agentClient: controller.agentClient,
                 brokerEpoch: controller.brokerEpoch,
+                submitMode: controller.submitsOnEnter ? .enterSubmits : .enterIsNewline,
                 onGraphChange: { controller.recordPaneGraph($0) },
                 onOpenFile: { controller.openFile($0) },
                 onCwdChanged: { paneID, cwd in
@@ -211,6 +212,8 @@ struct BentoRootView: View {
             presentOpenProjectPicker()
         case .showTrustPrompt:
             activeOverlay = .trust
+        case .toggleSubmitOnEnter:
+            controller.toggleSubmitsOnEnter()
         }
     }
 

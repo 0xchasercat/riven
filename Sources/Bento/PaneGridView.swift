@@ -23,6 +23,9 @@ struct PaneGridView: NSViewRepresentable {
     /// stamp it into its `.id(...)` and SwiftUI tears down + rebuilds
     /// the underlying `BrokeredTerminalView` against the fresh client.
     let brokerEpoch: Int
+    /// Which key submits the command bar. Sourced from
+    /// `BentoRootController.submitsOnEnter`.
+    let submitMode: CommandBarView.SubmitMode
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (PaneID, String) -> Void
@@ -34,6 +37,7 @@ struct PaneGridView: NSViewRepresentable {
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
         brokerEpoch: Int = 0,
+        submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
@@ -49,6 +53,7 @@ struct PaneGridView: NSViewRepresentable {
         self.fileMap = fileMap
         self.agentClient = agentClient
         self.brokerEpoch = brokerEpoch
+        self.submitMode = submitMode
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
@@ -68,6 +73,7 @@ struct PaneGridView: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -88,6 +94,7 @@ struct PaneGridView: NSViewRepresentable {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -189,6 +196,7 @@ final class BentoPaneContainerView: NSView {
         fileMap: PaneFileMap,
         agentClient: AgentClient?,
         brokerEpoch: Int,
+        submitMode: CommandBarView.SubmitMode,
         onGraphChange: @escaping (PaneGraph) -> Void,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
@@ -215,6 +223,7 @@ final class BentoPaneContainerView: NSView {
             fileMap: fileMap,
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
+            submitMode: submitMode,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -336,6 +345,7 @@ private struct PaneTreeBuilder {
     let fileMap: PaneFileMap
     let agentClient: AgentClient?
     let brokerEpoch: Int
+    let submitMode: CommandBarView.SubmitMode
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
     let onSplit: @MainActor (PaneID) -> Void
@@ -477,6 +487,7 @@ private struct PaneTreeBuilder {
                         fileMap: fileMap,
                         agentClient: agentClient,
                         brokerEpoch: brokerEpoch,
+                        submitMode: submitMode,
                         onOpenFile: onOpenFile,
                         onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )

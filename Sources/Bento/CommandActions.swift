@@ -32,6 +32,10 @@ public enum CommandAction: Equatable, Sendable {
     case showSearch
     /// Reveal the trust prompt for the currently open project.
     case showTrustPrompt
+    /// Flip the command bar's Enter / Cmd+Enter binding. The dispatcher
+    /// asks the controller to update the persisted preference; live
+    /// command bars re-render with the new mode on the next refresh.
+    case toggleSubmitOnEnter
 }
 
 public extension CommandAction {
@@ -56,6 +60,8 @@ public extension CommandAction {
             return .showTrustPrompt
         case .openProject:
             return .openProjectPicker
+        case .toggleSubmitOnEnter:
+            return .toggleSubmitOnEnter
         case .flipPane, .zoomPane, .restoreSession:
             return nil
         }
