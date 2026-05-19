@@ -42,6 +42,15 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     /// Which inner tab currently has focus / is rendered. Must match
     /// one of `tabs[*].id`; if it doesn't, `tabs[0]` is the fallback.
     public var focusedTabID: TabID
+    /// User-given name for this workspace, overriding the cwd-derived
+    /// label that WorkspaceTabBar would otherwise pick. `nil` (default)
+    /// falls back to that derivation; an empty string is normalized
+    /// back to `nil` on assignment. Persisted in snapshots.
+    public var customName: String? {
+        didSet {
+            if customName?.isEmpty == true { customName = nil }
+        }
+    }
 
     public init(
         initialCwd: String,
@@ -52,7 +61,8 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         focusedSubpane: WorkspaceSubpane = .terminal,
         sidebarState: WorkspaceSidebarState = .collapsed,
         tabs: [WorkspaceInnerTab]? = nil,
-        focusedTabID: TabID? = nil
+        focusedTabID: TabID? = nil,
+        customName: String? = nil
     ) {
         self.initialCwd = initialCwd
         self.currentCwd = currentCwd ?? initialCwd
@@ -73,6 +83,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         let resolvedTabs = tabs ?? [defaultTab]
         self.tabs = resolvedTabs
         self.focusedTabID = focusedTabID ?? resolvedTabs.first?.id ?? defaultTab.id
+        self.customName = (customName?.isEmpty == true) ? nil : customName
     }
 
     /// Convenience: the currently-focused inner tab, or the first tab
@@ -127,6 +138,46 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         return copy
     }
 
+    /// Return a copy with the workspace's `customName` set. Empty string
+    /// or whitespace-only normalizes to nil (reverts to the cwd-derived
+    /// label). No-op when the value is unchanged.
+    public func renamed(to newName: String?) -> WorkspaceGroup {
+        let normalized: String? = {
+            guard let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else { return nil }
+            return trimmed
+        }()
+        guard customName != normalized else { return self }
+        var copy = self
+        copy.customName = normalized
+        return copy
+    }
+
+    /// Return a copy with `id`'s `displayName` set to `newName`. Empty
+    /// string or whitespace-only resets the display name to the
+    /// kind-default (`shell` for terminals, file basename for editors).
+    /// No-op when `id` doesn't match any tab.
+    public func renamingTab(_ id: TabID, to newName: String) -> WorkspaceGroup {
+        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return self }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: String
+        if trimmed.isEmpty {
+            // Reset to the kind-default.
+            switch tabs[idx].kind {
+            case .terminal:
+                resolved = "shell"
+            case .editor(let path):
+                resolved = path.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Untitled"
+            }
+        } else {
+            resolved = trimmed
+        }
+        guard tabs[idx].displayName != resolved else { return self }
+        var copy = self
+        copy.tabs[idx].displayName = resolved
+        return copy
+    }
+
     // MARK: - Codable
     //
     // Custom decoder so legacy snapshots (which carry an `openEditorPath`
@@ -144,6 +195,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         case sidebarState
         case tabs
         case focusedTabID
+        case customName
         // Legacy:
         case openEditorPath
     }
@@ -185,6 +237,9 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
 
         let decodedFocus = try c.decodeIfPresent(TabID.self, forKey: .focusedTabID)
         self.focusedTabID = decodedFocus ?? decodedTabs.first?.id ?? TabID()
+
+        let decodedName = try c.decodeIfPresent(String.self, forKey: .customName)
+        self.customName = (decodedName?.isEmpty == true) ? nil : decodedName
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -198,6 +253,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         try c.encode(sidebarState, forKey: .sidebarState)
         try c.encode(tabs, forKey: .tabs)
         try c.encode(focusedTabID, forKey: .focusedTabID)
+        try c.encodeIfPresent(customName, forKey: .customName)
         // Don't re-emit `openEditorPath` — it's strictly a decode-side
         // back-compat hook.
     }

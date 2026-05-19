@@ -4,11 +4,12 @@ import SwiftUI
 
 /// Inner tab strip rendered above a workspace's terminal area. One row
 /// per `WorkspaceInnerTab` — the focused tab gets the accent indicator
-/// underneath. Click a tab to focus it, click its `×` to close it (when
-/// more than one tab exists). The `+` button appends a fresh tab.
+/// underneath. Click a tab to focus it, double-click to rename it
+/// inline, click its `×` to close it (when more than one tab exists).
+/// The `+` button appends a fresh tab.
 ///
-/// Tab focus / close / add all flow through NotificationCenter (the
-/// same pattern as `WorkspaceTabBar` and the sidebar toggle) so we
+/// Tab focus / close / add / rename all flow through NotificationCenter
+/// (the same pattern as `WorkspaceTabBar` and the sidebar toggle) so we
 /// don't have to thread per-row callbacks through six layers of split
 /// views and hosting controllers.
 struct InnerTabStrip: View {
@@ -46,14 +47,22 @@ private struct InnerTabChip: View {
     let canClose: Bool
 
     @State private var isHovered = false
+    @State private var isEditing = false
+    @State private var draft: String = ""
+    @FocusState private var isFieldFocused: Bool
 
     var body: some View {
-        Button {
-            NotificationCenter.default.post(
-                name: .bentoFocusInnerTab,
-                object: tab.id
-            )
-        } label: {
+        ZStack(alignment: .leading) {
+            ZStack(alignment: .bottom) {
+                Color(hex: isActive
+                    ? theme.chrome.elevated.hex
+                    : theme.chrome.background.hex)
+                if isActive {
+                    Color(hex: theme.chrome.accent.hex)
+                        .frame(height: 2)
+                }
+            }
+
             HStack(spacing: BentoSpacing.xs) {
                 // Tiny kind glyph so a user can scan terminal vs editor
                 // tabs at a glance without reading the label. `›_` for
@@ -63,13 +72,17 @@ private struct InnerTabChip: View {
                     .foregroundStyle(Color(hex: isActive
                         ? theme.chrome.accent.hex
                         : theme.chrome.tertiaryText.hex))
-                Text(tab.displayName)
-                    .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
-                    .foregroundStyle(Color(hex: isActive
-                        ? theme.chrome.text.hex
-                        : theme.chrome.dimText.hex))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if isEditing {
+                    inlineEditor
+                } else {
+                    Text(tab.displayName)
+                        .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
+                        .foregroundStyle(Color(hex: isActive
+                            ? theme.chrome.text.hex
+                            : theme.chrome.dimText.hex))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if canClose {
                     Button {
                         NotificationCenter.default.post(
@@ -93,22 +106,22 @@ private struct InnerTabChip: View {
                 }
             }
             .padding(.horizontal, BentoSpacing.m)
-            .frame(height: 36)
-            .background(
-                ZStack(alignment: .bottom) {
-                    Color(hex: isActive
-                        ? theme.chrome.elevated.hex
-                        : theme.chrome.background.hex)
-                    if isActive {
-                        Color(hex: theme.chrome.accent.hex)
-                            .frame(height: 2)
-                    }
-                }
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .focusable(false)
+        .frame(height: 36)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            draft = tab.displayName
+            isEditing = true
+            DispatchQueue.main.async { isFieldFocused = true }
+        }
+        .onTapGesture {
+            if !isEditing {
+                NotificationCenter.default.post(
+                    name: .bentoFocusInnerTab,
+                    object: tab.id
+                )
+            }
+        }
         .onHover { isHovered = $0 }
         .animation(BentoMotion.hover, value: isHovered)
         .animation(BentoMotion.hover, value: isActive)
@@ -121,6 +134,35 @@ private struct InnerTabChip: View {
         case .terminal: return "›_"
         case .editor: return "✎"
         }
+    }
+
+    private var inlineEditor: some View {
+        TextField("", text: $draft)
+            .textFieldStyle(.plain)
+            .focused($isFieldFocused)
+            .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
+            .foregroundStyle(Color(hex: theme.chrome.text.hex))
+            .frame(minWidth: 60)
+            .onSubmit(commit)
+            .onExitCommand(perform: cancel)
+            .onChange(of: isFieldFocused) { _, focused in
+                if !focused, isEditing { commit() }
+            }
+    }
+
+    private func commit() {
+        NotificationCenter.default.post(
+            name: .bentoRenameInnerTab,
+            object: InnerTabRename(id: tab.id, name: draft)
+        )
+        isEditing = false
+        isFieldFocused = false
+    }
+
+    private func cancel() {
+        isEditing = false
+        isFieldFocused = false
+        draft = tab.displayName
     }
 }
 
@@ -151,7 +193,16 @@ private struct AddInnerTabButton: View {
     }
 }
 
+/// Payload for `.bentoRenameInnerTab` notifications. Notifications use
+/// `Any?` for their object, so we need a typed wrapper to carry both
+/// the tab id and the new name in one hop.
+struct InnerTabRename: Equatable {
+    let id: TabID
+    let name: String
+}
+
 extension Notification.Name {
     static let bentoFocusInnerTab = Notification.Name("BentoFocusInnerTab")
     static let bentoCloseInnerTab = Notification.Name("BentoCloseInnerTab")
+    static let bentoRenameInnerTab = Notification.Name("BentoRenameInnerTab")
 }

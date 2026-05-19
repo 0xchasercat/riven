@@ -164,4 +164,80 @@ struct WorkspaceInnerTabMutationTests {
         let result = base.focusingTab(TabID("does-not-exist"))
         #expect(result == base)
     }
+
+    // MARK: - renamed (workspace customName)
+
+    @Test("renamed sets customName when given a non-empty value")
+    func renameSetsCustomName() {
+        let base = freshWorkspace()
+        let updated = base.renamed(to: "deploy box")
+        #expect(updated.customName == "deploy box")
+        // Tab list is untouched.
+        #expect(updated.tabs == base.tabs)
+    }
+
+    @Test("renamed normalizes whitespace-only input back to nil")
+    func renameWhitespaceClearsCustomName() {
+        let base = freshWorkspace().renamed(to: "current name")
+        let cleared = base.renamed(to: "   ")
+        #expect(cleared.customName == nil)
+    }
+
+    @Test("renamed with the same value is a no-op")
+    func renameSameIsNoop() {
+        let base = freshWorkspace().renamed(to: "deploy box")
+        let again = base.renamed(to: "deploy box")
+        #expect(again == base)
+    }
+
+    // MARK: - renamingTab (inner-tab displayName)
+
+    @Test("renamingTab sets displayName on the matching tab")
+    func renameInnerSetsDisplayName() {
+        let base = freshWorkspace()
+        let updated = base.renamingTab(TabID("shell"), to: "build")
+        #expect(updated.tabs.first?.displayName == "build")
+    }
+
+    @Test("renamingTab with empty input resets a terminal tab to 'shell'")
+    func renameInnerEmptyTerminalResets() {
+        let base = freshWorkspace().renamingTab(TabID("shell"), to: "build")
+        let cleared = base.renamingTab(TabID("shell"), to: "")
+        #expect(cleared.tabs.first?.displayName == "shell")
+    }
+
+    @Test("renamingTab with empty input resets an editor tab to its file basename")
+    func renameInnerEmptyEditorResetsToBasename() {
+        let editor = WorkspaceInnerTab(
+            id: TabID("editor"),
+            displayName: "renamed",
+            kind: .editor(path: "/tmp/proj/Notes.md"),
+            cwd: "/tmp/proj"
+        )
+        let workspace = freshWorkspace().appendingTab(editor)
+        let cleared = workspace.renamingTab(TabID("editor"), to: "  ")
+        let restored = cleared.tabs.first(where: { $0.id == TabID("editor") })
+        #expect(restored?.displayName == "Notes.md")
+    }
+
+    @Test("renamingTab with empty input resets a scratch editor tab to 'Untitled'")
+    func renameInnerEmptyScratchResetsToUntitled() {
+        let scratch = WorkspaceInnerTab(
+            id: TabID("scratch"),
+            displayName: "my-draft",
+            kind: .editor(path: nil),
+            cwd: "/tmp/proj"
+        )
+        let workspace = freshWorkspace().appendingTab(scratch)
+        let cleared = workspace.renamingTab(TabID("scratch"), to: "")
+        let restored = cleared.tabs.first(where: { $0.id == TabID("scratch") })
+        #expect(restored?.displayName == "Untitled")
+    }
+
+    @Test("renamingTab with an unknown id is a no-op")
+    func renameInnerUnknownIsNoop() {
+        let base = freshWorkspace()
+        let result = base.renamingTab(TabID("does-not-exist"), to: "x")
+        #expect(result == base)
+    }
 }

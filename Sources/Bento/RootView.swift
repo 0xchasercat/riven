@@ -54,7 +54,10 @@ struct BentoRootView: View {
             onToggleSidebar: { controller.toggleFocusedSidebar() },
             onClearTerminal: { controller.clearFocusedTerminal() },
             onFocusInnerTab: { controller.focusInnerTab($0) },
-            onCloseInnerTab: { controller.closeInnerTab($0) }
+            onCloseInnerTab: { controller.closeInnerTab($0) },
+            onRenameInnerTab: { rename in
+                controller.renameInnerTab(rename.id, to: rename.name)
+            }
         ))
         // Auto-open the trust prompt the first time we see a project
         // that requires trust this session. The toolbar pill remains as
@@ -78,7 +81,8 @@ struct BentoRootView: View {
                 focusedID: controller.state.paneGraph.focusedPaneID,
                 onSelect: { controller.focusTab($0) },
                 onClose: { controller.closeTab($0) },
-                onAdd: { controller.openNewWorkspace() }
+                onAdd: { controller.openNewWorkspace() },
+                onRename: { id, name in controller.renameWorkspace(paneID: id, to: name) }
             )
             toolbar
             PaneGridView(
@@ -381,6 +385,7 @@ private struct NotificationWiring: ViewModifier {
     let onClearTerminal: () -> Void
     let onFocusInnerTab: (TabID) -> Void
     let onCloseInnerTab: (TabID) -> Void
+    let onRenameInnerTab: (InnerTabRename) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -398,6 +403,9 @@ private struct NotificationWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCloseInnerTab)) { note in
                 if let id = note.object as? TabID { onCloseInnerTab(id) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoRenameInnerTab)) { note in
+                if let rename = note.object as? InnerTabRename { onRenameInnerTab(rename) }
             }
     }
 }

@@ -282,6 +282,30 @@ final class BentoRootController: ObservableObject {
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
+    /// Rename a workspace tab (the top strip). Empty / whitespace input
+    /// reverts to the cwd-derived label. The workspace is found by its
+    /// pane ID, not by focus — so the editor in WorkspaceTabBar can
+    /// rename a tab that isn't currently focused.
+    func renameWorkspace(paneID: PaneID, to newName: String) {
+        guard var pane = state.paneGraph.pane(paneID),
+              let workspace = pane.workspace else { return }
+        let updated = workspace.renamed(to: newName)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Rename an inner tab inside the focused workspace. Empty input
+    /// resets the displayName to the kind-default.
+    func renameInnerTab(_ id: TabID, to newName: String) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else { return }
+        let updated = workspace.renamingTab(id, to: newName)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
     /// Move focus to an inner tab within the focused workspace.
     func focusInnerTab(_ id: TabID) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
