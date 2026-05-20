@@ -75,16 +75,39 @@ struct BentoRootView: View {
 
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            WorkspaceTabBar(
-                theme: theme,
-                tabs: controller.state.paneGraph.leaves(),
-                focusedID: controller.state.paneGraph.focusedPaneID,
-                onSelect: { controller.focusTab($0) },
-                onClose: { controller.closeTab($0) },
-                onAdd: { controller.openNewWorkspace() },
-                onRename: { id, name in controller.renameWorkspace(paneID: id, to: name) }
-            )
-            toolbar
+            // H8: WorkspaceTabBar + toolbar share a single
+            // NSVisualEffectView background so the translucent title bar
+            // (set in BentoApp via `titlebarAppearsTransparent` +
+            // `.fullSizeContentView`) bleeds downward through both. The
+            // result is one continuous chrome panel from title bar →
+            // tab strip → toolbar → hairline → pane content.
+            //
+            // `.windowBackground` matches the title bar's resting tint
+            // (so there's no visible seam at y=titlebarHeight), and
+            // `.behindWindow` blends with whatever sits behind the window
+            // rather than the next sibling layer, giving the "frosted
+            // glass" look macOS users expect from native chrome.
+            ZStack(alignment: .bottom) {
+                VibrancyBackground(
+                    material: .windowBackground,
+                    blendingMode: .behindWindow
+                )
+                VStack(spacing: 0) {
+                    WorkspaceTabBar(
+                        theme: theme,
+                        tabs: controller.state.paneGraph.leaves(),
+                        focusedID: controller.state.paneGraph.focusedPaneID,
+                        onSelect: { controller.focusTab($0) },
+                        onClose: { controller.closeTab($0) },
+                        onAdd: { controller.openNewWorkspace() },
+                        onRename: { id, name in controller.renameWorkspace(paneID: id, to: name) }
+                    )
+                    toolbar
+                }
+                // Single hairline at the bottom marks the seam between
+                // the vibrant chrome and the opaque pane grid below.
+                Hairline(theme: theme)
+            }
             PaneGridView(
                 theme: theme,
                 paneGraph: controller.state.paneGraph,
@@ -172,7 +195,10 @@ struct BentoRootView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 32)
-        .background(Color(hex: theme.chrome.background.hex))
+        // Soft tint over the shared vibrancy underlay (see
+        // `mainColumn`'s ZStack). Matches WorkspaceTabBar's alpha so the
+        // two strips read as one panel.
+        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.6))
         .onAppear {
             // Seed the draft on first render so the field shows the
             // focused workspace's path, not an empty string.

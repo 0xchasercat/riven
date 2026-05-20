@@ -63,10 +63,11 @@ struct WorkspaceTabBar: View {
             AddTabButton(theme: theme, action: onAdd)
         }
         .frame(height: 44)
-        .background(Color(hex: theme.chrome.background.hex))
-        .overlay(alignment: .bottom) {
-            Hairline(theme: theme)
-        }
+        // Low-alpha tint so the NSVisualEffectView wrapped around the
+        // tab bar + toolbar in `RootView.mainColumn` (H8) reads through.
+        // Without the tint the vibrancy is too washed-out to anchor the
+        // chrome; without the alpha, the vibrancy is hidden entirely.
+        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.6))
     }
 
     /// Produce a short tab label. Workspaces prefer the user-set
@@ -108,11 +109,20 @@ private struct TabChip: View {
             // or not, so the chip dimensions don't jump when the user
             // double-clicks to rename.
             ZStack(alignment: .bottom) {
+                // Active tab gets a fully opaque elevated tint so it
+                // anchors against the vibrancy behind the tab bar; inactive
+                // tabs let the vibrancy through with a soft tint so the
+                // bar still reads as a panel rather than a window cutout.
                 Color(hex: isActive
                     ? theme.chrome.elevated.hex
                     : theme.chrome.background.hex)
+                    .opacity(isActive ? 1.0 : 0.0)
                 if isActive {
+                    // Accent bar stays at full opacity so it remains the
+                    // strongest cue on the strip, even with vibrancy
+                    // active behind it.
                     Color(hex: theme.chrome.accent.hex)
+                        .opacity(1.0)
                         .frame(height: 2)
                 }
             }

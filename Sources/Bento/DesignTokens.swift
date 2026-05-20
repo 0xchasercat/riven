@@ -167,6 +167,45 @@ public struct Surface<Content: View>: View {
     }
 }
 
+// MARK: - Vibrancy background
+
+/// SwiftUI wrapper around `NSVisualEffectView` so we can paint translucent
+/// macOS "vibrancy" behind any view tree. We use this to bleed the
+/// window's transparent title bar through the tab strip + toolbar so the
+/// top of the window reads as a single continuous panel rather than a
+/// stack of disconnected horizontal strips (see H8 in
+/// `scripts/notes/warp-vs-bento-polish.md`).
+///
+/// `state = .followsWindowActiveState` automatically dims the vibrancy
+/// when the window loses key focus — matches what every native macOS app
+/// does and avoids manual active/inactive plumbing on our side.
+public struct VibrancyBackground: NSViewRepresentable {
+    public let material: NSVisualEffectView.Material
+    public let blendingMode: NSVisualEffectView.BlendingMode
+
+    public init(
+        material: NSVisualEffectView.Material = .windowBackground,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    ) {
+        self.material = material
+        self.blendingMode = blendingMode
+    }
+
+    public func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .followsWindowActiveState
+        view.isEmphasized = false
+        return view
+    }
+
+    public func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+    }
+}
+
 // MARK: - Hairline divider
 
 /// A 1-px (looks 0.5-pt on Retina) divider in the theme's hairline color.
