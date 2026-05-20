@@ -87,25 +87,35 @@ struct BentoRootView: View {
             // `.behindWindow` blends with whatever sits behind the window
             // rather than the next sibling layer, giving the "frosted
             // glass" look macOS users expect from native chrome.
-            ZStack(alignment: .bottom) {
+            //
+            // The vibrancy lives as a `.background()` modifier — NOT a
+            // sibling ZStack. `NSViewRepresentable` has no intrinsic
+            // size, so a sibling would stretch to fill the outer VStack
+            // and crush the tab bar into a thin strip at the bottom of
+            // a huge dead zone. `.background()` constrains the vibrancy
+            // to exactly the natural size of the chrome strip (tab bar
+            // + toolbar = 76pt), which is what we want.
+            VStack(spacing: 0) {
+                WorkspaceTabBar(
+                    theme: theme,
+                    tabs: controller.state.paneGraph.leaves(),
+                    focusedID: controller.state.paneGraph.focusedPaneID,
+                    onSelect: { controller.focusTab($0) },
+                    onClose: { controller.closeTab($0) },
+                    onAdd: { controller.openNewWorkspace() },
+                    onRename: { id, name in controller.renameWorkspace(paneID: id, to: name) }
+                )
+                toolbar
+            }
+            .background(
                 VibrancyBackground(
                     material: .windowBackground,
                     blendingMode: .behindWindow
                 )
-                VStack(spacing: 0) {
-                    WorkspaceTabBar(
-                        theme: theme,
-                        tabs: controller.state.paneGraph.leaves(),
-                        focusedID: controller.state.paneGraph.focusedPaneID,
-                        onSelect: { controller.focusTab($0) },
-                        onClose: { controller.closeTab($0) },
-                        onAdd: { controller.openNewWorkspace() },
-                        onRename: { id, name in controller.renameWorkspace(paneID: id, to: name) }
-                    )
-                    toolbar
-                }
-                // Single hairline at the bottom marks the seam between
-                // the vibrant chrome and the opaque pane grid below.
+            )
+            // Single hairline at the bottom marks the seam between the
+            // vibrant chrome and the opaque pane grid below.
+            .overlay(alignment: .bottom) {
                 Hairline(theme: theme)
             }
             PaneGridView(
