@@ -1,5 +1,63 @@
 import Foundation
 
+// MARK: - palette tuning notes
+//
+// The 12 chromatic ANSI slots below (`red/green/blue/cyan/magenta/yellow`
+// + their `bright*` siblings) are derived from the pure SGR-spec defaults
+// (#FF0000, #00FF00, … #FFFF55) with their saturation knocked down 20%
+// to keep `ls --color` and vim syntax highlighting from reading as a
+// fruit-salad on Bento's surfaces. The 8 achromatic slots (black, white,
+// dim foreground/background/cursor) plus `foreground`/`background`/
+// `prompt`/`cursor` are *not* touched by this tune — they're picked per
+// theme for contrast and identity, not for chroma.
+//
+// Conversion math (RGB ↔ HSL, all channels normalized to [0,1]):
+//
+//   rgb -> hsl:
+//     mx = max(r,g,b), mn = min(r,g,b)
+//     L  = (mx + mn) / 2
+//     if mx == mn: H = S = 0                 // achromatic
+//     else:
+//       d = mx - mn
+//       S = d / (mx + mn)        if L < 0.5
+//           d / (2 - mx - mn)    otherwise
+//       H = 60 * ((g-b)/d mod 6) if mx == r
+//           60 * ((b-r)/d + 2)   if mx == g
+//           60 * ((r-g)/d + 4)   if mx == b
+//
+//   hsl -> rgb (via chroma decomposition):
+//     C  = (1 - |2L - 1|) * S
+//     H' = H / 60
+//     X  = C * (1 - |H' mod 2 - 1|)
+//     m  = L - C/2
+//     (r,g,b) = (C+m, X+m, 0+m) for H' in [0,1) and cycles through the
+//               six sectors as H' increases.
+//
+// Tuning recipe per slot, applied mechanically:
+//   1. hex -> (H, S, L)
+//   2. S' = S * 0.80              // saturation knock-down
+//   3. (bright variants only) if |L_bright - L_regular| < 0.10:
+//          L_bright' = min(1, L_bright + 0.05)
+//   4. (H, S', L') -> hex          (uppercase, 6 hex digits)
+//
+// Worked example for the regular `red` slot:
+//   #FF0000 -> H=0,   S=1.000, L=0.500
+//   S' = 0.800
+//   no bright clamp (this is the regular slot)
+//   (0, 0.800, 0.500) -> #E61919
+//
+// Worked example for the `brightRed` slot:
+//   #FF5555 -> H=0,   S=1.000, L=0.667
+//   S' = 0.800
+//   L_red=0.500, L_brightRed=0.667 -> |Δ| = 0.167 >= 0.10, no clamp
+//   (0, 0.800, 0.667) -> #EE6666
+//
+// To re-tune from a *different* baseline (e.g. switch from pure SGR to a
+// Warp-style starting palette, or change the 0.80 factor): plug those
+// hex values + the new factor into the recipe above. The macOS Color
+// Picker round-trips HSL for live previewing if you want to eyeball
+// without writing code. Keep this comment in sync with the literals.
+
 public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
     public var id: String
     public var name: String
@@ -37,7 +95,26 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
                 warning: "#d9a663",
                 danger: "#bf6e54"
             ),
-            terminal: TerminalColors(foreground: "#ece1cb", background: "#1a130d", prompt: "#d9a663", cursor: "#d9a663"),
+            terminal: TerminalColors(
+                foreground: "#ece1cb",
+                background: "#1a130d",
+                prompt: "#d9a663",
+                cursor: "#d9a663",
+                ansi: ANSIPalette(
+                    red:           "#E61919",
+                    green:         "#19E619",
+                    blue:          "#1919E6",
+                    cyan:          "#19E6E6",
+                    magenta:       "#E619E6",
+                    yellow:        "#E6E619",
+                    brightRed:     "#EE6666",
+                    brightGreen:   "#66EE66",
+                    brightBlue:    "#6666EE",
+                    brightCyan:    "#66EEEE",
+                    brightMagenta: "#EE66EE",
+                    brightYellow:  "#EEEE66"
+                )
+            ),
             syntax: SyntaxColors(keyword: "#d9a663", function: "#ece1cb", string: "#a8945c", comment: "#5a4a30")
         ),
         ThemeSpec(
@@ -61,7 +138,26 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
                 warning: "#b0a060",
                 danger: "#b06866"
             ),
-            terminal: TerminalColors(foreground: "#d4d4d4", background: "#141414", prompt: "#9a9a9a", cursor: "#e8e8e8"),
+            terminal: TerminalColors(
+                foreground: "#d4d4d4",
+                background: "#141414",
+                prompt: "#9a9a9a",
+                cursor: "#e8e8e8",
+                ansi: ANSIPalette(
+                    red:           "#E61919",
+                    green:         "#19E619",
+                    blue:          "#1919E6",
+                    cyan:          "#19E6E6",
+                    magenta:       "#E619E6",
+                    yellow:        "#E6E619",
+                    brightRed:     "#EE6666",
+                    brightGreen:   "#66EE66",
+                    brightBlue:    "#6666EE",
+                    brightCyan:    "#66EEEE",
+                    brightMagenta: "#EE66EE",
+                    brightYellow:  "#EEEE66"
+                )
+            ),
             syntax: SyntaxColors(keyword: "#c8c8c8", function: "#e8e8e8", string: "#9a9a9a", comment: "#4a4a4a")
         ),
         ThemeSpec(
@@ -85,7 +181,26 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
                 warning: "#e0af68",
                 danger: "#f7768e"
             ),
-            terminal: TerminalColors(foreground: "#c0caf5", background: "#1a1b26", prompt: "#bb9af7", cursor: "#bb9af7"),
+            terminal: TerminalColors(
+                foreground: "#c0caf5",
+                background: "#1a1b26",
+                prompt: "#bb9af7",
+                cursor: "#bb9af7",
+                ansi: ANSIPalette(
+                    red:           "#E61919",
+                    green:         "#19E619",
+                    blue:          "#1919E6",
+                    cyan:          "#19E6E6",
+                    magenta:       "#E619E6",
+                    yellow:        "#E6E619",
+                    brightRed:     "#EE6666",
+                    brightGreen:   "#66EE66",
+                    brightBlue:    "#6666EE",
+                    brightCyan:    "#66EEEE",
+                    brightMagenta: "#EE66EE",
+                    brightYellow:  "#EEEE66"
+                )
+            ),
             syntax: SyntaxColors(keyword: "#bb9af7", function: "#7aa2f7", string: "#9ece6a", comment: "#565f89")
         ),
         ThemeSpec(
@@ -109,7 +224,26 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
                 warning: "#a07a30",
                 danger: "#a04640"
             ),
-            terminal: TerminalColors(foreground: "#2a2620", background: "#f6f2e7", prompt: "#6a5a30", cursor: "#2a2620"),
+            terminal: TerminalColors(
+                foreground: "#2a2620",
+                background: "#f6f2e7",
+                prompt: "#6a5a30",
+                cursor: "#2a2620",
+                ansi: ANSIPalette(
+                    red:           "#E61919",
+                    green:         "#19E619",
+                    blue:          "#1919E6",
+                    cyan:          "#19E6E6",
+                    magenta:       "#E619E6",
+                    yellow:        "#E6E619",
+                    brightRed:     "#EE6666",
+                    brightGreen:   "#66EE66",
+                    brightBlue:    "#6666EE",
+                    brightCyan:    "#66EEEE",
+                    brightMagenta: "#EE66EE",
+                    brightYellow:  "#EEEE66"
+                )
+            ),
             syntax: SyntaxColors(keyword: "#6a3a8a", function: "#2a4a8a", string: "#5a6a32", comment: "#9a907a")
         )
     ]
@@ -203,6 +337,96 @@ public struct TerminalColors: Equatable, Codable, Sendable {
     public var background: HexColor
     public var prompt: HexColor
     public var cursor: HexColor
+    /// The 12 chromatic ANSI slots (regular + bright pairs for the six
+    /// non-achromatic colors). Achromatic slots (black/white/dim) are
+    /// derived from `foreground`/`background` at draw time rather than
+    /// stored here — only the chromatic slots need theme curation, which
+    /// is where the "fruit salad" problem actually lives.
+    ///
+    /// See the `palette tuning notes` MARK at the top of this file for
+    /// the conversion math used to derive these values from the SGR-
+    /// spec defaults (#FF0000, #00FF00, …).
+    public var ansi: ANSIPalette
+
+    public init(
+        foreground: HexColor,
+        background: HexColor,
+        prompt: HexColor,
+        cursor: HexColor,
+        ansi: ANSIPalette = .tuned
+    ) {
+        self.foreground = foreground
+        self.background = background
+        self.prompt = prompt
+        self.cursor = cursor
+        self.ansi = ansi
+    }
+}
+
+/// The 12 chromatic ANSI palette slots used by `ls --color`, vim syntax
+/// highlighting, and any program that emits SGR 30–37 / 90–97 with a
+/// non-achromatic index. Values shipped here are the SGR-spec defaults
+/// retuned to 80% saturation (see `palette tuning notes` at the top of
+/// this file).
+public struct ANSIPalette: Equatable, Codable, Sendable {
+    public var red: HexColor
+    public var green: HexColor
+    public var blue: HexColor
+    public var cyan: HexColor
+    public var magenta: HexColor
+    public var yellow: HexColor
+    public var brightRed: HexColor
+    public var brightGreen: HexColor
+    public var brightBlue: HexColor
+    public var brightCyan: HexColor
+    public var brightMagenta: HexColor
+    public var brightYellow: HexColor
+
+    public init(
+        red: HexColor,
+        green: HexColor,
+        blue: HexColor,
+        cyan: HexColor,
+        magenta: HexColor,
+        yellow: HexColor,
+        brightRed: HexColor,
+        brightGreen: HexColor,
+        brightBlue: HexColor,
+        brightCyan: HexColor,
+        brightMagenta: HexColor,
+        brightYellow: HexColor
+    ) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.cyan = cyan
+        self.magenta = magenta
+        self.yellow = yellow
+        self.brightRed = brightRed
+        self.brightGreen = brightGreen
+        self.brightBlue = brightBlue
+        self.brightCyan = brightCyan
+        self.brightMagenta = brightMagenta
+        self.brightYellow = brightYellow
+    }
+
+    /// SGR-spec defaults knocked down to 80% saturation — the baseline
+    /// palette used by all four bundled themes. See the `palette tuning
+    /// notes` MARK at the top of this file for the derivation.
+    public static let tuned = ANSIPalette(
+        red:            "#E61919",
+        green:          "#19E619",
+        blue:           "#1919E6",
+        cyan:           "#19E6E6",
+        magenta:        "#E619E6",
+        yellow:         "#E6E619",
+        brightRed:      "#EE6666",
+        brightGreen:    "#66EE66",
+        brightBlue:     "#6666EE",
+        brightCyan:     "#66EEEE",
+        brightMagenta:  "#EE66EE",
+        brightYellow:   "#EEEE66"
+    )
 }
 
 public struct SyntaxColors: Equatable, Codable, Sendable {
