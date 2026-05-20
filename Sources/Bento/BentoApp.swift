@@ -223,4 +223,8 @@ extension Notification.Name {
     static let bentoToggleSidebar = Notification.Name("BentoToggleSidebar")
     static let bentoOpenProject = Notification.Name("BentoOpenProject")
     static let bentoClearFocusedTerminal = Notification.Name("BentoClearFocusedTerminal")
+    /// Posted when a terminal pane is clicked. CommandInputTextView
+    /// listens and grabs first-responder so the user can immediately
+    /// type — the command bar is the default writing surface in Bento.
+    static let bentoFocusCommandBar = Notification.Name("BentoFocusCommandBar")
 }

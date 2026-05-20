@@ -190,34 +190,39 @@ private enum CommandBarMetrics {
     /// Horizontal inset inside the scroll view. The HStack already pads
     /// the bar; we don't want the text to drift further off the prompt.
     static let textInsetX: CGFloat = 0
-    /// Vertical inset inside the scroll view. Generous breathing room
-    /// above and below text — the bar should feel spacious, not cramped.
-    static let textInsetY: CGFloat = BentoSpacing.l
+    /// Vertical inset inside the scroll view. Bumped to `xxl` so the bar
+    /// reads as the workspace's primary input surface — Warp's bottom
+    /// block has a similar vertical weight. At ~24 pt above + below a
+    /// single line, the bar is impossible to miss as the next thing the
+    /// user should type into.
+    static let textInsetY: CGFloat = BentoSpacing.xxl
 
-    /// Approximate per-line growth used for the cap calculation. SF Mono
-    /// at the bar's size measures ~20 pt of advance per line.
-    static let lineHeight: CGFloat = 20
+    /// Per-line growth used for the cap calculation. SF Mono at the bar's
+    /// font size measures ~22 pt of advance per line.
+    static let lineHeight: CGFloat = 22
 
-    /// Resting input height at a single line of text. ~72 pt: line height
-    /// plus 32 pt of vertical inset above and below. Warp-spacious — the
-    /// bar reads as a deliberate input zone, not a thin strip.
+    /// Resting input height at a single line of text. ~70 pt: line
+    /// height plus ~48 pt of vertical inset. Aesthetically substantial
+    /// and a generous click target — a user can flick the cursor down
+    /// without aiming.
     static let singleLineInputHeight: CGFloat = lineHeight + textInsetY * 2
 
     /// Cap so the bar can't swallow the terminal grid, but generous —
-    /// ~10 wrapped lines of multi-line composition before scrolling.
-    static let maxInputHeight: CGFloat = 240
+    /// ~8 wrapped lines of multi-line composition before scrolling.
+    static let maxInputHeight: CGFloat = 280
 
-    /// Font size for the input + placeholder. Bumped from body to subhead
-    /// so the input reads as the primary writing surface.
-    static let fontSize: CGFloat = BentoType.subhead
+    /// Font size for the input + placeholder. One notch above subhead
+    /// (14) so the surface reads as substantial; matches the bumped
+    /// vertical padding above.
+    static let fontSize: CGFloat = 15
 
-    /// Width reserved for the leading prompt glyph. Big enough for the
-    /// chevron at body weight without crowding the cursor.
-    static let promptWidth: CGFloat = 14
+    /// Width reserved for the leading prompt glyph. Bumped slightly so
+    /// the chevron breathes at the new font size.
+    static let promptWidth: CGFloat = 18
 
     /// Width reserved for the trailing return-key affordance, including
     /// its right-side breathing room.
-    static let submitWidth: CGFloat = 28
+    static let submitWidth: CGFloat = 30
 
     /// Horizontal padding inside the bar (between bar edge and prompt /
     /// submit affordance). Spacious.
@@ -647,7 +652,58 @@ fileprivate final class CommandInputTextView: NSTextView {
     /// before any text has been set.
     var placeholderFont: NSFont?
 
+    /// Token for the `.bentoFocusCommandBar` notification observer so
+    /// `deinit` can remove it. Stored as `Any?` because that's what
+    /// `NotificationCenter.addObserver(forName:...)` hands back.
+    /// `nonisolated(unsafe)` so the nonisolated deinit can read it.
+    private nonisolated(unsafe) var focusObserver: Any?
+
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Bento's focus model bounces any terminal-pane click to the
+        // command bar. Listen for `.bentoFocusCommandBar` while attached
+        // to a window — when fired, grab first-responder unless the
+        // event source was ourselves (avoid recursive loops if a future
+        // path ever posts from inside the bar).
+        if let focusObserver {
+            NotificationCenter.default.removeObserver(focusObserver)
+            self.focusObserver = nil
+        }
+        guard window != nil else { return }
+        focusObserver = NotificationCenter.default.addObserver(
+            forName: .bentoFocusCommandBar,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Only grab focus when our window is key — multi-window
+                // futures might post the notification from a different
+                // window, and we don't want every bar in every window
+                // to stomp on each other's responder state.
+                guard self.window?.isKeyWindow == true else { return }
+                self.window?.makeFirstResponder(self)
+            }
+        }
+        // Also auto-grab on first mount. The tab-area subtree is `.id`'d
+        // by tab + brokerEpoch, so a fresh CommandInputTextView lands
+        // every time the user switches tabs — making us first-responder
+        // on attach means the user can type immediately without
+        // clicking. The window-key guard mirrors the observer above so
+        // background windows don't fight for focus during launch.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window?.isKeyWindow == true else { return }
+            self.window?.makeFirstResponder(self)
+        }
+    }
+
+    deinit {
+        if let focusObserver {
+            NotificationCenter.default.removeObserver(focusObserver)
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()

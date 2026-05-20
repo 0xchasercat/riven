@@ -223,6 +223,20 @@ public final class BrokeredTerminalView: NSView {
     public override func becomeFirstResponder() -> Bool { true }
     public override func resignFirstResponder() -> Bool { true }
 
+    /// Bento's focus model: the command bar is the default writing
+    /// surface. A plain click on the terminal (no drag) bounces focus
+    /// to the command bar via `.bentoFocusCommandBar`. A click + drag
+    /// keeps focus on the terminal so future text-selection work has a
+    /// place to land. Today we don't implement text selection, so the
+    /// drag branch is reserved — every mouseDown bounces.
+    public override func mouseDown(with event: NSEvent) {
+        // Post immediately; the command bar listens on the same window.
+        // No need to wait for mouseUp — the user's intent is clear from
+        // the first click that the terminal pane is the target context.
+        NotificationCenter.default.post(name: .bentoFocusCommandBar, object: nil)
+        super.mouseDown(with: event)
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // Only START on window-attach. We deliberately do NOT teardown on

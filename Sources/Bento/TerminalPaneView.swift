@@ -64,10 +64,12 @@ struct TerminalPaneView: NSViewRepresentable {
             agentClient: agentClient,
             onCwdChanged: onCwdChanged
         )
-        // Make the terminal first-responder once it actually has a window.
-        DispatchQueue.main.async { [weak view] in
-            view?.window?.makeFirstResponder(view)
-        }
+        // We deliberately do NOT auto-grab first-responder here anymore.
+        // The Bento model is: the command bar is the default writing
+        // surface, and clicks anywhere on the terminal pane bounce focus
+        // back to it. See BrokeredTerminalView.mouseDown for the bounce,
+        // and CommandBarView's `bentoFocusCommandBar` listener for the
+        // landing.
         return view
     }
 
