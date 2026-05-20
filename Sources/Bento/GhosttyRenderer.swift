@@ -95,8 +95,12 @@ enum GhosttyRenderer {
             // that have a theme.chrome.border value should pass it through
             // (also at low alpha) — this default just keeps things sensible
             // for callers that don't know about block separators yet.
+            //
+            // H6: alpha lowered 0.18 → 0.10 so the per-block divider reads
+            // as a subtle cue rather than a hard rule. Callers that pass
+            // an explicit `blockSeparator` still own their own alpha.
             self.blockSeparator = blockSeparator
-                ?? defaultForeground.withAlphaComponent(0.18)
+                ?? defaultForeground.withAlphaComponent(0.10)
             // Clamp defensively so a misbehaving host doesn't blow past
             // 0..1 and produce a negative-alpha glyph.
             self.blinkAlpha = max(0, min(1, blinkAlpha))
@@ -140,6 +144,18 @@ enum GhosttyRenderer {
     ) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
+
+        // H5: Pin glyph rasterization knobs on the context so subpixel
+        // positioning is deterministic across window positions. Without
+        // these, CoreText inherits whatever the layer-backed view's host
+        // CGContext was configured with, which can shift glyphs by a
+        // half pixel as the window moves — that reads as "shimmer" on
+        // scroll. Disabling subpixel positioning snaps every glyph to
+        // integer x, which keeps wide runs pixel-aligned (this is the
+        // same trade Warp makes).
+        ctx.setShouldAntialias(true)
+        ctx.setAllowsFontSubpixelPositioning(false)
+        ctx.setShouldSubpixelPositionFonts(false)
 
         // 1. Background.
         ctx.setFillColor(configuration.defaultBackground.cgColor)
@@ -489,30 +505,74 @@ enum GhosttyRenderer {
 
         let cursorColor = configuration.cursorColor
 
+        // H4: when DECTCEM blink is OFF, draw a 1-px inner outline at the
+        // cursor color plus a 40% fill so the cursor reads as "input is
+        // here" without screaming. When blink is ON, multiply the fill
+        // alpha by `configuration.blinkAlpha` so the cursor animates in
+        // lockstep with SGR 5/6 cells (same wall-clock signal).
+        //
+        // The `.blockHollow` cursor style is left alone — it's already an
+        // outline by definition, and the user explicitly asked for it
+        // (e.g. unfocused window), so we shouldn't second-guess the
+        // shape. Block / bar / underline all get the fade.
+        let blinkMultiplier: CGFloat = cursor.blinking ? configuration.blinkAlpha : 1.0
+        // Steady-state outline alpha for non-blink cursors. 0.4 fill +
+        // 1-px outline is the "subtle but present" look.
+        let steadyFillAlpha: CGFloat = 0.4
+        let fillAlpha: CGFloat = cursor.blinking
+            ? blinkMultiplier
+            : steadyFillAlpha
+        let outlineColor: NSColor = cursor.blinking
+            ? cursorColor.withAlphaComponent(blinkMultiplier)
+            : cursorColor
+
         switch cursor.style {
         case .block:
-            // Fill the cell with the cursor color, then re-draw the
-            // cell's glyph in the inverse color so it stays legible.
-            ctx.setFillColor(cursorColor.cgColor)
-            ctx.fill(cellRect)
-            if !cell.text.isEmpty {
-                let (fg, _) = effectiveCellColors(
-                    cell: cell,
-                    configuration: configuration,
-                    cache: &colorCache
-                )
-                let glyphColor = inverseColor(of: cursorColor, fallback: fg)
-                drawGlyph(
-                    cell.text,
-                    color: glyphColor,
-                    font: Self.font(base: baseFont, bold: cell.bold, italic: cell.italic),
-                    originX: cursorOriginX,
-                    baselineFromTop: CGFloat(cursor.y) * cellHeight + metrics.ascent,
-                    in: ctx
-                )
+            // Steady (non-blink) state: subtle fill + 1-px inner outline,
+            // and the cell's underlying glyph stays in its normal color
+            // so it's still readable. Blink state: a fully-filled block
+            // (modulated by blinkAlpha) with an inverse glyph on top —
+            // that matches the previous behavior at the ON phase and
+            // fades naturally at the OFF phase.
+            if cursor.blinking {
+                ctx.setFillColor(cursorColor.withAlphaComponent(fillAlpha).cgColor)
+                ctx.fill(cellRect)
+                if !cell.text.isEmpty {
+                    let (fg, _) = effectiveCellColors(
+                        cell: cell,
+                        configuration: configuration,
+                        cache: &colorCache
+                    )
+                    let glyphColor = inverseColor(of: cursorColor, fallback: fg)
+                    // The glyph color also fades with the cursor so it
+                    // doesn't pop while the fill is mid-blink.
+                    let fadedGlyph = glyphColor.withAlphaComponent(blinkMultiplier)
+                    drawGlyph(
+                        cell.text,
+                        color: fadedGlyph,
+                        font: Self.font(base: baseFont, bold: cell.bold, italic: cell.italic),
+                        originX: cursorOriginX,
+                        baselineFromTop: CGFloat(cursor.y) * cellHeight + metrics.ascent,
+                        in: ctx
+                    )
+                }
+            } else {
+                // Steady state: 40% fill + 1-px inner outline. The cell's
+                // glyph is NOT redrawn — the original draw pass already
+                // painted it in its normal color, and the translucent
+                // fill lets it show through.
+                ctx.setFillColor(cursorColor.withAlphaComponent(fillAlpha).cgColor)
+                ctx.fill(cellRect)
+                ctx.setStrokeColor(outlineColor.cgColor)
+                ctx.setLineWidth(1)
+                // Inset by 0.5 so the 1-px stroke lands on whole pixels.
+                let stroked = cellRect.insetBy(dx: 0.5, dy: 0.5)
+                ctx.stroke(stroked)
             }
 
         case .blockHollow:
+            // Outline-only by definition — left as-is, the shape itself
+            // already communicates "unfocused / inactive".
             ctx.setStrokeColor(cursorColor.cgColor)
             ctx.setLineWidth(1)
             // Inset by 0.5 so the 1px stroke lands on whole pixels.
@@ -526,7 +586,7 @@ enum GhosttyRenderer {
                 width: 2,
                 height: cellRect.height
             )
-            ctx.setFillColor(cursorColor.cgColor)
+            ctx.setFillColor(cursorColor.withAlphaComponent(fillAlpha).cgColor)
             ctx.fill(barRect)
 
         case .underline:
@@ -536,7 +596,7 @@ enum GhosttyRenderer {
                 width: cellRect.width,
                 height: 2
             )
-            ctx.setFillColor(cursorColor.cgColor)
+            ctx.setFillColor(cursorColor.withAlphaComponent(fillAlpha).cgColor)
             ctx.fill(underlineRect)
         }
     }
@@ -697,21 +757,49 @@ enum GhosttyRenderer {
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    /// Apply bold + italic traits to `base` via `NSFontManager`. If a
-    /// requested variant doesn't exist for the chosen typeface (e.g.
-    /// SFMono-Regular has no italic), `convert(_:toHaveTrait:)` returns
-    /// the closest available font, which is fine — we'd rather draw an
-    /// upright glyph than throw.
+    /// Resolve bold + italic variants of `base`.
+    ///
+    /// H7: SF Mono on macOS ships explicit `SFMono-Bold`,
+    /// `SFMono-RegularItalic`, and `SFMono-BoldItalic` faces but they
+    /// aren't always discoverable via `NSFontManager.convert(_:toHaveTrait:)`
+    /// — that path can silently return the regular face when the font
+    /// descriptor registry doesn't have the bold trait wired up for the
+    /// active typeface. The user-visible symptom is "SGR 1 doesn't make
+    /// text bolder, only brighter".
+    ///
+    /// Fix is an explicit chain: try the known face names by hand first,
+    /// fall back to the trait-convert path so non-SF-Mono typefaces still
+    /// work. For bold+italic we also fall back to applying italic on top
+    /// of the resolved bold (the typical case for non-SF typefaces with
+    /// only a single combined face — `convert` handles that fine).
     private static func font(base: NSFont, bold: Bool, italic: Bool) -> NSFont {
-        var f = base
+        let size = base.pointSize
         let manager = NSFontManager.shared
-        if bold {
-            f = manager.convert(f, toHaveTrait: .boldFontMask)
+
+        switch (bold, italic) {
+        case (false, false):
+            return base
+
+        case (true, false):
+            if let f = NSFont(name: "SFMono-Bold", size: size) { return f }
+            if let f = NSFont(name: "SF Mono Bold", size: size) { return f }
+            return manager.convert(base, toHaveTrait: .boldFontMask)
+
+        case (false, true):
+            if let f = NSFont(name: "SFMono-RegularItalic", size: size) { return f }
+            if let f = NSFont(name: "SF Mono Italic", size: size) { return f }
+            return manager.convert(base, toHaveTrait: .italicFontMask)
+
+        case (true, true):
+            if let f = NSFont(name: "SFMono-BoldItalic", size: size) { return f }
+            if let f = NSFont(name: "SF Mono Bold Italic", size: size) { return f }
+            // Fall back: resolve bold first (using the same explicit
+            // chain), then layer italic on top via NSFontManager.
+            let boldFont: NSFont = NSFont(name: "SFMono-Bold", size: size)
+                ?? NSFont(name: "SF Mono Bold", size: size)
+                ?? manager.convert(base, toHaveTrait: .boldFontMask)
+            return manager.convert(boldFont, toHaveTrait: .italicFontMask)
         }
-        if italic {
-            f = manager.convert(f, toHaveTrait: .italicFontMask)
-        }
-        return f
     }
 
     // MARK: - Color cache
