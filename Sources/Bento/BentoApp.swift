@@ -10,6 +10,11 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     private var rootController: BentoRootController?
     private var agentLauncher: AgentLauncher?
     private var titleSubscription: AnyCancellable?
+    /// Local NSEvent monitor for the global Tab-snap behavior. Tab from
+    /// anywhere outside a text-input surface routes focus to the
+    /// command bar. Stored on the delegate so the monitor lives as
+    /// long as the app does. Removed in `applicationWillTerminate`.
+    private var tabFocusMonitor: Any?
 
     static func main() {
         let app = NSApplication.shared
@@ -59,6 +64,41 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
 
+        // Tab from anywhere outside a text-input view routes focus to
+        // the command bar. The command bar is the default writing
+        // surface in Bento — clicks already bounce there (BrokeredTerm-
+        // inalView.mouseDown), and the user expects Tab to behave the
+        // same way. Inside the command bar's own NSTextView, Tab still
+        // inserts `\t` (useful for shell heredocs); inside the editor
+        // pane's STTextView it indents (useful for code). Anywhere
+        // else (workspace path field, sidebar, tab bar, terminal grid
+        // chrome), Tab snaps to the bar.
+        tabFocusMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Tab keyCode is 48 on every modern Mac keyboard layout.
+            // Only intercept bare Tab — Shift+Tab keeps native
+            // backward focus traversal so Cocoa's keyView chain still
+            // works for accessibility users.
+            guard
+                event.keyCode == 48,
+                event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+            else { return event }
+
+            let responder = NSApp.keyWindow?.firstResponder
+            if responder is CommandInputTextView {
+                // Already in the bar — let Tab insert "\t" as normal.
+                return event
+            }
+            if responder is EditorTextView {
+                // Editor pane — Tab indents in the buffer.
+                return event
+            }
+            // Anywhere else: snap to the command bar and consume the
+            // event so the previous responder doesn't ALSO see the
+            // tab (e.g. NSTextField would otherwise commit + beep).
+            NotificationCenter.default.post(name: .bentoFocusCommandBar, object: nil)
+            return nil
+        }
+
         // Reflect the focused workspace in the window title. Even with
         // titleVisibility = .hidden the title still shows in Mission
         // Control / Stage Manager / Cmd+Tab previews, and many users
@@ -99,6 +139,10 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let tabFocusMonitor {
+            NSEvent.removeMonitor(tabFocusMonitor)
+            self.tabFocusMonitor = nil
+        }
         let workspace = rootController?.workspace
         let launcher = agentLauncher
         let semaphore = DispatchSemaphore(value: 0)

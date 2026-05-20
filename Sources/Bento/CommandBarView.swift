@@ -639,8 +639,17 @@ private struct CommandBarTextView: NSViewRepresentable {
 /// through `keyDown` and then `doCommand(by:)`. Intercepting in
 /// `keyDown` lets us short-circuit *before* Cocoa interprets Return as
 /// `insertNewline:`.
-fileprivate final class CommandInputTextView: NSTextView {
-    weak var coordinator: CommandBarTextView.Coordinator?
+/// Internal (was fileprivate) so the global Tab-snap monitor in
+/// `BentoApp` can distinguish "first responder is the command bar"
+/// from "first responder is anywhere else" — the former lets Tab
+/// insert a literal `\t`, the latter snaps focus into the bar.
+final class CommandInputTextView: NSTextView {
+    // `fileprivate` because `CommandBarTextView.Coordinator` is itself
+    // fileprivate (its containing struct is `private`). The class's
+    // own visibility is internal so the BentoApp Tab-snap monitor can
+    // `is`-check against it; the coordinator pointer stays scoped to
+    // this file.
+    fileprivate weak var coordinator: CommandBarTextView.Coordinator?
 
     /// Visible-when-empty placeholder. We draw it ourselves because
     /// `NSTextView` doesn't expose a built-in placeholder API the way
