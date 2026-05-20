@@ -649,6 +649,7 @@ struct TabLayoutView: View {
                         tabID: tab.id,
                         surface: surface,
                         isFocused: surfaceID == tab.focusedSurfaceID,
+                        showCloseAffordance: tab.isSplit,
                         tabCwd: tab.cwd,
                         agentClient: agentClient,
                         fileMap: fileMap,
@@ -707,14 +708,40 @@ private struct SurfaceLeafView: View {
     let tabID: TabID
     let surface: TabSurface
     let isFocused: Bool
+    /// True when the parent tab has more than one surface. The
+    /// per-surface close-× is hidden on single-surface tabs because
+    /// closing the only surface is the same operation as closing the
+    /// whole tab — and the tab's own × in the strip already does that.
+    let showCloseAffordance: Bool
     let tabCwd: String
     let agentClient: AgentClient
     let fileMap: PaneFileMap
     let onCwdChanged: (String) -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
         surfaceBody
             .overlay(focusBorder)
+            .overlay(alignment: .topTrailing) {
+                if showCloseAffordance {
+                    SurfaceCloseButton(theme: theme) {
+                        NotificationCenter.default.post(
+                            name: .bentoCloseSurface,
+                            object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
+                        )
+                    }
+                    // Always visible on the focused surface (so the
+                    // user can see how to close it without hunting);
+                    // hover-only on unfocused ones to keep the split
+                    // visually clean.
+                    .opacity(isFocused || isHovered ? 1 : 0)
+                    .padding(6)
+                    .animation(BentoMotion.hover, value: isHovered)
+                    .animation(BentoMotion.hover, value: isFocused)
+                }
+            }
+            .onHover { isHovered = $0 }
             // Background catches clicks on empty terminal areas. The
             // gesture takes precedence over the underlying NSView's
             // mouseDown (which also fires `.bentoFocusCommandBar`),
@@ -764,6 +791,43 @@ private struct SurfaceLeafView: View {
                 lineWidth: isFocused ? 1 : 0
             )
             .allowsHitTesting(false)
+    }
+}
+
+/// Small × chip in the top-right corner of a split surface. Hidden on
+/// single-surface tabs (the tab's own × handles that case). On split
+/// tabs the focused surface shows the chip at full opacity; non-
+/// focused surfaces reveal it on hover. Tap posts
+/// `.bentoCloseSurface` with the parent tab + surface ids.
+private struct SurfaceCloseButton: View {
+    let theme: ThemeSpec
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("×")
+                .font(BentoType.chrome(13, weight: .medium))
+                .foregroundStyle(Color(hex: isHovered
+                    ? theme.chrome.text.hex
+                    : theme.chrome.tertiaryText.hex))
+                .frame(width: 20, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(Color(hex: theme.chrome.elevated.hex)
+                            .opacity(isHovered ? 0.9 : 0.6))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .stroke(Color(hex: theme.chrome.hairline.hex), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help("Close this split (⌘W still closes the whole tab)")
     }
 }
 
