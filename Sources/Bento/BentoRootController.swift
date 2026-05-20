@@ -282,6 +282,65 @@ final class BentoRootController: ObservableObject {
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
+    /// Split the focused workspace's focused tab's focused surface in
+    /// `direction`. The new surface is a terminal seeded with the
+    /// existing tab's cwd; focus moves to it so the user can
+    /// immediately type. No-op when no workspace is focused.
+    ///
+    /// Wired to Cmd+D (split right), Cmd+Shift+D (split down), and the
+    /// `[][]` button next to `+` in the inner tab strip.
+    func splitFocusedSurface(direction: SplitDirection) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else { return }
+        let newSurface = TabSurface(
+            kind: .terminal(paneID: PaneID(), command: nil)
+        )
+        let updated = workspace.splittingFocusedSurface(
+            direction: direction,
+            newSurface: newSurface
+        )
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Focus a specific surface inside a tab. Called from a click on a
+    /// non-focused split surface.
+    func focusSurface(tabID: TabID, surfaceID: SurfaceID) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else { return }
+        let updated = workspace.focusingSurface(tabID: tabID, surfaceID: surfaceID)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Cycle focus to the next surface in the focused tab's layout
+    /// (DFS order). Wired to Ctrl+Tab; useful when the user has
+    /// multiple splits inside one tab and wants to keyboard-walk
+    /// through them without reaching for the trackpad.
+    func cycleFocusedTabSurface() {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else { return }
+        let updated = workspace.focusingNextSurface(tabID: workspace.focusedTabID)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Close a specific surface inside a tab. Single-surface tabs can't
+    /// have their only surface closed via this path — close the whole
+    /// tab via `closeInnerTab` instead. If the closed surface was the
+    /// focused one, focus shifts to a neighbour.
+    func closeSurface(tabID: TabID, surfaceID: SurfaceID) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else { return }
+        let updated = workspace.removingSurface(tabID: tabID, surfaceID: surfaceID)
+        guard updated != workspace else { return }
+        pane.kind = .workspace(updated)
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
     /// Rename a workspace tab (the top strip). Empty / whitespace input
     /// reverts to the cwd-derived label. The workspace is found by its
     /// pane ID, not by focus — so the editor in WorkspaceTabBar can

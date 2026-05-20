@@ -57,7 +57,17 @@ struct BentoRootView: View {
             onCloseInnerTab: { controller.closeInnerTab($0) },
             onRenameInnerTab: { rename in
                 controller.renameInnerTab(rename.id, to: rename.name)
-            }
+            },
+            onSplitSurface: { direction in
+                controller.splitFocusedSurface(direction: direction)
+            },
+            onFocusSurface: { focus in
+                controller.focusSurface(tabID: focus.tabID, surfaceID: focus.surfaceID)
+            },
+            onCloseSurface: { focus in
+                controller.closeSurface(tabID: focus.tabID, surfaceID: focus.surfaceID)
+            },
+            onCycleSurfaceFocus: { controller.cycleFocusedTabSurface() }
         ))
         // Auto-open the trust prompt the first time we see a project
         // that requires trust this session. The toolbar pill remains as
@@ -422,9 +432,19 @@ private struct NotificationWiring: ViewModifier {
     let onFocusInnerTab: (TabID) -> Void
     let onCloseInnerTab: (TabID) -> Void
     let onRenameInnerTab: (InnerTabRename) -> Void
+    let onSplitSurface: (SplitDirection) -> Void
+    let onFocusSurface: (SurfaceFocus) -> Void
+    let onCloseSurface: (SurfaceFocus) -> Void
+    let onCycleSurfaceFocus: () -> Void
 
     func body(content: Content) -> some View {
         content
+            .modifier(SurfaceWiring(
+                onSplitSurface: onSplitSurface,
+                onFocusSurface: onFocusSurface,
+                onCloseSurface: onCloseSurface,
+                onCycleSurfaceFocus: onCycleSurfaceFocus
+            ))
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
@@ -442,6 +462,33 @@ private struct NotificationWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoRenameInnerTab)) { note in
                 if let rename = note.object as? InnerTabRename { onRenameInnerTab(rename) }
+            }
+    }
+}
+
+/// Sub-wiring for the surface-split notifications. Extracted so the
+/// parent `NotificationWiring.body` doesn't blow past the SwiftUI
+/// type-checker's depth budget — same trick we used when adding the
+/// trust-prompt + path-field listeners earlier.
+private struct SurfaceWiring: ViewModifier {
+    let onSplitSurface: (SplitDirection) -> Void
+    let onFocusSurface: (SurfaceFocus) -> Void
+    let onCloseSurface: (SurfaceFocus) -> Void
+    let onCycleSurfaceFocus: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .bentoSplitFocusedSurface)) { note in
+                if let direction = note.object as? SplitDirection { onSplitSurface(direction) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoFocusSurface)) { note in
+                if let focus = note.object as? SurfaceFocus { onFocusSurface(focus) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseSurface)) { note in
+                if let focus = note.object as? SurfaceFocus { onCloseSurface(focus) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCycleSurfaceFocus)) { _ in
+                onCycleSurfaceFocus()
             }
     }
 }

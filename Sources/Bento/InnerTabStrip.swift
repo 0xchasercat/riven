@@ -33,6 +33,7 @@ struct InnerTabStrip: View {
                 }
             }
             Spacer(minLength: 0)
+            SplitSurfaceButton(theme: theme)
             AddInnerTabButton(theme: theme)
         }
         .frame(height: 36)
@@ -163,6 +164,52 @@ private struct InnerTabChip: View {
         isEditing = false
         isFieldFocused = false
         draft = tab.displayName
+    }
+}
+
+/// `[][]` button next to `+` in the inner tab strip. Click splits the
+/// currently-focused surface in its tab to the right (matching Cmd+D);
+/// long-press / Option-click would split down (Cmd+Shift+D — wired
+/// through the menu for now, not the button, to keep the chrome
+/// simple). Posts `.bentoSplitFocusedSurface(.right)`.
+private struct SplitSurfaceButton: View {
+    let theme: ThemeSpec
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            NotificationCenter.default.post(
+                name: .bentoSplitFocusedSurface,
+                object: SplitDirection.right
+            )
+        } label: {
+            // `[][]` glyph reads as "two side-by-side panes". Drawn as
+            // two narrow rectangles with a 1pt gap so the icon scales
+            // cleanly at the inner tab strip's 36pt height.
+            HStack(spacing: 2) {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .stroke(Color(hex: isHovered
+                        ? theme.chrome.text.hex
+                        : theme.chrome.tertiaryText.hex), lineWidth: 1.2)
+                    .frame(width: 7, height: 13)
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .stroke(Color(hex: isHovered
+                        ? theme.chrome.text.hex
+                        : theme.chrome.tertiaryText.hex), lineWidth: 1.2)
+                    .frame(width: 7, height: 13)
+            }
+            .frame(width: 36, height: 36)
+            .background(
+                Color(hex: theme.chrome.accentSoft.hex).opacity(isHovered ? 1 : 0)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help("Split focused surface right (⌘D · ⌘⇧D for vertical)")
+        .animation(BentoMotion.hover, value: isHovered)
     }
 }
 

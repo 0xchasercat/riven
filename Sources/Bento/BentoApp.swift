@@ -169,6 +169,33 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(NSMenuItem(title: "New Tab", action: #selector(newTab), keyEquivalent: "t"))
         fileMenu.addItem(NSMenuItem(title: "New Workspace", action: #selector(newWorkspace), keyEquivalent: "n"))
+        fileMenu.addItem(NSMenuItem.separator())
+        // Cmd+D splits the focused tab's focused surface to the right;
+        // Cmd+Shift+D splits it downward. Matches iTerm2 / Warp.
+        fileMenu.addItem(NSMenuItem(
+            title: "Split Right",
+            action: #selector(splitRight),
+            keyEquivalent: "d"
+        ))
+        let splitDownItem = NSMenuItem(
+            title: "Split Down",
+            action: #selector(splitDown),
+            keyEquivalent: "d"
+        )
+        splitDownItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(splitDownItem)
+        // Ctrl+Tab cycles focus across surfaces within the focused tab.
+        // Uses the raw tab character (0x09) + .control modifier; we
+        // can't bind via keyEquivalent for the tab key cleanly, so
+        // it's handled by the existing keyboard-shortcut path in
+        // BentoPaneContainerView. Documented here for discoverability.
+        let cycleItem = NSMenuItem(
+            title: "Cycle Surface Focus",
+            action: #selector(cycleSurfaceFocus),
+            keyEquivalent: "]"
+        )
+        cycleItem.keyEquivalentModifierMask = [.command]
+        fileMenu.addItem(cycleItem)
         // Cmd+Shift+O: open another directory as a workspace tab.
         let openItem = NSMenuItem(title: "Open Project…", action: #selector(openProject), keyEquivalent: "o")
         openItem.keyEquivalentModifierMask = [.command, .shift]
@@ -255,6 +282,18 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     @objc private func clearTerminal() {
         NotificationCenter.default.post(name: .bentoClearFocusedTerminal, object: nil)
     }
+
+    @objc private func splitRight() {
+        NotificationCenter.default.post(name: .bentoSplitFocusedSurface, object: SplitDirection.right)
+    }
+
+    @objc private func splitDown() {
+        NotificationCenter.default.post(name: .bentoSplitFocusedSurface, object: SplitDirection.down)
+    }
+
+    @objc private func cycleSurfaceFocus() {
+        NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
+    }
 }
 
 extension Notification.Name {
@@ -271,4 +310,27 @@ extension Notification.Name {
     /// listens and grabs first-responder so the user can immediately
     /// type — the command bar is the default writing surface in Bento.
     static let bentoFocusCommandBar = Notification.Name("BentoFocusCommandBar")
+    /// Posted when a within-tab split surface is clicked. The
+    /// notification's `object` is a `SurfaceFocus` payload identifying
+    /// `(tabID, surfaceID)`; RootView routes to
+    /// `controller.focusSurface(...)`.
+    static let bentoFocusSurface = Notification.Name("BentoFocusSurface")
+    /// Posted by Cmd+D / Cmd+Shift+D / the [][] button. Object is the
+    /// requested `SplitDirection` (`.right` or `.down`). RootView →
+    /// controller.splitFocusedSurface.
+    static let bentoSplitFocusedSurface = Notification.Name("BentoSplitFocusedSurface")
+    /// Posted when the per-surface close-× is clicked. Object is a
+    /// `SurfaceFocus` payload. RootView → controller.closeSurface.
+    static let bentoCloseSurface = Notification.Name("BentoCloseSurface")
+    /// Posted by Ctrl+Tab when the user wants to cycle focus to the
+    /// next surface within the currently-focused tab.
+    static let bentoCycleSurfaceFocus = Notification.Name("BentoCycleSurfaceFocus")
+}
+
+/// Carries a `(tabID, surfaceID)` pair as an `Any?` object payload
+/// for `.bentoFocusSurface` and `.bentoCloseSurface` notifications.
+/// Equatable so the value can sit in `@State` without ceremony.
+struct SurfaceFocus: Equatable {
+    let tabID: TabID
+    let surfaceID: SurfaceID
 }

@@ -584,26 +584,17 @@ private final class WorkspaceContainerView: NSView {
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
-        switch tab.kind {
-        case let .terminal(paneID, command):
-            // The terminal view bakes its own horizontal + top text inset
-            // (see `BrokeredTerminalView.textInset`) so the terminal
-            // background still extends edge-to-edge while the glyphs sit
-            // inset from the pane chrome. No SwiftUI padding is applied
-            // here — adding one would leak the workspace's panel-elevated
-            // surface into the gap between the terminal background and
-            // the pane border.
-            TerminalPaneView(
-                theme: theme,
-                paneID: paneID,
-                cwd: tab.cwd,
-                command: command,
-                agentClient: agentClient,
-                onCwdChanged: onCwdChanged
-            )
-        case let .editor(path):
-            EditorTabContent(theme: theme, tabID: tab.id, path: path, fileMap: fileMap)
-        }
+        // The tab's surface tree is rendered recursively. A single-
+        // surface tab is the common case (`.leaf(surfaceID)`); split
+        // tabs walk the `.split` nodes into nested HStacks / VStacks
+        // with a 1pt hairline divider between halves.
+        TabLayoutView(
+            theme: theme,
+            tab: tab,
+            agentClient: agentClient,
+            fileMap: fileMap,
+            onCwdChanged: onCwdChanged
+        )
     }
 
     // MARK: - Layout helpers
@@ -619,6 +610,161 @@ private final class WorkspaceContainerView: NSView {
         ])
     }
 
+}
+
+// MARK: - Tab layout (recursive split renderer)
+
+/// Walks a `WorkspaceInnerTab.layout` tree and renders the active
+/// surfaces — single-surface tabs are a `.leaf`, split tabs are
+/// `.split(direction, lhs, rhs)` nodes that nest. SwiftUI HStack /
+/// VStack handle the layout; a `Hairline` separates the two halves.
+///
+/// Native drag-to-resize is not wired yet — that's a polish pass with
+/// an NSSplitView-backed representable. For now splits are 50/50 (or
+/// proportional to SwiftUI's flex sizing of the children, which for
+/// equally-resizable views resolves to even halves).
+struct TabLayoutView: View {
+    let theme: ThemeSpec
+    let tab: WorkspaceInnerTab
+    let agentClient: AgentClient
+    let fileMap: PaneFileMap
+    let onCwdChanged: (String) -> Void
+
+    var body: some View {
+        renderLayout(tab.layout)
+    }
+
+    /// Recursive renderer. Returns `AnyView` (rather than `some View`)
+    /// because Swift's opaque-result-type inference can't resolve a
+    /// recursive function that returns itself. The performance cost
+    /// is negligible — split trees are at most a handful of nodes
+    /// deep, and the renderer isn't on the hot path anyway.
+    private func renderLayout(_ node: TabLayout) -> AnyView {
+        switch node {
+        case let .leaf(surfaceID):
+            if let surface = tab.surfaces.first(where: { $0.id == surfaceID }) {
+                return AnyView(
+                    SurfaceLeafView(
+                        theme: theme,
+                        tabID: tab.id,
+                        surface: surface,
+                        isFocused: surfaceID == tab.focusedSurfaceID,
+                        tabCwd: tab.cwd,
+                        agentClient: agentClient,
+                        fileMap: fileMap,
+                        // Only the focused surface gets the cwd-change
+                        // callback wired through; other surfaces still
+                        // emit OSC 7 events that update their own
+                        // terminal state, but they don't push the
+                        // workspace sidebar around.
+                        onCwdChanged: surfaceID == tab.focusedSurfaceID
+                            ? onCwdChanged
+                            : { _ in }
+                    )
+                )
+            } else {
+                // Defensive: layout references a surface that doesn't
+                // exist in `tab.surfaces`. Shouldn't happen, but show
+                // a placeholder rather than crash.
+                return AnyView(Color(hex: theme.chrome.panel.hex))
+            }
+        case let .split(direction, lhs, rhs):
+            // `.right` = side-by-side (vertical divider between two
+            // horizontal halves). `.down` = stacked (horizontal
+            // divider between two vertical halves).
+            if direction == .right {
+                return AnyView(
+                    HStack(spacing: 0) {
+                        renderLayout(lhs)
+                        Hairline(theme: theme, axis: .vertical)
+                        renderLayout(rhs)
+                    }
+                )
+            } else {
+                return AnyView(
+                    VStack(spacing: 0) {
+                        renderLayout(lhs)
+                        Hairline(theme: theme)
+                        renderLayout(rhs)
+                    }
+                )
+            }
+        }
+    }
+}
+
+/// One leaf surface in a tab's layout tree. Renders either a
+/// `TerminalPaneView` or an `EditorTabContent`, then wraps the result
+/// in an overlay that paints a 1pt accent border on the focused
+/// surface (so the user can tell which split owns the command bar)
+/// and forwards mouse clicks as `.bentoFocusSurface` notifications.
+///
+/// Single-surface tabs hit this path too — `isFocused` is always
+/// true, the border is invisible (we draw it transparent), so the
+/// leaf renders identically to the pre-#23 path.
+private struct SurfaceLeafView: View {
+    let theme: ThemeSpec
+    let tabID: TabID
+    let surface: TabSurface
+    let isFocused: Bool
+    let tabCwd: String
+    let agentClient: AgentClient
+    let fileMap: PaneFileMap
+    let onCwdChanged: (String) -> Void
+
+    var body: some View {
+        surfaceBody
+            .overlay(focusBorder)
+            // Background catches clicks on empty terminal areas. The
+            // gesture takes precedence over the underlying NSView's
+            // mouseDown (which also fires `.bentoFocusCommandBar`),
+            // so a click in a non-focused split shifts focus before
+            // typing lands.
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isFocused else { return }
+                NotificationCenter.default.post(
+                    name: .bentoFocusSurface,
+                    object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
+                )
+            }
+    }
+
+    @ViewBuilder
+    private var surfaceBody: some View {
+        switch surface.kind {
+        case let .terminal(paneID, command):
+            TerminalPaneView(
+                theme: theme,
+                paneID: paneID,
+                cwd: tabCwd,
+                command: command,
+                agentClient: agentClient,
+                onCwdChanged: onCwdChanged
+            )
+        case let .editor(path):
+            EditorTabContent(
+                theme: theme,
+                tabID: tabID,
+                surfaceID: surface.id,
+                path: path,
+                fileMap: fileMap
+            )
+        }
+    }
+
+    /// 1pt accent rectangle on the focused leaf. Single-surface tabs
+    /// also draw this, but it sits flush against the existing tab
+    /// chrome so it reads as "this surface is active" only when there's
+    /// a sibling to differentiate from.
+    private var focusBorder: some View {
+        Rectangle()
+            .strokeBorder(
+                Color(hex: theme.chrome.accent.hex),
+                lineWidth: isFocused ? 1 : 0
+            )
+            .allowsHitTesting(false)
+    }
 }
 
 // MARK: - Editor tab content
@@ -642,18 +788,28 @@ private final class WorkspaceContainerView: NSView {
 private struct EditorTabContent: View {
     let theme: ThemeSpec
     let tabID: TabID
+    /// The surface this editor lives on inside `tabID`. Splits within
+    /// a single tab can host multiple editor surfaces — each needs a
+    /// distinct virtual paneID so their file-map entries don't
+    /// collide. Defaults to `tabID.rawValue` for non-split callers so
+    /// older single-surface tabs keep their stable paneID across
+    /// tab focus changes.
+    let surfaceID: SurfaceID
     let path: String?
     @ObservedObject var fileMap: PaneFileMap
 
-    /// Stable virtual paneID — `editor-tab-<tab uuid>`. Survives focus
-    /// changes because the tab's id survives. Coexists with real broker
-    /// paneIDs (which are UUIDs) because of the `editor-tab-` prefix.
-    private var virtualPaneID: PaneID { PaneID("editor-tab-\(tabID.rawValue)") }
+    /// Stable virtual paneID — `editor-tab-<tab>-<surface>`. Survives
+    /// focus changes because both the tab id and the surface id
+    /// survive. Coexists with real broker paneIDs (which are UUIDs)
+    /// because of the `editor-tab-` prefix.
+    private var virtualPaneID: PaneID {
+        PaneID("editor-tab-\(tabID.rawValue)-\(surfaceID.rawValue)")
+    }
 
     var body: some View {
         EditorPaneView(theme: theme, paneID: virtualPaneID, fileMap: fileMap)
             .background(Color(hex: theme.chrome.panel.hex))
-            .task(id: "\(tabID.rawValue)|\(path ?? "")") {
+            .task(id: "\(tabID.rawValue)|\(surfaceID.rawValue)|\(path ?? "")") {
                 if let path {
                     fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
                 } else {
