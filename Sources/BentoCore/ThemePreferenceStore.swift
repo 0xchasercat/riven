@@ -33,12 +33,21 @@ public final class ThemePreferenceStore: @unchecked Sendable {
 
     // MARK: - Command-bar submission
 
-    /// `true` means Enter submits and Cmd+Enter inserts a newline
-    /// (terminal-style). `false` (default) means Enter inserts a
-    /// newline and Cmd+Enter submits — Slack/Discord/Claude style.
-    /// Persisted so the user's choice survives across launches.
+    /// `true` (default) means Enter submits and Cmd+Enter inserts a
+    /// newline — closest to a real shell prompt's behavior, which is
+    /// what users typing into a terminal-shaped surface expect by
+    /// default. `false` flips it: Enter inserts a newline and
+    /// Cmd+Enter submits (Slack / Discord / Claude style).
+    ///
+    /// Stored using a present/absent distinction so we can detect "the
+    /// user has never set this" (return true) vs "the user explicitly
+    /// chose false" (return false). `UserDefaults.bool(forKey:)` would
+    /// flatten those into the same `false` and clobber the new default.
     public var submitsOnEnter: Bool {
-        get { defaults.bool(forKey: submitOnEnterKey) }
+        get {
+            if defaults.object(forKey: submitOnEnterKey) == nil { return true }
+            return defaults.bool(forKey: submitOnEnterKey)
+        }
         set { defaults.set(newValue, forKey: submitOnEnterKey) }
     }
 

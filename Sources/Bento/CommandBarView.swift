@@ -24,8 +24,9 @@ struct CommandBarView: View {
     enum HistoryDirection { case previous, next }
 
     /// Which key submits the buffer and which one inserts a newline.
-    /// User-toggleable preference, default `.enterIsNewline` (Slack /
-    /// Discord / Claude pattern — good for multi-line composition).
+    /// User-toggleable preference, default `.enterSubmits` (closest to
+    /// a real shell prompt — Enter runs the command, Cmd+Enter inserts
+    /// a literal newline for multi-line composition).
     enum SubmitMode: Equatable {
         /// Enter inserts "\n", Cmd+Enter submits.
         case enterIsNewline
@@ -53,7 +54,7 @@ struct CommandBarView: View {
 
     init(
         theme: ThemeSpec,
-        submitMode: SubmitMode = .enterIsNewline,
+        submitMode: SubmitMode = .enterSubmits,
         onSubmit: @escaping (String) -> Void,
         onHistoryRequest: @escaping (HistoryDirection) -> String? = { _ in nil }
     ) {
@@ -493,10 +494,10 @@ private struct CommandBarTextView: NSViewRepresentable {
                     return true
                 }
                 // Decide submit vs newline from the active mode:
-                //   .enterIsNewline (default): Enter = newline,
-                //     Cmd+Enter = submit.
-                //   .enterSubmits:             Enter = submit,
-                //     Cmd+Enter = newline.
+                //   .enterSubmits (default): Enter = submit,
+                //     Cmd+Enter = newline. Matches a real shell prompt.
+                //   .enterIsNewline:         Enter = newline,
+                //     Cmd+Enter = submit. Slack / Discord / Claude.
                 switch (submitMode, isCommand) {
                 case (.enterIsNewline, false), (.enterSubmits, true):
                     textView.insertText("\n", replacementRange: textView.selectedRange())
