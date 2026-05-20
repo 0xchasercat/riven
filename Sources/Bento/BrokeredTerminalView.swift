@@ -47,19 +47,30 @@ public final class BrokeredTerminalView: NSView {
         public var cursor: NSColor
         public var fontSize: CGFloat
         public var fontName: String?
+        /// H1: multiplier applied to the typographic line height to add
+        /// inter-line breathing room. 1.0 is the tight CoreText default
+        /// (`ceil(asc + desc + leading)`); 1.15 matches Warp's resting
+        /// "comfortable" setting and is the Bento default. The glyph
+        /// baseline stays centered inside the bumped cell so the extra
+        /// gutter lands evenly above + below each row of text — cursor,
+        /// underline, overline all derive from `cellHeight` / `ascent`
+        /// so they scale with this value automatically.
+        public var lineHeightMultiplier: CGFloat
 
         public init(
             foreground: NSColor = .white,
             background: NSColor = NSColor(white: 0.07, alpha: 1.0),
             cursor: NSColor = NSColor(calibratedRed: 0.4, green: 0.85, blue: 1.0, alpha: 1.0),
             fontSize: CGFloat = 13,
-            fontName: String? = nil
+            fontName: String? = nil,
+            lineHeightMultiplier: CGFloat = 1.15
         ) {
             self.foreground = foreground
             self.background = background
             self.cursor = cursor
             self.fontSize = fontSize
             self.fontName = fontName
+            self.lineHeightMultiplier = lineHeightMultiplier
         }
     }
 
@@ -129,6 +140,14 @@ public final class BrokeredTerminalView: NSView {
     /// Half-cycle duration for SGR 5 / 6 blink. 500 ms matches xterm
     /// and Warp; <300 ms reads as flicker, >1 s feels broken.
     private static let blinkHalfCycle: TimeInterval = 0.5
+
+    /// H2: padding baked into the terminal view so the leftmost glyph
+    /// doesn't sit flush against the pane chrome. The terminal
+    /// background still fills the view edge-to-edge (so the dark
+    /// surface meets the divider); only the cell grid is inset.
+    /// Bottom is 0 because the command bar's own divider already
+    /// closes the bottom edge of the terminal area.
+    private static let textInset = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
 
     // MARK: - Init
 
@@ -205,8 +224,19 @@ public final class BrokeredTerminalView: NSView {
         var leading: CGFloat = 0
         let width = CTLineGetTypographicBounds(line, &asc, &desc, &leading)
         cellWidth = max(1, CGFloat(width))
-        cellHeight = max(1, ceil(asc + desc + leading))
-        ascent = asc
+        // H1: bump the cell height by the configured line-height
+        // multiplier (default 1.15) so glyphs get inter-line breathing
+        // room. The tight typographic height (`tightHeight`) is what
+        // CoreText needs to lay a single line out cleanly; the extra
+        // gutter is distributed evenly above + below by shifting the
+        // ascent we hand to the renderer. The renderer positions
+        // baselines as `yTop + ascent`, so adding `extra/2` to the
+        // ascent centers the typographic line within the bumped cell.
+        let tightHeight = ceil(asc + desc + leading)
+        let bumped = ceil(tightHeight * max(1, configuration.lineHeightMultiplier))
+        cellHeight = max(1, bumped)
+        let extra = max(0, cellHeight - tightHeight)
+        ascent = asc + extra / 2
     }
 
     private func rebuildAttributes() {
@@ -400,8 +430,14 @@ public final class BrokeredTerminalView: NSView {
     // MARK: - Resize
 
     private func computeGridSize(for size: NSSize) -> (UInt16, UInt16) {
-        let c = max(1, Int(floor(size.width / max(1, cellWidth))))
-        let r = max(1, Int(floor(size.height / max(1, cellHeight))))
+        // H2: subtract the baked text inset before deriving the cell
+        // count so the grid sizes against the area the renderer can
+        // actually paint into, not the full pane.
+        let inset = Self.textInset
+        let usableWidth = max(0, size.width - inset.left - inset.right)
+        let usableHeight = max(0, size.height - inset.top - inset.bottom)
+        let c = max(1, Int(floor(usableWidth / max(1, cellWidth))))
+        let r = max(1, Int(floor(usableHeight / max(1, cellHeight))))
         return (UInt16(min(c, Int(UInt16.max))), UInt16(min(r, Int(UInt16.max))))
     }
 
@@ -464,12 +500,36 @@ public final class BrokeredTerminalView: NSView {
             frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
         }
 
+        // H2: paint the terminal background edge-to-edge so the dark
+        // surface meets the surrounding pane chrome with no gutter.
+        // The renderer will paint its own (inset) bounds over the top,
+        // but that just repaints the same color across the smaller
+        // rect — no visual difference, and it keeps the renderer
+        // self-contained.
+        ctx.setFillColor(configuration.background.cgColor)
+        ctx.fill(bounds)
+
         // SGR 5/6 blink: arm a self-redraw timer while blink cells are
         // on screen, and compute the current alpha from the wall clock.
         // No blink content → no timer → zero CPU.
         let hasBlink = frame.hasBlinkingContent
         let blinkAlpha: CGFloat = hasBlink ? Self.currentBlinkAlpha() : 1.0
         syncBlinkTimer(active: hasBlink)
+
+        // H2: shift the renderer's coordinate space to the inset
+        // origin and shrink its bounds to the inset rect. The renderer
+        // paints cells at `col * cellWidth` starting at x=0, so
+        // translating here is the cleanest way to inset every glyph,
+        // cursor, separator, and decoration in one shot.
+        let inset = Self.textInset
+        let insetBounds = NSRect(
+            x: 0,
+            y: 0,
+            width: max(0, bounds.width - inset.left - inset.right),
+            height: max(0, bounds.height - inset.top - inset.bottom)
+        )
+        ctx.saveGState()
+        ctx.translateBy(x: inset.left, y: inset.top)
 
         GhosttyRenderer.draw(
             frame: frame,
@@ -487,8 +547,10 @@ public final class BrokeredTerminalView: NSView {
                 ascent: ascent
             ),
             in: ctx,
-            bounds: bounds
+            bounds: insetBounds
         )
+
+        ctx.restoreGState()
     }
 
     // MARK: - Blink animation

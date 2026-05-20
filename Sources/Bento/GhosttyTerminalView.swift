@@ -38,19 +38,27 @@ public final class GhosttyTerminalView: NSView {
         public var cursor: NSColor
         public var fontSize: CGFloat
         public var fontName: String?
+        /// H1: multiplier applied to the typographic line height to add
+        /// inter-line breathing room. Mirrors BrokeredTerminalView's
+        /// `lineHeightMultiplier`. Default 1.15 matches Warp's resting
+        /// "comfortable" setting; 1.0 reproduces the tight CoreText
+        /// default. See BrokeredTerminalView for the centering math.
+        public var lineHeightMultiplier: CGFloat
 
         public init(
             foreground: NSColor = .white,
             background: NSColor = NSColor(white: 0.07, alpha: 1.0),
             cursor: NSColor = NSColor(calibratedRed: 0.4, green: 0.85, blue: 1.0, alpha: 1.0),
             fontSize: CGFloat = 13,
-            fontName: String? = nil
+            fontName: String? = nil,
+            lineHeightMultiplier: CGFloat = 1.15
         ) {
             self.foreground = foreground
             self.background = background
             self.cursor = cursor
             self.fontSize = fontSize
             self.fontName = fontName
+            self.lineHeightMultiplier = lineHeightMultiplier
         }
     }
 
@@ -98,6 +106,12 @@ public final class GhosttyTerminalView: NSView {
 
     /// Cached attributes used by the CoreText draw path.
     private var textAttributes: [NSAttributedString.Key: Any] = [:]
+
+    /// H2: baked-in text inset. Mirrors BrokeredTerminalView so the
+    /// in-process and brokered views render with the same chrome.
+    /// Background still fills the view edge-to-edge; only the cell
+    /// grid is inset.
+    private static let textInset = NSEdgeInsets(top: 8, left: 12, bottom: 0, right: 12)
 
     // MARK: - Init
 
@@ -166,8 +180,14 @@ public final class GhosttyTerminalView: NSView {
         var leading: CGFloat = 0
         let width = CTLineGetTypographicBounds(line, &asc, &desc, &leading)
         cellWidth = max(1, CGFloat(width))
-        cellHeight = max(1, ceil(asc + desc + leading))
-        ascent = asc
+        // H1: mirror BrokeredTerminalView — apply the line-height
+        // multiplier and shift the ascent so glyphs stay centered
+        // inside the bumped cell.
+        let tightHeight = ceil(asc + desc + leading)
+        let bumped = ceil(tightHeight * max(1, configuration.lineHeightMultiplier))
+        cellHeight = max(1, bumped)
+        let extra = max(0, cellHeight - tightHeight)
+        ascent = asc + extra / 2
     }
 
     private func rebuildAttributes() {
@@ -282,8 +302,14 @@ public final class GhosttyTerminalView: NSView {
     // MARK: - Resize
 
     private func computeGridSize(for size: NSSize) -> (UInt16, UInt16) {
-        let c = max(1, Int(floor(size.width / max(1, cellWidth))))
-        let r = max(1, Int(floor(size.height / max(1, cellHeight))))
+        // H2: subtract the baked text inset before deriving the cell
+        // count so the grid sizes against the area the renderer can
+        // actually paint into.
+        let inset = Self.textInset
+        let usableWidth = max(0, size.width - inset.left - inset.right)
+        let usableHeight = max(0, size.height - inset.top - inset.bottom)
+        let c = max(1, Int(floor(usableWidth / max(1, cellWidth))))
+        let r = max(1, Int(floor(usableHeight / max(1, cellHeight))))
         return (UInt16(min(c, Int(UInt16.max))), UInt16(min(r, Int(UInt16.max))))
     }
 
@@ -322,6 +348,23 @@ public final class GhosttyTerminalView: NSView {
         } else {
             frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
         }
+
+        // H2: paint background edge-to-edge so the dark surface meets
+        // the surrounding chrome with no gutter, then translate the
+        // context into the inset rect for the renderer pass.
+        ctx.setFillColor(configuration.background.cgColor)
+        ctx.fill(bounds)
+
+        let inset = Self.textInset
+        let insetBounds = NSRect(
+            x: 0,
+            y: 0,
+            width: max(0, bounds.width - inset.left - inset.right),
+            height: max(0, bounds.height - inset.top - inset.bottom)
+        )
+        ctx.saveGState()
+        ctx.translateBy(x: inset.left, y: inset.top)
+
         GhosttyRenderer.draw(
             frame: frame,
             configuration: GhosttyRenderer.TerminalRenderConfiguration(
@@ -337,8 +380,10 @@ public final class GhosttyTerminalView: NSView {
                 ascent: ascent
             ),
             in: ctx,
-            bounds: bounds
+            bounds: insetBounds
         )
+
+        ctx.restoreGState()
     }
 
     // MARK: - Keyboard input
