@@ -386,10 +386,22 @@ public final class BrokeredTerminalView: NSView {
 
     /// Feed broker output into the local Ghostty terminal and request a
     /// repaint. Already on `@MainActor` because the whole view is.
+    ///
+    /// Setting `needsDisplay = true` alone is fragile when the source
+    /// of the update is a purely-async event (broker stream → for-await
+    /// → feedOutput) and the window is otherwise idle: AppKit's display
+    /// loop coalesces dirty rects and only flushes them when the
+    /// runloop processes a UI event. If nothing moves the mouse and no
+    /// other timer fires, the terminal sits stale until the user types
+    /// or hovers — which is the exact "doesn't refresh until I do
+    /// something" bug. `displayIfNeeded()` pumps the redraw
+    /// synchronously on the next CATransaction commit so each output
+    /// chunk lands on screen immediately.
     private func feedOutput(_ data: Data) {
         guard let session else { return }
         try? bridge.feed(data, to: session)
         needsDisplay = true
+        displayIfNeeded()
     }
 
     /// Pull the shell's OSC 7 cwd from the Ghostty bridge and, if it
