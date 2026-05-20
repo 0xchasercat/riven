@@ -153,6 +153,59 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         return copy
     }
 
+    /// Return a copy with the focused tab's focused surface split by
+    /// `direction`, adding `newSurface` as the new sibling. The new
+    /// surface takes focus inside the tab. No-op when no tab is
+    /// focused.
+    public func splittingFocusedSurface(
+        direction: SplitDirection,
+        newSurface: TabSurface
+    ) -> WorkspaceGroup {
+        guard let idx = tabs.firstIndex(where: { $0.id == focusedTabID }) else { return self }
+        var copy = self
+        copy.tabs[idx] = tabs[idx].splittingFocusedSurface(
+            direction: direction,
+            newSurface: newSurface
+        )
+        return copy
+    }
+
+    /// Remove `surfaceID` from `tabID`. No-op when:
+    /// - tab not found,
+    /// - surface not found inside the tab,
+    /// - removing it would leave the tab empty (close the whole tab
+    ///   via `removingTab` instead).
+    public func removingSurface(tabID: TabID, surfaceID: SurfaceID) -> WorkspaceGroup {
+        guard let idx = tabs.firstIndex(where: { $0.id == tabID }) else { return self }
+        let updated = tabs[idx].removingSurface(surfaceID)
+        guard updated != tabs[idx] else { return self }
+        var copy = self
+        copy.tabs[idx] = updated
+        return copy
+    }
+
+    /// Move focus to `surfaceID` inside `tabID`. No-op when the
+    /// surface is already focused or doesn't exist.
+    public func focusingSurface(tabID: TabID, surfaceID: SurfaceID) -> WorkspaceGroup {
+        guard let idx = tabs.firstIndex(where: { $0.id == tabID }) else { return self }
+        let updated = tabs[idx].focusingSurface(surfaceID)
+        guard updated != tabs[idx] else { return self }
+        var copy = self
+        copy.tabs[idx] = updated
+        return copy
+    }
+
+    /// Cycle focus inside `tabID` to the next surface in layout DFS
+    /// order. No-op when the tab has only one surface.
+    public func focusingNextSurface(tabID: TabID) -> WorkspaceGroup {
+        guard let idx = tabs.firstIndex(where: { $0.id == tabID }) else { return self }
+        let updated = tabs[idx].focusingNextSurface()
+        guard updated != tabs[idx] else { return self }
+        var copy = self
+        copy.tabs[idx] = updated
+        return copy
+    }
+
     /// Return a copy with `id`'s `displayName` set to `newName`. Empty
     /// string or whitespace-only resets the display name to the
     /// kind-default (`shell` for terminals, file basename for editors).
@@ -259,16 +312,37 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     }
 }
 
-/// One inner tab within a workspace. Carries its `kind` (terminal or
-/// editor) plus the display name shown in the inner tab strip and the
-/// cwd the tab was created under (informational; the broker still owns
-/// the live PTY's cwd via OSC 7).
+/// One inner tab within a workspace. A tab is a stack of one or more
+/// **surfaces** (terminal or editor leaves) arranged by a recursive
+/// **layout** tree. A tab with a single surface is a regular flat tab
+/// (the only shape that existed pre-#23); a tab with a `.split` layout
+/// renders multiple surfaces side-by-side or stacked.
+///
+/// Every surface has its own broker `PaneID` (for terminals) or
+/// editor path (for editors). Focus is at the surface level — the
+/// command bar writes into `focusedSurface.terminalPaneID`, the
+/// rename-tab dialog still works on the whole tab.
 public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
     public var id: TabID
     public var displayName: String
-    public var kind: WorkspaceInnerTabKind
+    /// Origin cwd when the tab was first created. Each surface keeps
+    /// its own working directory after that (via OSC 7); this is the
+    /// seed used for any new surface added via split.
     public var cwd: String
+    /// Every surface (terminal/editor leaf) inside this tab. A tab
+    /// always has at least one surface; closing the last surface is a
+    /// no-op (close the whole tab instead).
+    public var surfaces: [TabSurface]
+    /// How the surfaces are arranged spatially. Leaves point to
+    /// surfaces by id. Single-surface tabs use a `.leaf` layout.
+    public var layout: TabLayout
+    /// Which surface inside this tab currently has focus. Must match
+    /// one of `surfaces[*].id`; defensive fallback to `surfaces[0]`.
+    public var focusedSurfaceID: SurfaceID
 
+    /// Primary constructor — pass a single `kind` and the tab is built
+    /// with one surface containing it. Multi-surface tabs are
+    /// constructed via `splittingFocusedSurface(...)`.
     public init(
         id: TabID = TabID(),
         displayName: String,
@@ -277,48 +351,212 @@ public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
     ) {
         self.id = id
         self.displayName = displayName
-        self.kind = kind
         self.cwd = cwd
+        let surface = TabSurface(id: SurfaceID(), kind: kind)
+        self.surfaces = [surface]
+        self.layout = .leaf(surface.id)
+        self.focusedSurfaceID = surface.id
     }
 
-    /// Back-compat accessor: the broker PaneID for terminal tabs, nil
-    /// for editor tabs. Callers reaching for this should branch on
-    /// `kind` instead — this is kept to keep diffs small in views that
-    /// were written before tabs grew variants.
+    /// Lower-level constructor for tests + persistence — takes the
+    /// surface list, layout, and focus id explicitly. Use the
+    /// kind-based init for everyday code paths.
+    public init(
+        id: TabID,
+        displayName: String,
+        cwd: String,
+        surfaces: [TabSurface],
+        layout: TabLayout,
+        focusedSurfaceID: SurfaceID
+    ) {
+        precondition(!surfaces.isEmpty, "WorkspaceInnerTab must contain at least one surface")
+        self.id = id
+        self.displayName = displayName
+        self.cwd = cwd
+        self.surfaces = surfaces
+        self.layout = layout
+        self.focusedSurfaceID = focusedSurfaceID
+    }
+
+    /// The currently-focused surface, or `surfaces[0]` if
+    /// `focusedSurfaceID` doesn't resolve (defensive).
+    public var focusedSurface: TabSurface {
+        surfaces.first(where: { $0.id == focusedSurfaceID }) ?? surfaces[0]
+    }
+
+    /// `true` when the tab has more than one surface (i.e. the layout
+    /// contains a `.split`). Cheaper than walking the layout tree.
+    public var isSplit: Bool { surfaces.count > 1 }
+
+    /// Back-compat accessor: the kind of the focused surface. Most
+    /// pre-#23 code reaches for `tab.kind`; that still works and
+    /// returns whatever's under the caret.
+    public var kind: WorkspaceInnerTabKind { focusedSurface.kind }
+
+    /// Back-compat accessor: the broker `PaneID` for the focused
+    /// surface if it's a terminal, nil otherwise. Used by the command
+    /// bar to route input.
     public var terminalPaneID: PaneID? {
-        if case let .terminal(paneID, _) = kind { return paneID }
+        if case let .terminal(paneID, _) = focusedSurface.kind { return paneID }
         return nil
     }
 
-    /// Back-compat accessor: the optional shell command for terminal tabs.
+    /// Back-compat accessor: the optional shell command for the
+    /// focused surface (terminal only).
     public var command: String? {
-        if case let .terminal(_, command) = kind { return command }
+        if case let .terminal(_, command) = focusedSurface.kind { return command }
         return nil
     }
 
-    /// The file path for editor tabs (nil = scratch / unsaved buffer
-    /// OR the tab isn't an editor at all — distinguish via `isEditor`).
+    /// Back-compat accessor: the file path of the focused surface if
+    /// it's an editor (nil = scratch buffer; also nil if the focused
+    /// surface isn't an editor — distinguish via `isEditor`).
     public var editorPath: String? {
-        if case let .editor(path) = kind { return path }
+        if case let .editor(path) = focusedSurface.kind { return path }
         return nil
     }
 
-    /// `true` when this tab is an editor (scratch or file-backed).
-    /// Use this to differentiate "scratch tab" from "not an editor"
-    /// when both return nil from `editorPath`.
+    /// `true` when the focused surface is an editor (scratch or
+    /// file-backed). Disambiguates "scratch editor" from "not an
+    /// editor" when both return nil from `editorPath`.
     public var isEditor: Bool {
-        if case .editor = kind { return true }
+        if case .editor = focusedSurface.kind { return true }
         return false
+    }
+
+    // MARK: - Pure split mutators
+
+    /// Return a copy with `direction`-split at the currently-focused
+    /// surface. The focused surface stays; `newSurface` becomes its
+    /// sibling in a new `.split` node, and focus moves to the new
+    /// surface so the user can immediately interact with it.
+    public func splittingFocusedSurface(
+        direction: SplitDirection,
+        newSurface: TabSurface
+    ) -> WorkspaceInnerTab {
+        var copy = self
+        copy.surfaces.append(newSurface)
+        copy.layout = Self.replaceLeaf(
+            in: layout,
+            target: focusedSurfaceID,
+            with: .split(direction, .leaf(focusedSurfaceID), .leaf(newSurface.id))
+        )
+        copy.focusedSurfaceID = newSurface.id
+        return copy
+    }
+
+    /// Return a copy with `id` removed from both the surface list AND
+    /// the layout (collapsing any single-child split nodes that result
+    /// from the removal — same idea as `PaneGraph.close`). No-op when
+    /// `id` doesn't exist or when removing it would leave the tab
+    /// empty.
+    public func removingSurface(_ id: SurfaceID) -> WorkspaceInnerTab {
+        guard surfaces.count > 1,
+              surfaces.contains(where: { $0.id == id }) else { return self }
+        var copy = self
+        copy.surfaces.removeAll(where: { $0.id == id })
+        copy.layout = Self.removingLeaf(from: layout, target: id) ?? .leaf(copy.surfaces[0].id)
+        if copy.focusedSurfaceID == id {
+            copy.focusedSurfaceID = copy.surfaces[0].id
+        }
+        return copy
+    }
+
+    /// Move focus to `id` if it's a known surface; no-op otherwise.
+    public func focusingSurface(_ id: SurfaceID) -> WorkspaceInnerTab {
+        guard id != focusedSurfaceID, surfaces.contains(where: { $0.id == id }) else { return self }
+        var copy = self
+        copy.focusedSurfaceID = id
+        return copy
+    }
+
+    /// Cycle focus to the "next" surface in layout-tree DFS order.
+    /// Useful for keyboard navigation between split panes.
+    public func focusingNextSurface() -> WorkspaceInnerTab {
+        let ordered = Self.leafIDs(of: layout)
+        guard ordered.count > 1,
+              let currentIdx = ordered.firstIndex(of: focusedSurfaceID) else { return self }
+        let nextIdx = (currentIdx + 1) % ordered.count
+        return focusingSurface(ordered[nextIdx])
+    }
+
+    // MARK: - Layout-tree helpers (private)
+
+    /// Walk `node` and return a tree where every `.leaf(target)` is
+    /// replaced with `replacement`. Other leaves and split shapes are
+    /// preserved. Used by split: the focused leaf becomes a new split
+    /// with the focused leaf + new leaf as children.
+    private static func replaceLeaf(
+        in node: TabLayout,
+        target: SurfaceID,
+        with replacement: TabLayout
+    ) -> TabLayout {
+        switch node {
+        case let .leaf(id):
+            return id == target ? replacement : node
+        case let .split(direction, lhs, rhs):
+            return .split(
+                direction,
+                replaceLeaf(in: lhs, target: target, with: replacement),
+                replaceLeaf(in: rhs, target: target, with: replacement)
+            )
+        }
+    }
+
+    /// Walk `node` and return a tree with `target` removed. When a
+    /// split node ends up with only one child after removal, the
+    /// surviving child takes the parent's place (collapses single-
+    /// child splits). Returns `nil` only if the entire tree was the
+    /// removed leaf — caller falls back to a default leaf.
+    private static func removingLeaf(from node: TabLayout, target: SurfaceID) -> TabLayout? {
+        switch node {
+        case let .leaf(id):
+            return id == target ? nil : node
+        case let .split(direction, lhs, rhs):
+            let newLhs = removingLeaf(from: lhs, target: target)
+            let newRhs = removingLeaf(from: rhs, target: target)
+            switch (newLhs, newRhs) {
+            case let (.some(l), .some(r)):
+                return .split(direction, l, r)
+            case let (.some(l), .none):
+                return l
+            case let (.none, .some(r)):
+                return r
+            case (.none, .none):
+                return nil
+            }
+        }
+    }
+
+    /// Collect leaf surface IDs in DFS order. Used by next-focus
+    /// cycling so the user moves through splits in a predictable
+    /// reading order (left→right, top→bottom).
+    private static func leafIDs(of node: TabLayout) -> [SurfaceID] {
+        switch node {
+        case let .leaf(id):
+            return [id]
+        case let .split(_, lhs, rhs):
+            return leafIDs(of: lhs) + leafIDs(of: rhs)
+        }
     }
 
     // MARK: - Codable
     //
-    // Permissive decoder so legacy snapshots — which encoded a flat
-    // `terminalPaneID` + `command` and no `kind` — still resurrect as
-    // `.terminal` tabs.
+    // Permissive decoder so legacy snapshots resurrect correctly:
+    //   1. Pre-#23 shape with `kind` (and optional `terminalPaneID` /
+    //      `command` from the original launch). Synthesize one
+    //      surface, layout = .leaf, focusedSurfaceID = that surface.
+    //   2. Even-older shape with bare `terminalPaneID` + `command` and
+    //      no `kind` field. Same migration — assemble a terminal
+    //      surface from the flat fields.
+    //   3. New (#23) shape with `surfaces` + `layout` + `focusedSurfaceID`.
 
     private enum CodingKeys: String, CodingKey {
-        case id, displayName, kind, cwd, terminalPaneID, command
+        case id, displayName, cwd
+        // New (#23) keys:
+        case surfaces, layout, focusedSurfaceID
+        // Pre-#23 keys (kept for decode-side back-compat):
+        case kind, terminalPaneID, command
     }
 
     public init(from decoder: Decoder) throws {
@@ -326,14 +564,31 @@ public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
         self.id = try c.decode(TabID.self, forKey: .id)
         self.displayName = try c.decode(String.self, forKey: .displayName)
         self.cwd = try c.decode(String.self, forKey: .cwd)
-        if let kind = try c.decodeIfPresent(WorkspaceInnerTabKind.self, forKey: .kind) {
-            self.kind = kind
+
+        if let surfaces = try c.decodeIfPresent([TabSurface].self, forKey: .surfaces),
+           !surfaces.isEmpty {
+            // New shape.
+            self.surfaces = surfaces
+            self.layout = try c.decodeIfPresent(TabLayout.self, forKey: .layout)
+                ?? .leaf(surfaces[0].id)
+            let decodedFocus = try c.decodeIfPresent(SurfaceID.self, forKey: .focusedSurfaceID)
+            self.focusedSurfaceID = decodedFocus ?? surfaces[0].id
         } else {
-            // Legacy shape: a flat `terminalPaneID` + `command` lived on
-            // the tab itself. Reconstruct a `.terminal` kind from those.
-            let paneID = try c.decode(PaneID.self, forKey: .terminalPaneID)
-            let command = try c.decodeIfPresent(String.self, forKey: .command)
-            self.kind = .terminal(paneID: paneID, command: command)
+            // Legacy shape — promote into a single-surface tab.
+            let kind: WorkspaceInnerTabKind
+            if let decoded = try c.decodeIfPresent(WorkspaceInnerTabKind.self, forKey: .kind) {
+                kind = decoded
+            } else {
+                // Even-older flat shape: terminalPaneID + command at
+                // the tab level. Reconstruct a terminal kind.
+                let paneID = try c.decode(PaneID.self, forKey: .terminalPaneID)
+                let command = try c.decodeIfPresent(String.self, forKey: .command)
+                kind = .terminal(paneID: paneID, command: command)
+            }
+            let surface = TabSurface(id: SurfaceID(), kind: kind)
+            self.surfaces = [surface]
+            self.layout = .leaf(surface.id)
+            self.focusedSurfaceID = surface.id
         }
     }
 
@@ -341,16 +596,56 @@ public struct WorkspaceInnerTab: Hashable, Codable, Sendable, Identifiable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(displayName, forKey: .displayName)
-        try c.encode(kind, forKey: .kind)
         try c.encode(cwd, forKey: .cwd)
+        try c.encode(surfaces, forKey: .surfaces)
+        try c.encode(layout, forKey: .layout)
+        try c.encode(focusedSurfaceID, forKey: .focusedSurfaceID)
+        // Don't re-emit `kind` / `terminalPaneID` / `command` — they
+        // are strictly decode-side back-compat hooks. A round-trip
+        // through this encoder upgrades the on-disk shape to the new
+        // surface-tree form.
     }
 }
 
-/// What a `WorkspaceInnerTab` is. A `.terminal` tab carries its own
+/// One pane inside an inner tab. Terminal surfaces own their broker
+/// `PaneID` (the address of the PTY); editor surfaces own a file
+/// path or nil for a scratch buffer.
+public struct TabSurface: Hashable, Codable, Sendable, Identifiable {
+    public var id: SurfaceID
+    public var kind: WorkspaceInnerTabKind
+
+    public init(id: SurfaceID = SurfaceID(), kind: WorkspaceInnerTabKind) {
+        self.id = id
+        self.kind = kind
+    }
+}
+
+/// Stable identifier for surfaces (panes inside a tab). Same shape as
+/// `TabID` / `PaneID`; opaque UUID-backed string by default.
+public struct SurfaceID: Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(_ rawValue: String = UUID().uuidString) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+}
+
+/// Recursive split tree describing how surfaces are arranged inside a
+/// tab. `.leaf(id)` is a single surface filling its parent; `.split`
+/// stacks two sub-layouts. Reuses `SplitDirection` from `PaneGraph`
+/// (`.right` = side-by-side, `.down` = top/bottom).
+public enum TabLayout: Hashable, Codable, Sendable {
+    case leaf(SurfaceID)
+    indirect case split(SplitDirection, TabLayout, TabLayout)
+}
+
+/// What a tab's surface is. A `.terminal` surface carries its own
 /// broker `PaneID` (the address of its PTY) and an optional shell
-/// command; an `.editor` tab carries an optional file path the editor
-/// is bound to (`nil` = an unsaved scratch buffer). Persisted in
-/// snapshots so each tab survives a restart with its surface kind
+/// command; an `.editor` surface carries an optional file path the
+/// editor is bound to (`nil` = an unsaved scratch buffer). Persisted
+/// in snapshots so each surface survives a restart with its kind
 /// intact.
 public enum WorkspaceInnerTabKind: Hashable, Codable, Sendable {
     case terminal(paneID: PaneID, command: String?)
