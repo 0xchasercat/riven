@@ -223,6 +223,91 @@ struct WorkspaceResurrectionTests {
         #expect(restoredWorkspace.tabs[1].editorPath == project.appendingPathComponent("Hello.md").path)
     }
 
+    @Test("a tab with side-by-side splits round-trips through the snapshot store")
+    func splitTabRoundtripsThroughStore() throws {
+        let project = try temporaryProject()
+        let snapshotRoot = project.appendingPathComponent(".snapshots")
+        let store = WorkspaceSnapshotStore(root: snapshotRoot)
+
+        // Build a workspace with one tab that has two side-by-side
+        // terminal surfaces. The split is explicitly authored here
+        // (rather than via the splittingFocusedSurface mutator) so
+        // both surface IDs are stable and the assertions can match
+        // exactly.
+        let leftSurface = TabSurface(
+            id: SurfaceID("surface-left"),
+            kind: .terminal(paneID: PaneID("pane-left"), command: nil)
+        )
+        let rightSurface = TabSurface(
+            id: SurfaceID("surface-right"),
+            kind: .terminal(paneID: PaneID("pane-right"), command: "swift test")
+        )
+        let tab = WorkspaceInnerTab(
+            id: TabID("split-tab"),
+            displayName: "split",
+            cwd: project.standardizedFileURL.path,
+            surfaces: [leftSurface, rightSurface],
+            layout: .split(.right, .leaf(leftSurface.id), .leaf(rightSurface.id)),
+            focusedSurfaceID: rightSurface.id
+        )
+        let workspace = WorkspaceGroup(
+            initialCwd: project.standardizedFileURL.path,
+            tabs: [tab],
+            focusedTabID: tab.id
+        )
+        let pane = PaneDescriptor(
+            id: PaneID("workspace-root"),
+            name: "workspace",
+            kind: .workspace(workspace),
+            isFocused: true
+        )
+        let snapshot = WorkspaceSnapshot(
+            projectRoot: project.standardizedFileURL.path,
+            selectedThemeID: "bento",
+            paneGraph: PaneGraph(root: pane),
+            openFiles: []
+        )
+        try store.save(snapshot)
+
+        let restored = try store.load(projectRoot: project.standardizedFileURL.path)
+        guard let restoredWorkspace = restored?.paneGraph.pane(PaneID("workspace-root"))?.workspace else {
+            Issue.record("expected restored snapshot to contain the workspace pane")
+            return
+        }
+        guard let restoredTab = restoredWorkspace.tabs.first(where: { $0.id == TabID("split-tab") }) else {
+            Issue.record("expected restored workspace to contain the split tab")
+            return
+        }
+        #expect(restoredTab.surfaces.count == 2)
+        #expect(restoredTab.isSplit == true)
+        #expect(restoredTab.focusedSurfaceID == SurfaceID("surface-right"))
+        // Layout preserved exactly.
+        switch restoredTab.layout {
+        case let .split(direction, .leaf(lhs), .leaf(rhs)):
+            #expect(direction == .right)
+            #expect(lhs == SurfaceID("surface-left"))
+            #expect(rhs == SurfaceID("surface-right"))
+        default:
+            Issue.record("expected .split(.right, .leaf, .leaf) layout after roundtrip, got \(restoredTab.layout)")
+        }
+        // Broker PaneIDs survive — critical for reattach.
+        let leftPaneIDAfter = restoredTab.surfaces
+            .first(where: { $0.id == SurfaceID("surface-left") })
+            .flatMap { surface -> PaneID? in
+                if case let .terminal(paneID, _) = surface.kind { return paneID }
+                return nil
+            }
+        let rightPaneAfter = restoredTab.surfaces
+            .first(where: { $0.id == SurfaceID("surface-right") })?.kind
+        #expect(leftPaneIDAfter == PaneID("pane-left"))
+        if case let .terminal(paneID, command) = rightPaneAfter {
+            #expect(paneID == PaneID("pane-right"))
+            #expect(command == "swift test")
+        } else {
+            Issue.record("right surface lost its terminal kind on roundtrip")
+        }
+    }
+
     @Test("scratch editor tab (nil path) round-trips through the snapshot")
     func scratchEditorTabRoundtrips() throws {
         let project = try temporaryProject()
