@@ -74,13 +74,14 @@ struct WorkspaceTabBar: View {
         // macOS-reserved titlebar height). Tabs + close-× still
         // breathe at this height.
         .frame(height: 52)
-        // Mostly-opaque tint sits on top of the .headerView vibrancy
-        // wrapped around the chrome strip in `RootView.mainColumn`
-        // (H8). At 0.92 the bar reads as a solid surface with just a
-        // hint of vibrancy bleeding through — without this, the dark
-        // Carbon theme + low-alpha tint combined into one washed-out
-        // grey strip that lost the tab/accent contrast entirely.
-        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.92))
+        // Solid `paneHeaderBg` tint sits on top of the theme-aware
+        // vibrancy wrapped around the chrome strip in
+        // `RootView.mainColumn` (H8). Mockup uses this exact slot for
+        // every header bar, and a fully opaque cream / sumi reads
+        // crisper than the old `elevated.opacity(0.92)` blend — which
+        // washed Paper out to grey and let Carbon's dark vibrancy
+        // bleed through too aggressively.
+        .background(Color(hex: theme.chrome.paneHeaderBg.hex))
     }
 
     /// Produce a short tab label. Workspaces prefer the user-set

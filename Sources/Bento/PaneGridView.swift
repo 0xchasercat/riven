@@ -324,15 +324,20 @@ final class BentoPaneContainerView: NSView {
         let liveIDs = Set(graph.leaves().map(\.id))
         coordinator?.leafHosts = (coordinator?.leafHosts ?? [:]).filter { liveIDs.contains($0.key) }
 
-        // Swap in the new content view.
+        // Swap in the new content view. The outer inset matches the
+        // theme's divider weight so the gutter around the focused
+        // workspace pane reads as the same "compartment wall" the
+        // inter-pane dividers paint — Bento gets a 6 pt frame, Carbon /
+        // Tokyo / Paper get a single hairline.
         contentView?.removeFromSuperview()
         newContent.translatesAutoresizingMaskIntoConstraints = false
         addSubview(newContent)
+        let gutter = theme.geometry.dividerWeight
         NSLayoutConstraint.activate([
-            newContent.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            newContent.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
-            newContent.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            newContent.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            newContent.topAnchor.constraint(equalTo: topAnchor, constant: gutter),
+            newContent.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gutter),
+            newContent.leadingAnchor.constraint(equalTo: leadingAnchor, constant: gutter),
+            newContent.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -gutter),
         ])
         self.contentView = newContent
     }
@@ -485,7 +490,11 @@ private struct PaneTreeBuilder {
         autosaveName: String
     ) -> NSSplitView {
         let split = BentoSplitView()
+        split.apply(theme: theme)
         split.isVertical = (direction == .right) // .right == side-by-side == vertical divider
+        // .thin -> hairline render style; the actual thickness still
+        // comes from `BentoSplitView.dividerThickness`, which is
+        // theme-driven via `geometry.dividerWeight`.
         split.dividerStyle = .thin
         split.translatesAutoresizingMaskIntoConstraints = false
         // Setting `autosaveName` lets NSSplitView persist the divider
@@ -619,15 +628,33 @@ private struct BrokerConnectingPlaceholder: View {
 
 // MARK: - Split view that doesn't draw a noisy divider
 
-/// `NSSplitView` subclass that uses the chrome border color for its
-/// divider so the grid reads as a coherent surface rather than a stack
-/// of disconnected boxes.
+/// `NSSplitView` subclass that paints its divider in the active theme's
+/// `chrome.border` colour and at the theme's `geometry.dividerWeight`
+/// so the grid reads as a coherent surface rather than a stack of
+/// disconnected boxes. The Bento theme ships a 6 pt divider here that
+/// reads as a compartment wall; flatter themes (Carbon / Tokyo / Paper)
+/// stay at a hairline.
+///
+/// `apply(theme:)` is called from `BentoPaneContainerView.apply` so a
+/// runtime theme switch repaints / re-sizes the divider strip. We default
+/// to `ThemeSpec.builtIns[0]` at construction time because NSSplitView is
+/// instantiated by SwiftUI's tree builder before the first theme is
+/// threaded through; the first `apply` corrects it immediately.
 private final class BentoSplitView: NSSplitView {
-    override var dividerColor: NSColor {
-        NSColor.black.withAlphaComponent(0.35)
+    private var theme: ThemeSpec = ThemeSpec.builtIns[0]
+
+    func apply(theme: ThemeSpec) {
+        self.theme = theme
+        needsDisplay = true
     }
 
-    override var dividerThickness: CGFloat { 1 }
+    override var dividerColor: NSColor {
+        NSColor(hex: theme.chrome.border.hex)
+    }
+
+    override var dividerThickness: CGFloat {
+        theme.geometry.dividerWeight
+    }
 }
 
 // MARK: - Per-pane chrome / click-to-focus

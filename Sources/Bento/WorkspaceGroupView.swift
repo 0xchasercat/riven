@@ -697,11 +697,15 @@ struct TabLayoutView: View {
             // `.right` = side-by-side (vertical divider between two
             // horizontal halves). `.down` = stacked (horizontal
             // divider between two vertical halves).
+            // Inter-pane split divider — inherit the theme's
+            // `geometry.dividerWeight` so Bento (6 pt) reads as a
+            // proper compartment wall while Carbon / Tokyo / Paper
+            // stay at the hairline they ship.
             if direction == .right {
                 return AnyView(
                     HStack(spacing: 0) {
                         renderLayout(lhs)
-                        Hairline(theme: theme, axis: .vertical)
+                        Hairline(theme: theme, axis: .vertical, weight: nil)
                         renderLayout(rhs)
                     }
                 )
@@ -709,7 +713,7 @@ struct TabLayoutView: View {
                 return AnyView(
                     VStack(spacing: 0) {
                         renderLayout(lhs)
-                        Hairline(theme: theme)
+                        Hairline(theme: theme, weight: nil)
                         renderLayout(rhs)
                     }
                 )
@@ -821,15 +825,21 @@ private struct SurfaceLeafView: View {
         }
     }
 
-    /// 1pt accent rectangle on the focused leaf. Single-surface tabs
-    /// also draw this, but it sits flush against the existing tab
-    /// chrome so it reads as "this surface is active" only when there's
-    /// a sibling to differentiate from.
+    /// Themed accent rectangle on the focused leaf. Width comes from
+    /// `geometry.activeHighlightWidth` (defaults to 1 pt) and alpha
+    /// from `geometry.activeHighlightAlpha` (Bento ships 0.55 for a
+    /// glowing-amber rather than hard-line read; Carbon / Tokyo /
+    /// Paper ship 1.0). Single-surface tabs draw this too, but it
+    /// sits flush against the existing tab chrome so it reads as
+    /// "this surface is active" only when there's a sibling to
+    /// differentiate from.
     private var focusBorder: some View {
-        Rectangle()
+        let radius = theme.geometry.paneRadius
+        return RoundedRectangle(cornerRadius: radius, style: .continuous)
             .strokeBorder(
-                Color(hex: theme.chrome.accent.hex),
-                lineWidth: isFocused ? 1 : 0
+                Color(hex: theme.chrome.activeBorder.hex)
+                    .opacity(theme.geometry.activeHighlightAlpha),
+                lineWidth: isFocused ? theme.geometry.activeHighlightWidth : 0
             )
             .allowsHitTesting(false)
     }
