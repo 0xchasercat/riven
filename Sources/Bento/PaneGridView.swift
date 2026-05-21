@@ -124,10 +124,34 @@ final class BentoPaneContainerView: NSView {
     private var currentGraph: PaneGraph?
     private var onGraphChange: ((PaneGraph) -> Void)?
     private var contentView: NSView?
+    /// Last set of inputs that drove a full pane-tree rebuild. SwiftUI
+    /// fires `updateNSView` on every body re-evaluation regardless of
+    /// whether the relevant inputs actually changed (typing into the
+    /// workspace path field, hovering a tab chip, etc.), which used to
+    /// blow away + rebuild the whole pane tree on every keystroke
+    /// anywhere in the window. We now compare incoming `apply` params
+    /// against this snapshot and bail out when nothing structural
+    /// changed.
+    private var lastAppliedSnapshot: AppliedSnapshot?
     /// `Any?` so we can store the observer token across NotificationCenter
     /// API surfaces. Marked unsafe so `deinit` (which is nonisolated) can
     /// remove it without crossing actor boundaries.
     nonisolated(unsafe) private var firstResponderObserver: Any?
+
+    /// Inputs that influence the structural rebuild of the pane tree.
+    /// Equatable so the container can short-circuit a no-op `apply`.
+    /// Theme identity is compared by `id` (a String) rather than the
+    /// whole struct because ThemeSpec isn't Equatable; the id flips
+    /// when the user cycles themes which is the only theme change
+    /// that needs a rebuild.
+    private struct AppliedSnapshot: Equatable {
+        let graph: PaneGraph
+        let projectRoot: String
+        let brokerEpoch: Int
+        let agentClientID: ObjectIdentifier?
+        let themeID: String
+        let submitMode: CommandBarView.SubmitMode
+    }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -201,9 +225,35 @@ final class BentoPaneContainerView: NSView {
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
     ) {
+        // Always refresh the bookkeeping that the keyboard-shortcut and
+        // first-responder paths read. These read fields are looked up
+        // dynamically when a shortcut fires; they MUST point at the
+        // latest values even on no-op renders (otherwise Cmd+W would
+        // close a stale graph).
         self.currentGraph = graph
         self.onGraphChange = onGraphChange
         self.layer?.backgroundColor = NSColor(hex: theme.chrome.border.hex).cgColor
+
+        // Short-circuit if nothing structural has actually changed. SwiftUI
+        // hits `updateNSView` on every body re-evaluation in BentoRootView
+        // (including a keystroke into the toolbar's editable path field
+        // that flips a `@State` somewhere unrelated). Without this guard,
+        // every keystroke triggered a full pane-tree teardown + rebuild,
+        // which (among other things) fired `viewDidMoveToWindow` on the
+        // command bar's NSTextView and yanked focus away — making the
+        // path field unusable.
+        let snapshot = AppliedSnapshot(
+            graph: graph,
+            projectRoot: projectRoot,
+            brokerEpoch: brokerEpoch,
+            agentClientID: agentClient.map { ObjectIdentifier($0) },
+            themeID: theme.id,
+            submitMode: submitMode
+        )
+        if lastAppliedSnapshot == snapshot {
+            return
+        }
+        lastAppliedSnapshot = snapshot
 
         // If the broker has been respawned since the last apply, drop the
         // cached leaf hosting controllers — they hold BrokeredTerminalView
