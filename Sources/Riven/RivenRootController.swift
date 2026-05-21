@@ -112,7 +112,21 @@ final class RivenRootController: ObservableObject {
         self.scrollback = scrollback
         self.shellIntegrationInstalled = ShellIntegrationInstaller().isInstalled()
 
-        let cwd = URL(fileURLWithPath: fileMgr.currentDirectoryPath)
+        // Pick the cwd Riven boots into. When the user launches us
+        // via `swift run` or `riven .` from a terminal, the
+        // inherited working directory is usually a real project root
+        // — use it. When LaunchServices launches us from
+        // /Applications (Finder double-click, Dock click, Spotlight),
+        // the inherited cwd is "/", which is the system root: TCC
+        // protects most of it and the file viewer shows an empty
+        // tree, which reads as "permissions broken" to the user.
+        // Falling back to $HOME in that case gives the file viewer a
+        // browseable starting point the user always has access to.
+        let inheritedCwd = fileMgr.currentDirectoryPath
+        let bootCwdPath = (inheritedCwd == "/" || inheritedCwd.isEmpty)
+            ? NSHomeDirectory()
+            : inheritedCwd
+        let cwd = URL(fileURLWithPath: bootCwdPath)
         let themeID = preference.selectedTheme.id
 
         // Render with a synchronous fallback so the first frame has something

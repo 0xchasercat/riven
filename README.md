@@ -64,6 +64,16 @@ export APPLE_TEAM_ID="<TEAM_ID>"
 
 Until then the script produces ad-hoc-signed builds — users will see "developer cannot be verified" on first launch and have to right-click → Open.
 
+## Troubleshooting
+
+### "The file viewer can't access anything"
+
+On first launch Riven asks for permission to read each user folder it touches (Documents, Desktop, Downloads, network volumes, removable drives). Click **Allow** when the system prompt appears. If you missed the prompt, grant access manually in **System Settings → Privacy & Security → Files and Folders → Riven**.
+
+For projects outside the standard user folders (mounted volumes, `/opt`, `/Users/Shared`, etc.) macOS requires **Full Disk Access** instead. Add Riven via **System Settings → Privacy & Security → Full Disk Access**.
+
+A fresh launch from Finder boots Riven into `$HOME`. If you'd rather it open a specific project, drag the project folder onto the Riven dock icon or launch from the command line: `open -a Riven /path/to/project`.
+
 ## Shell integration
 
 Open the command palette (`⌘⇧P`) and search for **shell integration** to install. Bundled inside the app — no clone, no manual sourcing.
