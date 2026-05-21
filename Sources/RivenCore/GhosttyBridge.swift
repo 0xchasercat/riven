@@ -191,6 +191,38 @@ public struct GhosttyBridge: Sendable {
     /// The string is a *borrowed* pointer that's only valid until the next
     /// `ghostty_terminal_vt_write` call, so we copy into a Swift `String`
     /// immediately.
+    /// True iff the terminal is currently on the alternate screen
+    /// (DECSET 1049 / 1047 / 47 — every modern fullscreen TUI uses
+    /// one of those when it boots up: vim, nano, less, htop,
+    /// claude-code, etc.). Riven uses this to flip out of its
+    /// "command bar steals focus" default UX so the TUI gets all
+    /// keystrokes + mouse clicks directly.
+    ///
+    /// We probe both the 1049 (modern: save cursor + clear) and 47
+    /// (legacy: bare flip) modes because some older programs still
+    /// use the legacy form and we don't want them to slip through.
+    ///
+    /// Returns false for any error / closed session so the bounce-
+    /// to-command-bar default is preserved when in doubt.
+    public func isInAltScreen(_ handle: GhosttySessionHandle) -> Bool {
+        guard let terminal = handle.terminal else { return false }
+        // libghostty packs GhosttyMode as `(value & 0x7FFF) | (ansi
+        // << 15)`. All three alt-screen modes are DEC-private (47,
+        // 1047, 1049), so the high bit is 0 and the value IS the
+        // mode number. The `GHOSTTY_MODE_*` C macros wrap an inline
+        // function constructor that Swift can't import, so we build
+        // the GhosttyMode values directly.
+        let altScreenModes: [GhosttyMode] = [1049, 1047, 47]
+        for mode in altScreenModes {
+            var out = false
+            let result = ghostty_terminal_mode_get(terminal, mode, &out)
+            if result == GHOSTTY_SUCCESS, out {
+                return true
+            }
+        }
+        return false
+    }
+
     public func readCurrentCwd(_ handle: GhosttySessionHandle) throws -> String? {
         guard let terminal = handle.terminal else {
             throw GhosttyBridgeError.closedSession

@@ -157,6 +157,17 @@ public final class BrokeredTerminalView: NSView {
         let col: Int
     }
 
+    /// True iff the underlying terminal is currently on the alt
+    /// screen (vim, nano, less, htop, claude-code, …). Cached and
+    /// refreshed on every snapshot in `draw(_:)`. Used as the gate
+    /// for Riven's "click bounces to command bar" + "Tab snaps to
+    /// command bar" behaviors — neither applies inside a fullscreen
+    /// TUI, where keystrokes + mouse have to flow to the program.
+    ///
+    /// Default false so the bounce-to-bar UX is preserved any time
+    /// we don't have a live session to query.
+    private(set) var isInAltScreen: Bool = false
+
     /// Half-open range describing the active text selection. Stored
     /// in the order the user dragged so a backward drag selects the
     /// same text as a forward one (we normalize for rendering / copy).
@@ -331,6 +342,16 @@ public final class BrokeredTerminalView: NSView {
     /// drag-to-select gesture doesn't flash the cursor into the
     /// command bar mid-drag.
     public override func mouseDown(with event: NSEvent) {
+        // Alt-screen TUIs (vim, nano, htop, less, claude-code, …) own
+        // the keyboard + mouse — Riven's command-bar-as-default-input
+        // model would otherwise eat their input. Skip every Riven
+        // focus-stealing gesture in that mode and let AppKit's
+        // standard responder chain hand the click through.
+        if isInAltScreen {
+            window?.makeFirstResponder(self)
+            super.mouseDown(with: event)
+            return
+        }
         let local = convert(event.locationInWindow, from: nil)
         dragAnchor = cellCoord(at: local)
         dragDidMove = false
@@ -372,6 +393,12 @@ public final class BrokeredTerminalView: NSView {
         defer {
             dragAnchor = nil
             dragDidMove = false
+        }
+        // Alt-screen mode owns the click — `mouseDown` already
+        // forwarded; don't bounce focus or reset state from here.
+        if isInAltScreen {
+            super.mouseUp(with: event)
+            return
         }
         if !dragDidMove {
             // Plain click — no drag occurred. Bounce focus to the
@@ -689,6 +716,33 @@ public final class BrokeredTerminalView: NSView {
             // borrowed pointer copied into Swift) and only matters when
             // it actually changes — see `reportCwdIfChanged` for dedupe.
             reportCwdIfChanged(on: session)
+            // Refresh the alt-screen latch on every draw. Cheap probe
+            // (one libghostty mode_get per draw, ~ns) so we don't need
+            // to subscribe to a change event. The next focus-stealing
+            // gesture reads `self.isInAltScreen` and the renderer
+            // makes the rest of the workspace responsive to whichever
+            // TUI is currently on top.
+            let nextAltScreen = bridge.isInAltScreen(session)
+            if nextAltScreen != isInAltScreen {
+                isInAltScreen = nextAltScreen
+                NotificationCenter.default.post(
+                    name: .rivenAltScreenChanged,
+                    object: AltScreenChange(paneID: paneID, isInAltScreen: nextAltScreen)
+                )
+                // On a fresh enter into alt-screen, if the user is
+                // still parked in the command bar (the common case —
+                // they typed `nano`, hit Enter, and the TUI just
+                // booted), pull first-responder over so subsequent
+                // keystrokes go to the TUI rather than the bar.
+                // We deliberately only steal from the bar — if the
+                // user is in an editor pane or another terminal we
+                // leave their focus alone.
+                if nextAltScreen,
+                   let win = window,
+                   win.firstResponder is CommandInputTextView {
+                    win.makeFirstResponder(self)
+                }
+            }
         } else {
             frame = GhosttyRenderFrame.empty(cols: cols, rows: rows)
         }

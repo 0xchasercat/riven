@@ -131,6 +131,13 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 // Editor pane — Tab indents in the buffer.
                 return event
             }
+            // Fullscreen TUIs (vim, nano, htop, claude-code, …) ride
+            // the alt screen and own keyboard input — Tab is real
+            // input there, not a focus-traversal hint. Skip the snap
+            // so the TUI gets its tab.
+            if let term = responder as? BrokeredTerminalView, term.isInAltScreen {
+                return event
+            }
             // Anywhere else: snap to the command bar and consume the
             // event so the previous responder doesn't ALSO see the
             // tab (e.g. NSTextField would otherwise commit + beep).
@@ -587,6 +594,13 @@ extension Notification.Name {
     /// AppKit display pass — long sleeps can otherwise leave the
     /// snapshot stale until the user moves the mouse over the pane.
     static let rivenSystemDidWake = Notification.Name("RivenSystemDidWake")
+    /// Posted by `BrokeredTerminalView` when its underlying terminal
+    /// transitions in or out of the alt screen (DECSET 1049 / 1047
+    /// / 47). Object is an `AltScreenChange` carrying the paneID +
+    /// new state. The global Tab-snap monitor + the focused-pane
+    /// tracker in `RivenRootController` both listen so Riven steps
+    /// out of the way while a TUI is active.
+    static let rivenAltScreenChanged = Notification.Name("RivenAltScreenChanged")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow
@@ -608,6 +622,15 @@ extension Notification.Name {
     /// item (⌘?). RootView listens and toggles the cheatsheet
     /// overlay open.
     static let rivenShowShortcutsCheatsheet = Notification.Name("RivenShowShortcutsCheatsheet")
+}
+
+/// Payload for `.rivenAltScreenChanged`. Names which pane flipped
+/// and the new state. The controller mirrors this into a per-pane
+/// set so the workspace chrome can dim the command bar when the
+/// focused terminal is inside a fullscreen TUI.
+struct AltScreenChange: Equatable, Sendable {
+    let paneID: PaneID
+    let isInAltScreen: Bool
 }
 
 /// Direction the command bar wants to walk through history.
