@@ -357,11 +357,35 @@ final class RivenPaneContainerView: NSView {
         let liveIDs = Set(graph.leaves().map(\.id))
         coordinator?.leafHosts = (coordinator?.leafHosts ?? [:]).filter { liveIDs.contains($0.key) }
 
-        // Swap in the new content view. The outer inset matches the
-        // theme's divider weight so the gutter around the focused
-        // workspace pane reads as the same "compartment wall" the
-        // inter-pane dividers paint — Riven gets a 6 pt frame, Carbon /
-        // Tokyo / Paper get a single hairline.
+        // Perf-critical short-circuit. Cached hosts mean the builder
+        // returns the SAME NSView instance across most calls — only
+        // the host's `rootView` (a SwiftUI struct) gets reassigned
+        // inside `hostingController(for:pane:)`. When `newContent`
+        // is the view we already have attached, the
+        // `removeFromSuperview + addSubview + activate constraints`
+        // dance below is pure waste — and an expensive one, because
+        // AppKit's autolayout engine re-solves the entire pane tree
+        // (NSSplitView inside the workspace, plus every embedded
+        // hosting controller) every time constraints flip.
+        //
+        // This is the hot path for within-workspace state changes
+        // (focus shifts within a split tab, dirty flag flips,
+        // vanished-file marker, alt-screen toggle, OSC 7 cwd
+        // updates) — i.e. essentially every action the user does
+        // beyond the initial workspace mount. Skipping the tear-
+        // down + reattach cuts those gestures from ~hundreds of ms
+        // to single-digit ms on contended layouts.
+        //
+        // SwiftUI invalidations on the inner subtree still flow
+        // normally — the host's rootView was already updated by
+        // `hostingController` so the next runloop tick re-evaluates
+        // the SwiftUI body against the new state.
+        if newContent === contentView {
+            return
+        }
+
+        // Structural change: workspace tab focus switched, broker
+        // respawned, theme cycled, etc. Pay the constraint cost.
         contentView?.removeFromSuperview()
         newContent.translatesAutoresizingMaskIntoConstraints = false
         addSubview(newContent)
