@@ -3,14 +3,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Bento",
+    name: "Riven",
     platforms: [
         .macOS(.v15)
     ],
     products: [
-        .library(name: "BentoCore", targets: ["BentoCore"]),
-        .executable(name: "Bento", targets: ["Bento"]),
-        .executable(name: "BentoAgent", targets: ["BentoAgent"])
+        .library(name: "RivenCore", targets: ["RivenCore"]),
+        .executable(name: "Riven", targets: ["Riven"]),
+        .executable(name: "RivenAgent", targets: ["RivenAgent"])
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.1"),
@@ -18,7 +18,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "BentoCore",
+            name: "RivenCore",
             dependencies: ["Yams", "GhosttyVt"],
             resources: [
                 // Ships the vendored Universal2 ripgrep binary so
@@ -28,9 +28,9 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "Bento",
+            name: "Riven",
             dependencies: [
-                "BentoCore",
+                "RivenCore",
                 .product(name: "STTextView", package: "STTextView")
             ],
             swiftSettings: [
@@ -42,8 +42,8 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "BentoAgent",
-            dependencies: ["BentoCore"],
+            name: "RivenAgent",
+            dependencies: ["RivenCore"],
             swiftSettings: [
                 // main.swift uses @main on a top-level type. Without this
                 // flag SourceKit (and some toolchain configurations) flags
@@ -53,7 +53,7 @@ let package = Package(
                 .unsafeFlags(["-parse-as-library"])
             ]
         ),
-        .testTarget(name: "BentoCoreTests", dependencies: ["BentoCore"]),
+        .testTarget(name: "RivenCoreTests", dependencies: ["RivenCore"]),
         .binaryTarget(
             name: "GhosttyVt",
             path: "External/ghostty-vt-install/lib/ghostty-vt.xcframework"
