@@ -346,7 +346,46 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
     ]
 
     public static func theme(id: String) -> ThemeSpec? {
-        builtIns.first { $0.id == id }
+        // Custom themes win over builtins so a user can shadow a
+        // shipped palette by dropping the same `id` into their JSON
+        // file. The loader caches per launch; cost is a small array
+        // scan once per theme lookup.
+        if let custom = CustomThemeLoader.shared.themes.first(where: { $0.id == id }) {
+            return custom
+        }
+        return builtIns.first { $0.id == id }
+    }
+
+    /// Builtins plus user-authored custom themes. Custom themes that
+    /// shadow a builtin replace it; otherwise they're appended in the
+    /// order the loader returned. Use this everywhere a "pick a theme"
+    /// UI needs the full visible list.
+    public static func all() -> [ThemeSpec] {
+        let customs = CustomThemeLoader.shared.themes
+        let customIDs = Set(customs.map(\.id))
+        var merged: [ThemeSpec] = []
+        for theme in builtIns {
+            if let override = customs.first(where: { $0.id == theme.id }) {
+                merged.append(override)
+            } else {
+                merged.append(theme)
+            }
+        }
+        for theme in customs where !ThemeSpec.builtIns.contains(where: { $0.id == theme.id }) {
+            // Pure custom (no shadowing) — append at the end so the
+            // builtins stay in their curated order.
+            merged.append(theme)
+        }
+        // Suppress the unused warning when there are zero customs.
+        _ = customIDs
+        return merged
+    }
+
+    /// `true` when `id` belongs to a user-authored theme JSON rather
+    /// than one of the shipped `builtIns`. Used by the picker to render
+    /// the "(custom)" badge.
+    public static func isCustom(id: String) -> Bool {
+        CustomThemeLoader.shared.themes.contains(where: { $0.id == id })
     }
 }
 
