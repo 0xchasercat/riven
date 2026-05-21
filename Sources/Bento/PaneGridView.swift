@@ -279,8 +279,20 @@ final class BentoPaneContainerView: NSView {
                 self?.requestFocus(id)
             },
             onSplit: { [weak self] id in
+                // The `+` button on a pane shell's header used to call
+                // the workspace-level `splitFocused(...)` — which made
+                // sense pre-#23 when the pane graph itself could
+                // contain side-by-side workspaces, but in the
+                // one-workspace-per-screen model that just creates a
+                // new top-level tab (confusing: the user expected a
+                // split inside the current tab). Route through the
+                // surface-split notification instead, matching the
+                // [][] button in the inner tab strip and Cmd+D.
                 self?.requestFocus(id)
-                self?.splitFocused(.right, target: id)
+                NotificationCenter.default.post(
+                    name: .bentoSplitFocusedSurface,
+                    object: SplitDirection.right
+                )
             },
             onClose: { [weak self] id in
                 self?.closeFocused(target: id)
@@ -342,32 +354,50 @@ final class BentoPaneContainerView: NSView {
         }
     }
 
-    private func cycleFocus() {
-        guard let graph = currentGraph else { return }
-        let next = graph.nextFocus()
-        if next != graph { onGraphChange?(next) }
-    }
+    // (cycleFocus was here pre-#23 — it called `graph.nextFocus()` to
+    // walk the workspace-level pane graph. In the one-workspace-per-
+    // screen model that's equivalent to "next tab", which the user
+    // can do via the WorkspaceTabBar click or Cmd+W/Cmd+N. Ctrl+Tab
+    // now cycles **surface** focus inside the current tab via the
+    // .bentoCycleSurfaceFocus notification.)
 
     // MARK: - Keyboard handling
 
-    /// Match against Cmd+D / Cmd+Shift+D / Cmd+W / Ctrl+Tab regardless of
-    /// who is first responder. Returns true if the event was consumed.
+    /// Workspace-level shortcuts that still make sense post-#23.
+    ///
+    /// Cmd+D / Cmd+Shift+D used to live here and called
+    /// `splitFocused(direction:)` — which split the PANE GRAPH and
+    /// created a new workspace pane (i.e. a new top-level tab in the
+    /// WorkspaceTabBar). That was the right behavior pre-#23 when
+    /// there was no concept of within-tab surfaces. Now that splits
+    /// happen INSIDE a tab, those bindings live in the File menu
+    /// (BentoApp.installMenu) and post `.bentoSplitFocusedSurface`,
+    /// which routes to the controller's surface-tree mutators. We
+    /// stay out of the responder chain for those keys so the menu's
+    /// key-equivalents fire normally.
+    ///
+    /// Returns true if the event was consumed.
     private func handleShortcut(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
 
-        if mods == [.command] && key == "d" {
-            splitFocused(.right); return true
-        }
-        if mods == [.command, .shift] && key == "d" {
-            splitFocused(.down); return true
-        }
+        // Cmd+W — close the focused workspace tab. The WorkspaceTabBar's
+        // per-tab × also handles this; the shortcut is the keyboard
+        // equivalent. (Note: this closes the WHOLE workspace tab,
+        // including all its splits. To close a single split inside a
+        // tab, use the × chip in the split surface's top-right.)
         if mods == [.command] && key == "w" {
             closeFocused(); return true
         }
-        // Ctrl+Tab — the character is a horizontal tab (0x09) with .control set.
+
+        // Ctrl+Tab — cycle focus inside the focused tab's split tree.
+        // Pre-#23 this cycled focus across workspace-level panes
+        // (`graph.nextFocus()`), which made no sense in our
+        // one-workspace-per-screen model. Now it posts the same
+        // notification the menu's "Cycle Surface Focus" item uses.
         if mods == [.control] && event.keyCode == 0x30 {
-            cycleFocus(); return true
+            NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
+            return true
         }
         return false
     }
