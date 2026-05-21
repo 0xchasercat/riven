@@ -17,7 +17,16 @@ let package = Package(
         .package(url: "https://github.com/krzyzanowskim/STTextView.git", from: "2.0.0")
     ],
     targets: [
-        .target(name: "BentoCore", dependencies: ["Yams", "GhosttyVt"]),
+        .target(
+            name: "BentoCore",
+            dependencies: ["Yams", "GhosttyVt"],
+            resources: [
+                // Ships the vendored Universal2 ripgrep binary so
+                // RipgrepFileSearch can locate it via Bundle.module.
+                // Refresh via `scripts/install-rg.sh`.
+                .process("Resources")
+            ]
+        ),
         .executableTarget(
             name: "Bento",
             dependencies: [

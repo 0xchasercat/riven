@@ -32,6 +32,11 @@ public struct ScrollbackStore: Sendable {
     }
 
     /// Search every pane log under `root` for lines matching `query`.
+    ///
+    /// Per-file reads are tolerated with `try?`: a single corrupted log
+    /// (truncated UTF-8, missing permissions, removed mid-iteration) is
+    /// logged to stderr and skipped, never aborting the whole search.
+    /// Only directory-level errors (e.g. listing `root` itself) propagate.
     public func search(_ query: String) throws -> [ScrollbackMatch] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
@@ -39,7 +44,12 @@ public struct ScrollbackStore: Sendable {
 
         for file in files where file.pathExtension == "log" {
             let paneID = PaneID(file.deletingPathExtension().lastPathComponent)
-            let content = try String(contentsOf: file, encoding: .utf8)
+            guard let content = try? String(contentsOf: file, encoding: .utf8) else {
+                FileHandle.standardError.write(
+                    Data("[ScrollbackStore.search] skipping unreadable log: \(file.lastPathComponent)\n".utf8)
+                )
+                continue
+            }
             for (index, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 if line.localizedCaseInsensitiveContains(query) {
                     matches.append(ScrollbackMatch(paneID: paneID, lineNumber: index + 1, line: String(line)))
