@@ -189,12 +189,14 @@ private struct InnerTabChip: View {
         DispatchQueue.main.async { isFieldFocused = true }
     }
 
-    /// `›_` reads as a tiny shell prompt; `✎` (pencil) reads as "editor".
-    /// Both are single glyphs so the strip stays compact.
+    /// `›_` reads as a tiny shell prompt; `✎` (pencil) reads as "editor";
+    /// `↪` (right-bend arrow) reads as "scrollback peek". Both/three are
+    /// single glyphs so the strip stays compact.
     private var kindGlyph: String {
         switch tab.kind {
         case .terminal: return "›_"
         case .editor: return "✎"
+        case .scrollbackPeek: return "↪"
         }
     }
 

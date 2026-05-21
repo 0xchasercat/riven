@@ -35,6 +35,10 @@ struct PaneGridView: NSViewRepresentable {
     /// `BentoRootController.vanishedFileSurfaces`; reaches the inner
     /// tab strip ("(missing)" suffix) + editor toolbar (Save disabled).
     let vanishedSurfaces: Set<SurfaceID>
+    /// S-6: shared scrollback store. Threaded all the way down to
+    /// `ScrollbackPeekView` so the peek surface can read the on-disk
+    /// log without grabbing a controller reference from env.
+    let scrollback: ScrollbackStore
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (PaneID, String) -> Void
@@ -49,6 +53,7 @@ struct PaneGridView: NSViewRepresentable {
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
         vanishedSurfaces: Set<SurfaceID> = [],
+        scrollback: ScrollbackStore,
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
@@ -67,6 +72,7 @@ struct PaneGridView: NSViewRepresentable {
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
         self.vanishedSurfaces = vanishedSurfaces
+        self.scrollback = scrollback
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
@@ -89,6 +95,7 @@ struct PaneGridView: NSViewRepresentable {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -112,6 +119,7 @@ struct PaneGridView: NSViewRepresentable {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -242,6 +250,7 @@ final class BentoPaneContainerView: NSView {
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
+        scrollback: ScrollbackStore,
         onGraphChange: @escaping (PaneGraph) -> Void,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
@@ -299,6 +308,7 @@ final class BentoPaneContainerView: NSView {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -458,6 +468,9 @@ private struct PaneTreeBuilder {
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
     let vanishedSurfaces: Set<SurfaceID>
+    /// S-6: shared scrollback store, forwarded to WorkspaceGroupView
+    /// so peek surfaces can read on-disk log bytes.
+    let scrollback: ScrollbackStore
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
     let onSplit: @MainActor (PaneID) -> Void
@@ -603,6 +616,7 @@ private struct PaneTreeBuilder {
                         submitMode: submitMode,
                         dirtySurfaces: dirtySurfaces,
                         vanishedSurfaces: vanishedSurfaces,
+                        scrollback: scrollback,
                         onOpenFile: onOpenFile,
                         onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )

@@ -55,6 +55,8 @@ struct WorkspaceGroupView: View {
     /// buffer. Threaded down to InnerTabStrip ("(missing)" suffix)
     /// and EditorTabContent → EditorToolbar (Save disabled).
     let vanishedSurfaces: Set<SurfaceID>
+    /// S-6: shared scrollback store. Forwarded to peek surfaces.
+    let scrollback: ScrollbackStore
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -68,6 +70,7 @@ struct WorkspaceGroupView: View {
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
         vanishedSurfaces: Set<SurfaceID> = [],
+        scrollback: ScrollbackStore,
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (String) -> Void = { _ in },
         onCloseEditor: @escaping () -> Void = { }
@@ -86,6 +89,7 @@ struct WorkspaceGroupView: View {
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
         self.vanishedSurfaces = vanishedSurfaces
+        self.scrollback = scrollback
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
     }
@@ -101,6 +105,7 @@ struct WorkspaceGroupView: View {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -129,6 +134,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
     let vanishedSurfaces: Set<SurfaceID>
+    let scrollback: ScrollbackStore
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -149,6 +155,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -167,6 +174,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -239,6 +247,7 @@ private final class WorkspaceContainerView: NSView {
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
+        scrollback: ScrollbackStore,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -292,6 +301,7 @@ private final class WorkspaceContainerView: NSView {
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
+                scrollback: scrollback,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -308,6 +318,7 @@ private final class WorkspaceContainerView: NSView {
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
+                scrollback: scrollback,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -328,6 +339,7 @@ private final class WorkspaceContainerView: NSView {
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
+        scrollback: ScrollbackStore,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -364,6 +376,7 @@ private final class WorkspaceContainerView: NSView {
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
             fileMap: fileMap,
+            scrollback: scrollback,
             onCwdChanged: onCwdChanged
         )
         let tabPane = NSView()
@@ -459,6 +472,7 @@ private final class WorkspaceContainerView: NSView {
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
+        scrollback: ScrollbackStore,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -476,6 +490,7 @@ private final class WorkspaceContainerView: NSView {
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
                 fileMap: fileMap,
+                scrollback: scrollback,
                 onCwdChanged: onCwdChanged
             )
         )
@@ -512,6 +527,7 @@ private final class WorkspaceContainerView: NSView {
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
+        scrollback: ScrollbackStore,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
         let root = AnyView(
@@ -525,6 +541,7 @@ private final class WorkspaceContainerView: NSView {
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
                 fileMap: fileMap,
+                scrollback: scrollback,
                 onCwdChanged: onCwdChanged
             )
         )
@@ -576,6 +593,7 @@ private final class WorkspaceContainerView: NSView {
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
+        scrollback: ScrollbackStore,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
         let tab = workspace.focusedTab
@@ -595,6 +613,7 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 fileMap: fileMap,
                 vanishedSurfaces: vanishedSurfaces,
+                scrollback: scrollback,
                 onCwdChanged: onCwdChanged
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -629,6 +648,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         fileMap: PaneFileMap,
         vanishedSurfaces: Set<SurfaceID>,
+        scrollback: ScrollbackStore,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
         // The tab's surface tree is rendered recursively. A single-
@@ -638,9 +658,11 @@ private final class WorkspaceContainerView: NSView {
         TabLayoutView(
             theme: theme,
             tab: tab,
+            workspaceCwd: workspace.currentCwd,
             agentClient: agentClient,
             fileMap: fileMap,
             vanishedSurfaces: vanishedSurfaces,
+            scrollback: scrollback,
             onCwdChanged: onCwdChanged
         )
     }
@@ -674,24 +696,34 @@ private final class WorkspaceContainerView: NSView {
 struct TabLayoutView: View {
     let theme: ThemeSpec
     let tab: WorkspaceInnerTab
+    /// The owning workspace's live cwd. Forwarded to the
+    /// scrollback-peek surface so the "Replay in new pane" button
+    /// can spawn a fresh shell in the same directory the user is
+    /// actually sitting in. Defaults to `tab.cwd` for back-compat.
+    let workspaceCwd: String
     let agentClient: AgentClient
     let fileMap: PaneFileMap
     let vanishedSurfaces: Set<SurfaceID>
+    let scrollback: ScrollbackStore
     let onCwdChanged: (String) -> Void
 
     init(
         theme: ThemeSpec,
         tab: WorkspaceInnerTab,
+        workspaceCwd: String? = nil,
         agentClient: AgentClient,
         fileMap: PaneFileMap,
         vanishedSurfaces: Set<SurfaceID> = [],
+        scrollback: ScrollbackStore,
         onCwdChanged: @escaping (String) -> Void
     ) {
         self.theme = theme
         self.tab = tab
+        self.workspaceCwd = workspaceCwd ?? tab.cwd
         self.agentClient = agentClient
         self.fileMap = fileMap
         self.vanishedSurfaces = vanishedSurfaces
+        self.scrollback = scrollback
         self.onCwdChanged = onCwdChanged
     }
 
@@ -716,8 +748,10 @@ struct TabLayoutView: View {
                         isFocused: surfaceID == tab.focusedSurfaceID,
                         showCloseAffordance: tab.isSplit,
                         tabCwd: tab.cwd,
+                        workspaceCwd: workspaceCwd,
                         agentClient: agentClient,
                         fileMap: fileMap,
+                        scrollback: scrollback,
                         isVanished: vanishedSurfaces.contains(surface.id),
                         // Only the focused surface gets the cwd-change
                         // callback wired through; other surfaces still
@@ -784,8 +818,14 @@ private struct SurfaceLeafView: View {
     /// whole tab — and the tab's own × in the strip already does that.
     let showCloseAffordance: Bool
     let tabCwd: String
+    /// Workspace-level cwd, threaded for the scrollback-peek surface
+    /// (the "Replay in new pane" button spawns a shell in this dir).
+    let workspaceCwd: String
     let agentClient: AgentClient
     let fileMap: PaneFileMap
+    /// S-6: shared scrollback store. Used by `.scrollbackPeek`
+    /// surfaces to read on-disk log bytes.
+    let scrollback: ScrollbackStore
     /// H-2: true when the editor surface's backing file has been
     /// deleted / renamed. Used to disable the toolbar's Save and
     /// surface a "(missing)" hint to the user.
@@ -868,6 +908,31 @@ private struct SurfaceLeafView: View {
                 path: path,
                 fileMap: fileMap,
                 isVanished: isVanished
+            )
+        case let .scrollbackPeek(peekPaneID, focusLine):
+            ScrollbackPeekView(
+                theme: theme,
+                paneID: peekPaneID,
+                focusLine: focusLine,
+                scrollback: scrollback,
+                metadata: (try? scrollback.readMetadata(peekPaneID)) ?? nil,
+                onReplayInNewPane: {
+                    // S-6: open a fresh terminal inner tab seeded in
+                    // the workspace's current cwd. The controller
+                    // owns the open-new-tab path; we post a
+                    // notification rather than threading another
+                    // closure through SurfaceLeafView so the wiring
+                    // stays consistent with `.bentoCloseSurface` /
+                    // `.bentoFocusSurface`.
+                    // TODO: true "replay" — re-running the commands
+                    // that produced the scrollback — is a bigger
+                    // ticket. Today's button just opens a new shell
+                    // in the same cwd.
+                    NotificationCenter.default.post(
+                        name: .bentoNewTab,
+                        object: nil
+                    )
+                }
             )
         }
     }
