@@ -224,6 +224,18 @@ private final class WorkspaceContainerView: NSView {
     /// instances pointed at the new agent client.
     private var lastBrokerEpoch: Int?
     private var pendingSidebarPosition: CGFloat?
+    /// Where the sidebar *wants* to be, retained across layout
+    /// passes. `pendingSidebarPosition` was the previous design but
+    /// it had a race: the first `layout()` could fire with the
+    /// window's frame still smaller than `intended + 240` (e.g.
+    /// the initial 0-by-0 measurement pass before AppKit hands the
+    /// hosting view its real size), the clamp would settle at the
+    /// floor (48 pt), and `pendingSidebarPosition` got cleared so
+    /// the next real layout never re-applied. We now keep
+    /// `intendedSidebarPosition` populated until we've actually
+    /// achieved it — `applyPendingDividers` only clears it once
+    /// the divider lands within 1 pt of the request.
+    private var intendedSidebarPosition: CGFloat?
 
     override var isFlipped: Bool { true }
 
@@ -280,10 +292,12 @@ private final class WorkspaceContainerView: NSView {
         // tree is intact, we just want the divider to snap to the new
         // collapsed/expanded width. Queue a position update.
         if lastSidebarState != workspace.sidebarState {
-            pendingSidebarPosition = WorkspaceContainerView.sidebarWidth(
+            let target = WorkspaceContainerView.sidebarWidth(
                 state: workspace.sidebarState,
                 expanded: workspace.sidebarWidth
             )
+            pendingSidebarPosition = target
+            intendedSidebarPosition = target
             lastSidebarState = workspace.sidebarState
             DispatchQueue.main.async { [weak self] in
                 self?.applyPendingDividers()
@@ -418,10 +432,12 @@ private final class WorkspaceContainerView: NSView {
         // for a 32-pt tile centered in the column with 12 pt gutters).
         // Expanded = the user's saved width (220 pt default), clamped
         // to a 240 pt floor for the new design's readable padding.
-        pendingSidebarPosition = WorkspaceContainerView.sidebarWidth(
+        let initialTarget = WorkspaceContainerView.sidebarWidth(
             state: workspace.sidebarState,
             expanded: workspace.sidebarWidth
         )
+        pendingSidebarPosition = initialTarget
+        intendedSidebarPosition = initialTarget
 
         // Pin outer split to fill self.
         outer.translatesAutoresizingMaskIntoConstraints = false
@@ -441,17 +457,33 @@ private final class WorkspaceContainerView: NSView {
     }
 
     private func applyPendingDividers() {
-        if let outer = outerSplit,
-           let sidebarPos = pendingSidebarPosition,
-           outer.arrangedSubviews.count == 2,
-           outer.bounds.width > 0 {
-            // Allow the collapsed rail to clamp down to 48 pt minimum
-            // (enough for the 32-pt icon tile centered in the rail).
-            // Expanded clamps up against `outer.width - 240` so the
-            // tab area can never go below a comfortable terminal width.
-            let target = max(48, min(sidebarPos, outer.bounds.width - 240))
-            outer.setPosition(target, ofDividerAt: 0)
-            pendingSidebarPosition = nil
+        guard let outer = outerSplit,
+              let intended = intendedSidebarPosition,
+              outer.arrangedSubviews.count == 2,
+              outer.bounds.width > 0 else {
+            return
+        }
+        // Allow the collapsed rail to clamp down to 48 pt minimum
+        // (enough for the 32-pt icon tile centered in the rail).
+        // Expanded clamps up against `outer.width - 240` so the
+        // tab area can never go below a comfortable terminal width.
+        let target = max(48, min(intended, outer.bounds.width - 240))
+        outer.setPosition(target, ofDividerAt: 0)
+        pendingSidebarPosition = nil
+        // Only call the intent satisfied if the divider actually
+        // landed where we asked. The clamp above can pull the target
+        // below the intended position when the window is too narrow
+        // to accommodate it; in that case we keep `intendedSidebarPosition`
+        // set so the next layout pass (after the window grows) gets
+        // another chance to hit the real number. This is what fixes
+        // the "sidebar sticks at ~80 pt forever" bug — the previous
+        // implementation cleared the pending state after the first
+        // attempt, so a narrow-initial-bounds layout would settle on
+        // 48 pt and never recover when the window resized to its
+        // real size.
+        let actual = outer.subviews.first?.frame.width ?? 0
+        if abs(actual - intended) < 1.5 {
+            intendedSidebarPosition = nil
         }
     }
 
@@ -472,10 +504,16 @@ private final class WorkspaceContainerView: NSView {
 
     override func layout() {
         super.layout()
-        // If we're laid out with non-zero bounds and divider placement is
-        // still pending (the deferred dispatch lost the race with layout),
-        // apply it now.
-        if pendingSidebarPosition != nil {
+        // Re-apply divider position on every layout pass while we
+        // still have an unsatisfied intent. This handles two cases:
+        //   1. Initial layout: deferred dispatch fired before
+        //      `outer.bounds` became real, the apply skipped, and
+        //      now we have real bounds.
+        //   2. Window resize: the first apply landed at a clamped
+        //      value because the window wasn't big enough; now the
+        //      user has resized to a width that can accommodate the
+        //      intended position so we should reach for it.
+        if intendedSidebarPosition != nil {
             applyPendingDividers()
         }
     }
