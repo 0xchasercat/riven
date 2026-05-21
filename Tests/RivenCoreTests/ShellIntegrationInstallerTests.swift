@@ -11,7 +11,7 @@ struct ShellIntegrationInstallerTests {
         bundleContents: [String: String] = [:]
     ) throws -> ShellIntegrationInstaller {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("bento-shell-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("riven-shell-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let dest = root.appendingPathComponent(".config/riven/shell", isDirectory: true)

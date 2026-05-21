@@ -6,7 +6,7 @@ import Testing
 struct RipgrepFileSearchTests {
     private func freshRoot() throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("bento-rg-\(UUID().uuidString)")
+            .appendingPathComponent("riven-rg-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }

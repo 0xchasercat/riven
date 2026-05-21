@@ -110,7 +110,7 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 }
                 if let ctrlByte {
                     NotificationCenter.default.post(
-                        name: .bentoSendCtrlByte,
+                        name: .rivenSendCtrlByte,
                         object: NSNumber(value: ctrlByte)
                     )
                     return nil
@@ -134,7 +134,7 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
             // Anywhere else: snap to the command bar and consume the
             // event so the previous responder doesn't ALSO see the
             // tab (e.g. NSTextField would otherwise commit + beep).
-            NotificationCenter.default.post(name: .bentoFocusCommandBar, object: nil)
+            NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
             return nil
         }
 
@@ -164,7 +164,7 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
             queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                NotificationCenter.default.post(name: .bentoSystemDidWake, object: nil)
+                NotificationCenter.default.post(name: .rivenSystemDidWake, object: nil)
             }
             Task { [weak self] in
                 await self?.handleSystemWake()
@@ -214,7 +214,7 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
     /// unsaved changes. Returns `.terminateCancel` only when the user
     /// picks "Cancel" — both "Save All" and "Don't Save" proceed to
     /// shutdown (Save All synchronously flushes each dirty buffer
-    /// before the terminate continues, via `.bentoSaveSurface` posts
+    /// before the terminate continues, via `.rivenSaveSurface` posts
     /// the editor coordinators observe on the main thread).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // No controller yet (terminate fired before launch finished) —
@@ -416,47 +416,47 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showCommandPalette() {
-        NotificationCenter.default.post(name: .bentoShowCommandPalette, object: nil)
+        NotificationCenter.default.post(name: .rivenShowCommandPalette, object: nil)
     }
 
     @objc private func showSearch() {
-        NotificationCenter.default.post(name: .bentoShowSearch, object: nil)
+        NotificationCenter.default.post(name: .rivenShowSearch, object: nil)
     }
 
     @objc private func newTab() {
-        NotificationCenter.default.post(name: .bentoNewTab, object: nil)
+        NotificationCenter.default.post(name: .rivenNewTab, object: nil)
     }
 
     @objc private func newWorkspace() {
-        NotificationCenter.default.post(name: .bentoNewWorkspace, object: nil)
+        NotificationCenter.default.post(name: .rivenNewWorkspace, object: nil)
     }
 
     @objc private func closeTab() {
-        NotificationCenter.default.post(name: .bentoCloseTab, object: nil)
+        NotificationCenter.default.post(name: .rivenCloseTab, object: nil)
     }
 
     @objc private func openProject() {
-        NotificationCenter.default.post(name: .bentoOpenProject, object: nil)
+        NotificationCenter.default.post(name: .rivenOpenProject, object: nil)
     }
 
     @objc private func clearTerminal() {
-        NotificationCenter.default.post(name: .bentoClearFocusedTerminal, object: nil)
+        NotificationCenter.default.post(name: .rivenClearFocusedTerminal, object: nil)
     }
 
     @objc private func splitRight() {
-        NotificationCenter.default.post(name: .bentoSplitFocusedSurface, object: SplitDirection.right)
+        NotificationCenter.default.post(name: .rivenSplitFocusedSurface, object: SplitDirection.right)
     }
 
     @objc private func splitDown() {
-        NotificationCenter.default.post(name: .bentoSplitFocusedSurface, object: SplitDirection.down)
+        NotificationCenter.default.post(name: .rivenSplitFocusedSurface, object: SplitDirection.down)
     }
 
     @objc private func cycleSurfaceFocus() {
-        NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
+        NotificationCenter.default.post(name: .rivenCycleSurfaceFocus, object: nil)
     }
 
     @objc private func showThemePicker() {
-        NotificationCenter.default.post(name: .bentoShowThemePicker, object: nil)
+        NotificationCenter.default.post(name: .rivenShowThemePicker, object: nil)
     }
 
     /// Open Finder at the user's themes directory so they can drop in
@@ -470,7 +470,7 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showShortcutsCheatsheet() {
-        NotificationCenter.default.post(name: .bentoShowShortcutsCheatsheet, object: nil)
+        NotificationCenter.default.post(name: .rivenShowShortcutsCheatsheet, object: nil)
     }
 
     @objc private func showAboutPanel() {
@@ -510,92 +510,92 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
 }
 
 extension Notification.Name {
-    static let bentoShowCommandPalette = Notification.Name("RivenShowCommandPalette")
-    static let bentoShowSearch = Notification.Name("RivenShowSearch")
+    static let rivenShowCommandPalette = Notification.Name("RivenShowCommandPalette")
+    static let rivenShowSearch = Notification.Name("RivenShowSearch")
     /// Posted by the Preferences → Theme… menu item and the palette's
     /// `Pick theme…` command. `RivenRootView` listens and shows the
     /// `ThemePicker` overlay in dismissible mode (esc closes).
-    static let bentoShowThemePicker = Notification.Name("RivenShowThemePicker")
-    static let bentoNewTab = Notification.Name("RivenNewTab")
-    static let bentoNewWorkspace = Notification.Name("RivenNewWorkspace")
-    static let bentoCloseTab = Notification.Name("RivenCloseTab")
-    static let bentoCloseEditor = Notification.Name("RivenCloseEditor")
-    static let bentoToggleSidebar = Notification.Name("RivenToggleSidebar")
-    static let bentoOpenProject = Notification.Name("RivenOpenProject")
-    static let bentoClearFocusedTerminal = Notification.Name("RivenClearFocusedTerminal")
+    static let rivenShowThemePicker = Notification.Name("RivenShowThemePicker")
+    static let rivenNewTab = Notification.Name("RivenNewTab")
+    static let rivenNewWorkspace = Notification.Name("RivenNewWorkspace")
+    static let rivenCloseTab = Notification.Name("RivenCloseTab")
+    static let rivenCloseEditor = Notification.Name("RivenCloseEditor")
+    static let rivenToggleSidebar = Notification.Name("RivenToggleSidebar")
+    static let rivenOpenProject = Notification.Name("RivenOpenProject")
+    static let rivenClearFocusedTerminal = Notification.Name("RivenClearFocusedTerminal")
     /// Posted when a terminal pane is clicked. CommandInputTextView
     /// listens and grabs first-responder so the user can immediately
     /// type — the command bar is the default writing surface in Riven.
-    static let bentoFocusCommandBar = Notification.Name("RivenFocusCommandBar")
+    static let rivenFocusCommandBar = Notification.Name("RivenFocusCommandBar")
     /// Posted when a within-tab split surface is clicked. The
     /// notification's `object` is a `SurfaceFocus` payload identifying
     /// `(tabID, surfaceID)`; RootView routes to
     /// `controller.focusSurface(...)`.
-    static let bentoFocusSurface = Notification.Name("RivenFocusSurface")
+    static let rivenFocusSurface = Notification.Name("RivenFocusSurface")
     /// Posted by Cmd+D / Cmd+Shift+D / the [][] button. Object is the
     /// requested `SplitDirection` (`.right` or `.down`). RootView →
     /// controller.splitFocusedSurface.
-    static let bentoSplitFocusedSurface = Notification.Name("RivenSplitFocusedSurface")
+    static let rivenSplitFocusedSurface = Notification.Name("RivenSplitFocusedSurface")
     /// Posted when the per-surface close-× is clicked. Object is a
     /// `SurfaceFocus` payload. RootView → controller.closeSurface.
-    static let bentoCloseSurface = Notification.Name("RivenCloseSurface")
+    static let rivenCloseSurface = Notification.Name("RivenCloseSurface")
     /// Posted by Ctrl+Tab when the user wants to cycle focus to the
     /// next surface within the currently-focused tab.
-    static let bentoCycleSurfaceFocus = Notification.Name("RivenCycleSurfaceFocus")
+    static let rivenCycleSurfaceFocus = Notification.Name("RivenCycleSurfaceFocus")
     /// Posted by the global key monitor when the user presses one of
     /// the terminal control combinations (Ctrl+C / Ctrl+D / Ctrl+Z).
     /// The notification's `object` is the raw control byte (UInt8 in
     /// an NSNumber). RootView routes to
     /// `controller.sendByteToFocusedTerminal`.
-    static let bentoSendCtrlByte = Notification.Name("RivenSendCtrlByte")
+    static let rivenSendCtrlByte = Notification.Name("RivenSendCtrlByte")
     /// Posted by the controller when closing a tab/surface with a
     /// dirty editor and the user picks "Save" in the prompt. Object
     /// is the SurfaceID. EditorTabContent observes this; the matching
     /// editor's coordinator runs its save synchronously before the
     /// close proceeds.
-    static let bentoSaveSurface = Notification.Name("RivenSaveSurface")
+    static let rivenSaveSurface = Notification.Name("RivenSaveSurface")
     /// Posted by the editor toolbar's Undo button. Object is the
     /// SurfaceID. The matching editor's coordinator triggers
     /// `textView.undoManager?.undo()`. Cmd+Z still works via the
     /// standard Edit menu; this is the button-driven path.
-    static let bentoUndoSurface = Notification.Name("RivenUndoSurface")
+    static let rivenUndoSurface = Notification.Name("RivenUndoSurface")
     /// Posted by EditorTabContent whenever its underlying buffer's
     /// dirty flag flips. Object is an `EditorDirtyChange` payload.
     /// RootView routes to `controller.setSurfaceDirty(_:, dirty:)`.
-    static let bentoEditorDirtyChanged = Notification.Name("RivenEditorDirtyChanged")
+    static let rivenEditorDirtyChanged = Notification.Name("RivenEditorDirtyChanged")
     /// H-2: posted by the editor's file-watcher when the open file is
     /// deleted or renamed underneath us. Object is the SurfaceID. The
     /// controller mirrors into `vanishedFileSurfaces` so toolbar +
     /// inner-tab-strip can render the "(missing)" affordance and
     /// disable Save.
-    static let bentoEditorFileVanished = Notification.Name("RivenEditorFileVanished")
+    static let rivenEditorFileVanished = Notification.Name("RivenEditorFileVanished")
     /// H-2 companion: posted when the editor reopens / re-saves a
     /// previously-vanished file. Object is the SurfaceID. The
     /// controller drops the surface from `vanishedFileSurfaces`.
-    static let bentoEditorFileRestored = Notification.Name("RivenEditorFileRestored")
+    static let rivenEditorFileRestored = Notification.Name("RivenEditorFileRestored")
     /// H-5: posted after `RivenRootController.attachAgentClient(_:)`
     /// bumps `brokerEpoch` due to a watchdog respawn. The controller
     /// itself observes this and re-applies focus to whichever pane /
     /// surface was focused before the rebuild — the cached host
     /// teardown that the epoch bump triggers can otherwise leave
     /// first-responder somewhere SwiftUI picked arbitrarily.
-    static let bentoBrokerRespawned = Notification.Name("RivenBrokerRespawned")
+    static let rivenBrokerRespawned = Notification.Name("RivenBrokerRespawned")
     /// H-11: posted by the RivenApp's NSWorkspace.didWakeNotification
     /// observer. BrokeredTerminalView listens and forces a synchronous
     /// redraw via `displayIfNeeded()` so the terminal grid blits its
     /// current state to screen rather than waiting for the next idle
     /// AppKit display pass — long sleeps can otherwise leave the
     /// snapshot stale until the user moves the mouse over the pane.
-    static let bentoSystemDidWake = Notification.Name("RivenSystemDidWake")
+    static let rivenSystemDidWake = Notification.Name("RivenSystemDidWake")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow
     /// listens and sets its isExpanded accordingly.
-    static let bentoSidebarSetAllExpanded = Notification.Name("RivenSidebarSetAllExpanded")
+    static let rivenSidebarSetAllExpanded = Notification.Name("RivenSidebarSetAllExpanded")
     /// Posted by the command bar after a successful submit. Object
     /// is the submitted text (NSString). RootView routes to
     /// `controller.recordCommandSubmission(_:)`.
-    static let bentoCommandSubmitted = Notification.Name("RivenCommandSubmitted")
+    static let rivenCommandSubmitted = Notification.Name("RivenCommandSubmitted")
     /// Posted by the command bar's up/down-arrow handler. Object is
     /// a `CommandHistoryRequest` carrying the direction, the user's
     /// current draft (so a later down-arrow can restore it), and a
@@ -603,11 +603,11 @@ extension Notification.Name {
     /// into. NotificationCenter.post is synchronous, so by the time
     /// the post call returns, `response.text` is filled (or nil if
     /// there's no further history in that direction).
-    static let bentoCommandHistoryRequest = Notification.Name("RivenCommandHistoryRequest")
+    static let rivenCommandHistoryRequest = Notification.Name("RivenCommandHistoryRequest")
     /// H-16: posted by the Help menu's "Riven Keyboard Shortcuts"
     /// item (⌘?). RootView listens and toggles the cheatsheet
     /// overlay open.
-    static let bentoShowShortcutsCheatsheet = Notification.Name("RivenShowShortcutsCheatsheet")
+    static let rivenShowShortcutsCheatsheet = Notification.Name("RivenShowShortcutsCheatsheet")
 }
 
 /// Direction the command bar wants to walk through history.
@@ -616,7 +616,7 @@ enum CommandHistoryDirection {
     case next
 }
 
-/// Mutable response carrier for `.bentoCommandHistoryRequest`. The
+/// Mutable response carrier for `.rivenCommandHistoryRequest`. The
 /// reference semantics let the controller-side observer write the
 /// recalled text directly into the same object the requester is
 /// holding, sidestepping notification-as-RPC awkwardness.
@@ -625,7 +625,7 @@ final class CommandHistoryResponse {
     init() { self.text = nil }
 }
 
-/// Payload for `.bentoCommandHistoryRequest`. Combines the inputs
+/// Payload for `.rivenCommandHistoryRequest`. Combines the inputs
 /// (direction + current draft) and the output channel (response box).
 struct CommandHistoryRequest {
     let direction: CommandHistoryDirection
@@ -633,7 +633,7 @@ struct CommandHistoryRequest {
     let response: CommandHistoryResponse
 }
 
-/// Payload for `.bentoEditorDirtyChanged`. Equatable so the value can
+/// Payload for `.rivenEditorDirtyChanged`. Equatable so the value can
 /// sit in `@State` without ceremony and so NotificationCenter doesn't
 /// trip over `Any?` shape inference.
 struct EditorDirtyChange: Equatable {
@@ -642,7 +642,7 @@ struct EditorDirtyChange: Equatable {
 }
 
 /// Carries a `(tabID, surfaceID)` pair as an `Any?` object payload
-/// for `.bentoFocusSurface` and `.bentoCloseSurface` notifications.
+/// for `.rivenFocusSurface` and `.rivenCloseSurface` notifications.
 /// Equatable so the value can sit in `@State` without ceremony.
 struct SurfaceFocus: Equatable {
     let tabID: TabID

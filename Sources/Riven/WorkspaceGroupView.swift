@@ -76,7 +76,7 @@ struct WorkspaceGroupView: View {
         onCloseEditor: @escaping () -> Void = { }
     ) {
         // The editor close action is forwarded via NotificationCenter
-        // (`bentoCloseEditor`) so it doesn't have to thread through six
+        // (`rivenCloseEditor`) so it doesn't have to thread through six
         // layers of NSSplitView / NSHostingController plumbing inside
         // the workspace view. We accept the parameter for API symmetry
         // with the orchestrator but route through notifications.
@@ -826,7 +826,7 @@ struct TabLayoutView: View {
 /// `TerminalPaneView` or an `EditorTabContent`, then wraps the result
 /// in an overlay that paints a 1pt accent border on the focused
 /// surface (so the user can tell which split owns the command bar)
-/// and forwards mouse clicks as `.bentoFocusSurface` notifications.
+/// and forwards mouse clicks as `.rivenFocusSurface` notifications.
 ///
 /// Single-surface tabs hit this path too — `isFocused` is always
 /// true, the border is invisible (we draw it transparent), so the
@@ -864,7 +864,7 @@ private struct SurfaceLeafView: View {
         // gesture so AppKit mouseDown reaches the BrokeredTerminalView
         // / EditorPaneView underneath uninterrupted — that's what
         // drives text-selection, click-to-focus-the-input
-        // (.bentoFocusCommandBar), and the per-cell hit-testing inside
+        // (.rivenFocusCommandBar), and the per-cell hit-testing inside
         // the terminal.
         if isFocused {
             focusedLayout
@@ -877,7 +877,7 @@ private struct SurfaceLeafView: View {
                 .simultaneousGesture(
                     TapGesture().onEnded {
                         NotificationCenter.default.post(
-                            name: .bentoFocusSurface,
+                            name: .rivenFocusSurface,
                             object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
                         )
                     }
@@ -895,7 +895,7 @@ private struct SurfaceLeafView: View {
                 if showCloseAffordance {
                     SurfaceCloseButton(theme: theme) {
                         NotificationCenter.default.post(
-                            name: .bentoCloseSurface,
+                            name: .rivenCloseSurface,
                             object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
                         )
                     }
@@ -946,14 +946,14 @@ private struct SurfaceLeafView: View {
                     // owns the open-new-tab path; we post a
                     // notification rather than threading another
                     // closure through SurfaceLeafView so the wiring
-                    // stays consistent with `.bentoCloseSurface` /
-                    // `.bentoFocusSurface`.
+                    // stays consistent with `.rivenCloseSurface` /
+                    // `.rivenFocusSurface`.
                     // TODO: true "replay" — re-running the commands
                     // that produced the scrollback — is a bigger
                     // ticket. Today's button just opens a new shell
                     // in the same cwd.
                     NotificationCenter.default.post(
-                        name: .bentoNewTab,
+                        name: .rivenNewTab,
                         object: nil
                     )
                 }
@@ -985,7 +985,7 @@ private struct SurfaceLeafView: View {
 /// single-surface tabs (the tab's own × handles that case). On split
 /// tabs the focused surface shows the chip at full opacity; non-
 /// focused surfaces reveal it on hover. Tap posts
-/// `.bentoCloseSurface` with the parent tab + surface ids.
+/// `.rivenCloseSurface` with the parent tab + surface ids.
 private struct SurfaceCloseButton: View {
     let theme: ThemeSpec
     let action: () -> Void
@@ -1133,7 +1133,7 @@ private struct EditorTabContent: View {
             // controller reference through every layer of the
             // workspace view tree.
             NotificationCenter.default.post(
-                name: .bentoEditorDirtyChanged,
+                name: .rivenEditorDirtyChanged,
                 object: EditorDirtyChange(surfaceID: surfaceID, isDirty: newValue)
             )
         }
@@ -1143,7 +1143,7 @@ private struct EditorTabContent: View {
             // close-prompts don't fire on a phantom dirty buffer that
             // no longer exists.
             NotificationCenter.default.post(
-                name: .bentoEditorDirtyChanged,
+                name: .rivenEditorDirtyChanged,
                 object: EditorDirtyChange(surfaceID: surfaceID, isDirty: false)
             )
         }
@@ -1156,7 +1156,7 @@ private struct EditorTabContent: View {
 ///   - Undo button (Cmd+Z equivalent — actually fires via the
 ///     standard Edit menu's responder chain so it Just Works)
 ///
-/// Both buttons post `.bentoSaveSurface` / `.bentoUndoSurface` with
+/// Both buttons post `.rivenSaveSurface` / `.rivenUndoSurface` with
 /// the surfaceID. EditorPaneView's coordinator observes them and
 /// dispatches to its own save / undo paths.
 private struct EditorToolbar: View {
@@ -1208,13 +1208,13 @@ private struct EditorToolbar: View {
                 isHovered: $isUndoHovered
             ) {
                 NotificationCenter.default.post(
-                    name: .bentoUndoSurface,
+                    name: .rivenUndoSurface,
                     object: surfaceID
                 )
             }
             // Save button — disabled when buffer is clean OR when
             // the backing file vanished underneath us. Same path the
-            // close-prompt uses (`.bentoSaveSurface`).
+            // close-prompt uses (`.rivenSaveSurface`).
             ToolbarIconButton(
                 theme: theme,
                 glyph: "⌘S",
@@ -1225,7 +1225,7 @@ private struct EditorToolbar: View {
                 isEnabled: isDirty && !isVanished
             ) {
                 NotificationCenter.default.post(
-                    name: .bentoSaveSurface,
+                    name: .rivenSaveSurface,
                     object: surfaceID
                 )
             }
@@ -1319,7 +1319,7 @@ private struct CommandBarBand: View {
                 // controller's append finishes before the bar clears.
                 onSubmit(text)
                 NotificationCenter.default.post(
-                    name: .bentoCommandSubmitted,
+                    name: .rivenCommandSubmitted,
                     object: text
                 )
             },
@@ -1335,7 +1335,7 @@ private struct CommandBarBand: View {
                     response: response
                 )
                 NotificationCenter.default.post(
-                    name: .bentoCommandHistoryRequest,
+                    name: .rivenCommandHistoryRequest,
                     object: request
                 )
                 return response.text
@@ -1569,7 +1569,7 @@ private struct SidebarToggleButton: View {
 
     var body: some View {
         Button {
-            NotificationCenter.default.post(name: .bentoToggleSidebar, object: nil)
+            NotificationCenter.default.post(name: .rivenToggleSidebar, object: nil)
         } label: {
             Text(isCollapsed ? "›" : "‹")
                 .font(RivenType.chrome(15, weight: .semibold))
@@ -1598,7 +1598,7 @@ private struct SidebarToggleButton: View {
 /// expand-all and collapse-all. Tracks the current state locally so
 /// the icon flips between `chevron.down` (currently expanded → click
 /// to collapse all) and `chevron.right` (currently collapsed →
-/// click to expand all). Posts `.bentoSidebarSetAllExpanded` with
+/// click to expand all). Posts `.rivenSidebarSetAllExpanded` with
 /// the *new* state every WorkspaceFileRow listens for.
 private struct SidebarExpandAllButton: View {
     let theme: ThemeSpec
@@ -1610,7 +1610,7 @@ private struct SidebarExpandAllButton: View {
         Button {
             allExpanded.toggle()
             NotificationCenter.default.post(
-                name: .bentoSidebarSetAllExpanded,
+                name: .rivenSidebarSetAllExpanded,
                 object: NSNumber(value: allExpanded)
             )
         } label: {
@@ -1660,7 +1660,7 @@ private struct CollapsedIconTile: View {
             case .directory:
                 // Expand the sidebar so the user can drill in. Posting the
                 // toggle treats the collapsed click as a request to see more.
-                NotificationCenter.default.post(name: .bentoToggleSidebar, object: nil)
+                NotificationCenter.default.post(name: .rivenToggleSidebar, object: nil)
             }
         } label: {
             Image(systemName: iconName)
@@ -1762,7 +1762,7 @@ private struct WorkspaceFileRow: View {
         // sidebar header's button can drive the whole tree at once.
         // Only directory rows respond (file rows have no children to
         // expand) but the no-op write here is cheap.
-        .onReceive(NotificationCenter.default.publisher(for: .bentoSidebarSetAllExpanded)) { note in
+        .onReceive(NotificationCenter.default.publisher(for: .rivenSidebarSetAllExpanded)) { note in
             if let n = note.object as? NSNumber, node.kind == .directory {
                 isExpanded = n.boolValue
             }

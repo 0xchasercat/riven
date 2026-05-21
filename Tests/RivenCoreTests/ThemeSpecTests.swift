@@ -8,8 +8,8 @@ struct ThemeSpecTests {
     func builtInThemes() throws {
         let themes = ThemeSpec.builtIns
 
-        #expect(themes.map(\.id) == ["bento", "carbon", "tokyo", "paper"])
-        #expect(try #require(ThemeSpec.theme(id: "bento")).terminal.foreground.hex == "#ece1cb")
+        #expect(themes.map(\.id) == ["amber", "carbon", "tokyo", "paper"])
+        #expect(try #require(ThemeSpec.theme(id: "amber")).terminal.foreground.hex == "#ece1cb")
         #expect(try #require(ThemeSpec.theme(id: "carbon")).syntax.keyword.hex == "#c8c8c8")
         #expect(ThemeSpec.theme(id: "missing") == nil)
     }
@@ -29,10 +29,10 @@ struct ThemeSpecTests {
 
         // Spot-check the mockup-derived values for Riven + Paper to catch
         // accidental hex typos in the builtins table.
-        let bento = try #require(ThemeSpec.theme(id: "bento"))
-        #expect(bento.chrome.panelInactive.hex == "#15100b")
-        #expect(bento.chrome.paneHeaderBg.hex == "#150f0a")
-        #expect(bento.chrome.statusBg.hex == "#0a0604")
+        let amber = try #require(ThemeSpec.theme(id: "amber"))
+        #expect(amber.chrome.panelInactive.hex == "#15100b")
+        #expect(amber.chrome.paneHeaderBg.hex == "#150f0a")
+        #expect(amber.chrome.statusBg.hex == "#0a0604")
 
         let paper = try #require(ThemeSpec.theme(id: "paper"))
         #expect(paper.chrome.panelInactive.hex == "#efeadd")
@@ -41,33 +41,33 @@ struct ThemeSpecTests {
 
     @Test("geometry tokens differentiate the compartment look between themes")
     func geometryReflectsMockup() throws {
-        let bento = try #require(ThemeSpec.theme(id: "bento"))
+        let amber = try #require(ThemeSpec.theme(id: "amber"))
         let carbon = try #require(ThemeSpec.theme(id: "carbon"))
         let tokyo = try #require(ThemeSpec.theme(id: "tokyo"))
         let paper = try #require(ThemeSpec.theme(id: "paper"))
 
-        // Riven ships the thick bento-box divider; other themes stay
+        // Riven ships the thick compartment divider; other themes stay
         // at hairline weight.
-        #expect(bento.geometry.dividerWeight == 6)
+        #expect(amber.geometry.dividerWeight == 6)
         #expect(carbon.geometry.dividerWeight == 1)
         #expect(tokyo.geometry.dividerWeight == 1)
         #expect(paper.geometry.dividerWeight == 1)
 
         // Pane radii match the mockup: 0/4/6/3 across the four themes.
         #expect(carbon.geometry.paneRadius == 0)
-        #expect(bento.geometry.paneRadius == 4)
+        #expect(amber.geometry.paneRadius == 4)
         #expect(tokyo.geometry.paneRadius == 6)
         #expect(paper.geometry.paneRadius == 3)
 
         // Riven's active border glows softly (alpha ~0.55); others draw
         // their accent at full strength.
-        #expect(bento.geometry.activeHighlightAlpha < 0.6)
+        #expect(amber.geometry.activeHighlightAlpha < 0.6)
         #expect(carbon.geometry.activeHighlightAlpha == 1.0)
     }
 
     @Test("Paper ships as the light-mode theme; others are dark")
     func materialModes() throws {
-        #expect(try #require(ThemeSpec.theme(id: "bento")).material.mode == .dark)
+        #expect(try #require(ThemeSpec.theme(id: "amber")).material.mode == .dark)
         #expect(try #require(ThemeSpec.theme(id: "carbon")).material.mode == .dark)
         #expect(try #require(ThemeSpec.theme(id: "tokyo")).material.mode == .dark)
         #expect(try #require(ThemeSpec.theme(id: "paper")).material.mode == .light)

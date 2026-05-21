@@ -3,16 +3,16 @@
 # Two lines of visible chrome, designed to match Riven's compartment
 # aesthetic:
 #
-#     ~/code/ bento · main ✗
+#     ~/code/ riven · main ✗
 #     ›
 #
 #   * Last 2 segments of cwd. The leading dim chunks (`~/code/`) read
-#     as breadcrumb; the active segment (`bento`) reads as the
+#     as breadcrumb; the active segment (`riven`) reads as the
 #     anchor.
 #   * Optional git branch + state indicator (`✗` dirty, `↑n` ahead,
 #     `↓n` behind). Computed asynchronously so a slow `git status`
 #     never blocks the prompt — the *next* prompt gets the result.
-#   * Prompt character is the theme's prompt color (Riven amber,
+#   * Prompt character is the theme's prompt color (Amber,
 #     Tokyo violet, etc.). Goes red after a non-zero exit so the
 #     user notices a failure without scrolling up.
 #
@@ -34,7 +34,7 @@
 # Map to ANSI palette indices that Riven's themes interpret:
 #   default fg  →  unset (terminal's fg)
 #   dim         →  index 8  (bright black / "dim foreground")
-#   accent      →  index 3  (yellow — themes remap this to bento
+#   accent      →  index 3  (yellow — themes remap this to riven
 #                            amber / tokyo violet / paper ink etc.)
 #   ok          →  index 2  (green)
 #   warn        →  index 3  (yellow)
@@ -63,7 +63,7 @@ trap "rm -rf '$_RIVEN_GIT_STATUS_DIR'" EXIT
 typeset -g _RIVEN_LAST_GIT_PWD=""
 typeset -g _RIVEN_GIT_STATUS=""
 
-_bento_git_probe_async() {
+_riven_git_probe_async() {
   local pwd_snapshot="$PWD"
   local outfile="$_RIVEN_GIT_STATUS_DIR/status"
   (
@@ -90,7 +90,7 @@ _bento_git_probe_async() {
   ) &!
 }
 
-_bento_git_read_status() {
+_riven_git_read_status() {
   local outfile="$_RIVEN_GIT_STATUS_DIR/status"
   if [[ -r "$outfile" ]]; then
     _RIVEN_GIT_STATUS=$(<"$outfile")
@@ -103,28 +103,28 @@ _bento_git_read_status() {
 # OSC marks; we add the git probe + status read here.
 autoload -Uz add-zsh-hook
 
-_bento_prompt_precmd() {
+_riven_prompt_precmd() {
   # Trigger an async probe whenever the cwd changes. The result
   # lands in the next prompt or two — close enough.
   if [[ "$PWD" != "$_RIVEN_LAST_GIT_PWD" ]]; then
     _RIVEN_LAST_GIT_PWD="$PWD"
     _RIVEN_GIT_STATUS=""   # clear stale state immediately on cd
     rm -f "$_RIVEN_GIT_STATUS_DIR/status"
-    _bento_git_probe_async
+    _riven_git_probe_async
   else
     # Same repo, re-probe on each prompt so the dirty flag stays
     # honest. Skip if we're not even inside a git tree (cheap
     # check: presence of `.git` up the tree).
     if [[ -d "$PWD/.git" ]] || git rev-parse --is-inside-work-tree &>/dev/null; then
-      _bento_git_probe_async
+      _riven_git_probe_async
     else
       _RIVEN_GIT_STATUS=""
       rm -f "$_RIVEN_GIT_STATUS_DIR/status"
     fi
   fi
-  _bento_git_read_status
+  _riven_git_read_status
 }
-add-zsh-hook precmd _bento_prompt_precmd
+add-zsh-hook precmd _riven_prompt_precmd
 
 # ─── Prompt assembly ──────────────────────────────────────────────
 # Each segment is a zsh prompt expansion. PROMPT_SUBST (set in
@@ -136,7 +136,7 @@ add-zsh-hook precmd _bento_prompt_precmd
 # Two-segment cwd: ` parentDir/leaf `. `%2~` gives that with `~` for
 # $HOME. For paths shorter than 2 segments, we just show the whole
 # thing.
-_bento_segment_cwd() {
+_riven_segment_cwd() {
   print -P "%2~"
 }
 
@@ -144,13 +144,13 @@ _bento_segment_cwd() {
 # by the async probe). Empty when not in a repo or before the first
 # probe completes.
 #
-# Output goes through `$(_bento_segment_git)` in PROMPT, which means
+# Output goes through `$(_riven_segment_git)` in PROMPT, which means
 # any `%F{...}` codes we emit ship verbatim (no re-expansion). Use
 # raw SGR escapes wrapped in `%{...%}` so the prompt subsystem still
 # treats them as zero-width — without `%{...%}` the cursor column
 # count would be off by the escape byte count and line-wrap would
 # break.
-_bento_segment_git() {
+_riven_segment_git() {
   [[ -z $_RIVEN_GIT_STATUS ]] && return
   local branch="${_RIVEN_GIT_STATUS%%|*}"
   local state="${_RIVEN_GIT_STATUS#*|}"
@@ -176,7 +176,7 @@ _bento_segment_git() {
 # segment uses raw `\e[…m` ANSI escapes wrapped in `%{…%}` to keep
 # zsh's width accounting honest.
 PROMPT='%F{8}%2~%f'
-PROMPT+='$(_bento_segment_git)'
+PROMPT+='$(_riven_segment_git)'
 PROMPT+=$'\n'
 PROMPT+='%(?.%F{3}.%F{1})›%f '
 

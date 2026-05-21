@@ -12,7 +12,7 @@
 #                    want (syntax-highlighting MUST load last per its
 #                    own docs)
 #
-# Everything below is gated on `$BENTO` (or `$TERM_PROGRAM == Riven`)
+# Everything below is gated on `$RIVEN` (or `$TERM_PROGRAM == Riven`)
 # so this file is a NO-OP outside Riven. Sourcing it from another
 # terminal (iTerm, Terminal.app, kitty) leaves that shell untouched.
 # That way users can keep the source line in .zshrc without having to
@@ -38,12 +38,12 @@ fi
 typeset -g RIVEN_INTEGRATION_DIR="${RIVEN_INTEGRATION_DIR:-${${(%):-%N}:A:h}}"
 
 # Load order matters. Each loader is small + idempotent.
-for _bento_part in options integration prompt keybinds plugins; do
-  if [[ -r "$RIVEN_INTEGRATION_DIR/$_bento_part.zsh" ]]; then
-    source "$RIVEN_INTEGRATION_DIR/$_bento_part.zsh"
+for _riven_part in options integration prompt keybinds plugins; do
+  if [[ -r "$RIVEN_INTEGRATION_DIR/$_riven_part.zsh" ]]; then
+    source "$RIVEN_INTEGRATION_DIR/$_riven_part.zsh"
   fi
 done
-unset _bento_part
+unset _riven_part
 
 # Mark the integration as live so other tooling (e.g. a `riven doctor`
 # script) can probe.

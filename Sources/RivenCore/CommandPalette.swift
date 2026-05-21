@@ -44,7 +44,7 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
         self.shortcut = shortcut
     }
 
-    public static let bentoBuiltIns: [Command] = [
+    public static let rivenBuiltIns: [Command] = [
         Command(id: .splitRight, group: "Pane", title: "Split pane right", shortcut: "cmd+d"),
         Command(id: .splitDown, group: "Pane", title: "Split pane down", shortcut: "cmd+shift+d"),
         Command(id: .closePane, group: "Pane", title: "Close active pane", shortcut: "cmd+w"),

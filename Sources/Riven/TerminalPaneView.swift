@@ -103,7 +103,7 @@ struct TerminalPaneView: NSViewRepresentable {
         // The Riven model is: the command bar is the default writing
         // surface, and clicks anywhere on the terminal pane bounce focus
         // back to it. See BrokeredTerminalView.mouseDown for the bounce,
-        // and CommandBarView's `bentoFocusCommandBar` listener for the
+        // and CommandBarView's `rivenFocusCommandBar` listener for the
         // landing.
         return view
     }

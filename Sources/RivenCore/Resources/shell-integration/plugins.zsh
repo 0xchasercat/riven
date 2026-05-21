@@ -45,7 +45,7 @@ fi
 if [[ -r "$RIVEN_INTEGRATION_DIR/plugins/zsh-history-substring-search.zsh" ]]; then
   source "$RIVEN_INTEGRATION_DIR/plugins/zsh-history-substring-search.zsh"
   # Highlight the matched substring in the buffer using the theme's
-  # accent. ANSI 3 (yellow) -> bento amber / tokyo violet / etc.
+  # accent. ANSI 3 (yellow) -> Amber accent / tokyo violet / etc.
   HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND='bg=3,fg=black,bold'
   HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND='bg=1,fg=white,bold'
 fi

@@ -33,7 +33,7 @@
 # The path must be URL-encoded. zsh's `printf` doesn't have a
 # bulit-in encoder, so we hand-roll one with parameter substitution.
 
-_bento_url_encode() {
+_riven_url_encode() {
   emulate -L zsh
   local input="$1" output=""
   local -i i
@@ -47,18 +47,18 @@ _bento_url_encode() {
   print -r -- "$output"
 }
 
-_bento_osc7() {
-  printf '\e]7;file://%s%s\e\\' "${HOST}" "$(_bento_url_encode "$PWD")"
+_riven_osc7() {
+  printf '\e]7;file://%s%s\e\\' "${HOST}" "$(_riven_url_encode "$PWD")"
 }
 
 # ─── OSC 133: prompt + command marks ──────────────────────────────
 # Marks are emitted from chpwd / preexec / precmd hooks so they fire
 # exactly once per command lifecycle and never on no-op redraws.
 
-_bento_osc133_prompt_start() { printf '\e]133;A\e\\'; }
-_bento_osc133_prompt_end()   { printf '\e]133;B\e\\'; }
-_bento_osc133_cmd_start()    { printf '\e]133;C\e\\'; }
-_bento_osc133_cmd_end()      { printf '\e]133;D;%s\e\\' "$1"; }
+_riven_osc133_prompt_start() { printf '\e]133;A\e\\'; }
+_riven_osc133_prompt_end()   { printf '\e]133;B\e\\'; }
+_riven_osc133_cmd_start()    { printf '\e]133;C\e\\'; }
+_riven_osc133_cmd_end()      { printf '\e]133;D;%s\e\\' "$1"; }
 
 # ─── Hook plumbing ────────────────────────────────────────────────
 # `add-zsh-hook` is the official way to attach to zsh's lifecycle
@@ -76,26 +76,26 @@ typeset -g _RIVEN_LAST_EXIT=0
 #     where no command has run yet — `_RIVEN_PRECMD_RAN` gates this)
 #   * the cwd report (OSC 7)
 #   * A to mark the new prompt's start
-_bento_precmd() {
+_riven_precmd() {
   _RIVEN_LAST_EXIT=$?
   if (( ${+_RIVEN_PRECMD_RAN} )); then
-    _bento_osc133_cmd_end "$_RIVEN_LAST_EXIT"
+    _riven_osc133_cmd_end "$_RIVEN_LAST_EXIT"
   fi
   typeset -g _RIVEN_PRECMD_RAN=1
-  _bento_osc7
-  _bento_osc133_prompt_start
+  _riven_osc7
+  _riven_osc133_prompt_start
 }
 
 # preexec runs after the user hits Enter and before the command runs.
 # Mark prompt-end + command-start back-to-back so the visible buffer
 # region between A and C is exactly the user's typed line.
-_bento_preexec() {
-  _bento_osc133_prompt_end
-  _bento_osc133_cmd_start
+_riven_preexec() {
+  _riven_osc133_prompt_end
+  _riven_osc133_cmd_start
 }
 
-add-zsh-hook precmd  _bento_precmd
-add-zsh-hook preexec _bento_preexec
+add-zsh-hook precmd  _riven_precmd
+add-zsh-hook preexec _riven_preexec
 
 # ─── Ctrl-clickable file paths ────────────────────────────────────
 # Print absolute paths with the OSC 8 hyperlink escape so Riven can

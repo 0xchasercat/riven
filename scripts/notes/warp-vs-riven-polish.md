@@ -1,11 +1,11 @@
-# Why Warp's terminal feels more polished than Bento's
+# Why Warp's terminal feels more polished than Riven's
 
 Investigative writeup for tracker #25.
 
 > "Warp's terminal looks so much better ah, I mean Ghostty is nice but
 > it feels like it's lacking smth, but it might js be my zshrc."
 
-It's almost certainly not the zshrc — Bento's PTY pipes the same bytes
+It's almost certainly not the zshrc — Riven's PTY pipes the same bytes
 into the same Ghostty VT engine that ships in Warp, so the prompt
 output is identical. The gap is in the **rendering layer**: how the
 glyphs land on screen, how the cell grid is sized, and how the chrome
@@ -14,7 +14,7 @@ expected impact; each item is small enough to land as its own ticket.
 
 ## H1 — Line height is too tight (highest impact)
 
-**Symptom**: Bento glyphs look cramped vertically; Warp lines have
+**Symptom**: Riven glyphs look cramped vertically; Warp lines have
 visible breathing room.
 
 **Root cause**: `BrokeredTerminalView.recomputeCellMetrics` measures
@@ -47,7 +47,7 @@ pane. Right edge has the same problem.
 `CGFloat(col) * cellWidth` starting at x=0. There's no per-frame
 horizontal padding.
 
-We _just_ landed `BentoSpacing.m` horizontal padding on the
+We _just_ landed `RivenSpacing.m` horizontal padding on the
 TerminalPaneView's parent (#22), which fixes this at the *workspace*
 level. But the workspace tab content background is also pushed in,
 so Warp's "background extends edge-to-edge, glyphs are inset" effect
@@ -73,7 +73,7 @@ spec defaults — that's what every "default" palette looks like.
 Warp ships curated palettes per theme that pull saturation back
 ~15–25%.
 
-**Fix**: design pass on the four bundled themes (`bento`, `carbon`,
+**Fix**: design pass on the four bundled themes (`riven`, `carbon`,
 `tokyo`, `paper`) — drop a tuned `terminal.ansi.*` block into each
 that knocks saturation down. There's no code change here; pure data.
 
@@ -98,7 +98,7 @@ keep the wall-clock-driven blink from the SGR 5/6 implementation
 
 ## H5 — No font hinting / sub-pixel positioning hint set
 
-**Symptom**: Bento glyphs occasionally land half a pixel off the
+**Symptom**: Riven glyphs occasionally land half a pixel off the
 baseline depending on window position, reads as "shimmer" during
 scroll.
 
@@ -157,7 +157,7 @@ the trait-convert path. Same for italic — try `SF Mono Italic` /
 the title bar into the content surface so it reads as one
 continuous panel.
 
-**Root cause**: BentoApp sets `window.titlebarAppearsTransparent = true`
+**Root cause**: RivenApp sets `window.titlebarAppearsTransparent = true`
 and `window.styleMask.insert(.fullSizeContentView)` (correct) but
 the `WorkspaceTabBar` background is `chrome.background`, which is
 the same color as the title bar — almost. Warp uses a single

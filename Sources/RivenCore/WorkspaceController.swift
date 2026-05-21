@@ -102,7 +102,7 @@ public actor WorkspaceController {
     }
 
     @discardableResult
-    public func openProject(_ projectRoot: URL, selectedThemeID: String = "bento") throws -> WorkspaceState {
+    public func openProject(_ projectRoot: URL, selectedThemeID: String = "riven") throws -> WorkspaceState {
         // Resolve the requested root, falling back to `~` if it's gone
         // or unreadable. The fallback path uses the home directory as a
         // safe-and-always-present anchor so the user lands somewhere
@@ -173,7 +173,7 @@ public actor WorkspaceController {
         trustStore.trust(projectRoot: root)
         let state = try makeState(
             projectRoot: root,
-            selectedThemeID: currentState?.selectedThemeID ?? "bento",
+            selectedThemeID: currentState?.selectedThemeID ?? "riven",
             restoredFromSnapshot: currentState?.restoredFromSnapshot ?? false
         )
         currentState = state
@@ -219,7 +219,7 @@ public actor WorkspaceController {
         let graph = currentPaneGraph ?? defaultPaneGraph(for: root)
         return WorkspaceSnapshot(
             projectRoot: root.path,
-            selectedThemeID: currentState?.selectedThemeID ?? "bento",
+            selectedThemeID: currentState?.selectedThemeID ?? "riven",
             paneGraph: graph,
             openFiles: currentOpenFiles
         )

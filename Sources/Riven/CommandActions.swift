@@ -29,7 +29,7 @@ public enum CommandAction: Equatable, Sendable {
     /// Rotate to the next built-in theme in `ThemeSpec.builtIns`.
     case cycleTheme
     /// Open the theme picker overlay so the user can choose a theme
-    /// from a swatch grid. Dispatcher posts `.bentoShowThemePicker`.
+    /// from a swatch grid. Dispatcher posts `.rivenShowThemePicker`.
     case pickTheme
     /// Reveal the search overlay.
     case showSearch

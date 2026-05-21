@@ -11,7 +11,7 @@ import Testing
 @Suite("Live terminal + Ghostty pipeline")
 struct LiveTerminalGhosttyTests {
 
-    /// End-to-end: spawn a real shell, run `printf hello-bento`, capture
+    /// End-to-end: spawn a real shell, run `printf hello-riven`, capture
     /// the bytes off the PTY master, feed them through Ghostty's VT parser,
     /// then read the grid back via the C grid-ref API and assert the
     /// string is present.
@@ -20,7 +20,7 @@ struct LiveTerminalGhosttyTests {
         let pty = LivePseudoTerminal(
             spec: .init(
                 executable: "/bin/sh",
-                arguments: ["-c", "printf hello-bento\n; sleep 0.05"],
+                arguments: ["-c", "printf hello-riven\n; sleep 0.05"],
                 cwd: "/tmp",
                 environment: [:],
                 columns: 80,
@@ -40,7 +40,7 @@ struct LiveTerminalGhosttyTests {
         defer { try? bridge.close(session) }
 
         // Collect output for up to ~1.5s, feeding everything we see into
-        // Ghostty. We bail early once we've observed "hello-bento" in the
+        // Ghostty. We bail early once we've observed "hello-riven" in the
         // grid so the test stays fast.
         let timeoutNs: UInt64 = 1_500_000_000
         let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNs
@@ -48,7 +48,7 @@ struct LiveTerminalGhosttyTests {
         for await chunk in pty.output {
             try bridge.feed(chunk, to: session)
             let grid = try bridge.readGridText(session)
-            if grid.contains(where: { $0.contains("hello-bento") }) {
+            if grid.contains(where: { $0.contains("hello-riven") }) {
                 found = true
                 break
             }
@@ -56,7 +56,7 @@ struct LiveTerminalGhosttyTests {
         }
         pty.terminate()
 
-        #expect(found, "expected 'hello-bento' in the Ghostty grid")
+        #expect(found, "expected 'hello-riven' in the Ghostty grid")
     }
 
     /// Unit test: skip the PTY entirely and just verify that
@@ -74,7 +74,7 @@ struct LiveTerminalGhosttyTests {
         )
         defer { try? bridge.close(session) }
 
-        let payload = "hello-bento"
+        let payload = "hello-riven"
         try bridge.feed(Data(payload.utf8), to: session)
 
         let grid = try bridge.readGridText(session)

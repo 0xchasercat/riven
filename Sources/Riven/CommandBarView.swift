@@ -678,7 +678,7 @@ final class CommandInputTextView: NSTextView {
     /// before any text has been set.
     var placeholderFont: NSFont?
 
-    /// Token for the `.bentoFocusCommandBar` notification observer so
+    /// Token for the `.rivenFocusCommandBar` notification observer so
     /// `deinit` can remove it. Stored as `Any?` because that's what
     /// `NotificationCenter.addObserver(forName:...)` hands back.
     /// `nonisolated(unsafe)` so the nonisolated deinit can read it.
@@ -689,7 +689,7 @@ final class CommandInputTextView: NSTextView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // Riven's focus model bounces any terminal-pane click to the
-        // command bar. Listen for `.bentoFocusCommandBar` while attached
+        // command bar. Listen for `.rivenFocusCommandBar` while attached
         // to a window — when fired, grab first-responder unless the
         // event source was ourselves (avoid recursive loops if a future
         // path ever posts from inside the bar).
@@ -699,7 +699,7 @@ final class CommandInputTextView: NSTextView {
         }
         guard window != nil else { return }
         focusObserver = NotificationCenter.default.addObserver(
-            forName: .bentoFocusCommandBar,
+            forName: .rivenFocusCommandBar,
             object: nil,
             queue: .main
         ) { [weak self] _ in

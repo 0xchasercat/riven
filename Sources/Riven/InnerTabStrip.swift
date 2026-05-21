@@ -159,7 +159,7 @@ private struct InnerTabChip: View {
                 if canClose {
                     Button {
                         NotificationCenter.default.post(
-                            name: .bentoCloseInnerTab,
+                            name: .rivenCloseInnerTab,
                             object: tab.id
                         )
                     } label: {
@@ -189,7 +189,7 @@ private struct InnerTabChip: View {
         .onTapGesture {
             if !isEditing {
                 NotificationCenter.default.post(
-                    name: .bentoFocusInnerTab,
+                    name: .rivenFocusInnerTab,
                     object: tab.id
                 )
             }
@@ -246,7 +246,7 @@ private struct InnerTabChip: View {
 
     private func commit() {
         NotificationCenter.default.post(
-            name: .bentoRenameInnerTab,
+            name: .rivenRenameInnerTab,
             object: InnerTabRename(id: tab.id, name: draft)
         )
         isEditing = false
@@ -264,7 +264,7 @@ private struct InnerTabChip: View {
 /// currently-focused surface in its tab to the right (matching Cmd+D);
 /// long-press / Option-click would split down (Cmd+Shift+D — wired
 /// through the menu for now, not the button, to keep the chrome
-/// simple). Posts `.bentoSplitFocusedSurface(.right)`.
+/// simple). Posts `.rivenSplitFocusedSurface(.right)`.
 private struct SplitSurfaceButton: View {
     let theme: ThemeSpec
 
@@ -273,7 +273,7 @@ private struct SplitSurfaceButton: View {
     var body: some View {
         Button {
             NotificationCenter.default.post(
-                name: .bentoSplitFocusedSurface,
+                name: .rivenSplitFocusedSurface,
                 object: SplitDirection.right
             )
         } label: {
@@ -316,7 +316,7 @@ private struct AddInnerTabButton: View {
 
     var body: some View {
         Button {
-            NotificationCenter.default.post(name: .bentoNewTab, object: nil)
+            NotificationCenter.default.post(name: .rivenNewTab, object: nil)
         } label: {
             Text("+")
                 .font(RivenType.chrome(15, weight: .medium))
@@ -339,7 +339,7 @@ private struct AddInnerTabButton: View {
     }
 }
 
-/// Payload for `.bentoRenameInnerTab` notifications. Notifications use
+/// Payload for `.rivenRenameInnerTab` notifications. Notifications use
 /// `Any?` for their object, so we need a typed wrapper to carry both
 /// the tab id and the new name in one hop.
 struct InnerTabRename: Equatable {
@@ -348,7 +348,7 @@ struct InnerTabRename: Equatable {
 }
 
 extension Notification.Name {
-    static let bentoFocusInnerTab = Notification.Name("RivenFocusInnerTab")
-    static let bentoCloseInnerTab = Notification.Name("RivenCloseInnerTab")
-    static let bentoRenameInnerTab = Notification.Name("RivenRenameInnerTab")
+    static let rivenFocusInnerTab = Notification.Name("RivenFocusInnerTab")
+    static let rivenCloseInnerTab = Notification.Name("RivenCloseInnerTab")
+    static let rivenRenameInnerTab = Notification.Name("RivenRenameInnerTab")
 }

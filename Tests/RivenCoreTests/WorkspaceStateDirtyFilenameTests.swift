@@ -26,7 +26,7 @@ struct WorkspaceStateDirtyFilenameTests {
         )
         return WorkspaceState(
             projectRoot: "/tmp/proj",
-            selectedThemeID: "bento",
+            selectedThemeID: "riven",
             requiresTaskTrust: false,
             pendingTaskCommands: [],
             agentRequests: [],

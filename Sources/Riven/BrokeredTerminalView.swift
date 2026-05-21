@@ -179,7 +179,7 @@ public final class BrokeredTerminalView: NSView {
         // pre-sleep snapshot until the next mouse move or PTY event
         // — visible as a stale frame for several seconds.
         wakeObserver = NotificationCenter.default.addObserver(
-            forName: .bentoSystemDidWake,
+            forName: .rivenSystemDidWake,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -275,7 +275,7 @@ public final class BrokeredTerminalView: NSView {
 
     /// Riven's focus model: the command bar is the default writing
     /// surface. A plain click on the terminal (no drag) bounces focus
-    /// to the command bar via `.bentoFocusCommandBar`. A click + drag
+    /// to the command bar via `.rivenFocusCommandBar`. A click + drag
     /// keeps focus on the terminal so future text-selection work has a
     /// place to land. Today we don't implement text selection, so the
     /// drag branch is reserved — every mouseDown bounces.
@@ -283,7 +283,7 @@ public final class BrokeredTerminalView: NSView {
         // Post immediately; the command bar listens on the same window.
         // No need to wait for mouseUp — the user's intent is clear from
         // the first click that the terminal pane is the target context.
-        NotificationCenter.default.post(name: .bentoFocusCommandBar, object: nil)
+        NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
         super.mouseDown(with: event)
     }
 

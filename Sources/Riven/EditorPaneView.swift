@@ -21,7 +21,7 @@ struct EditorPaneView: View {
     let theme: ThemeSpec
     let paneID: PaneID
     /// Tab-surface identity. When non-nil, the underlying coordinator
-    /// listens for `.bentoSaveSurface` / `.bentoUndoSurface`
+    /// listens for `.rivenSaveSurface` / `.rivenUndoSurface`
     /// notifications carrying this id and dispatches the save / undo
     /// internally. Legacy callers (PaneGridView's `.editor` leaf in
     /// the old single-tab-per-pane model) pass nil and rely solely on
@@ -191,7 +191,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         private var onSaveResult: (Result<Void, Error>) -> Void
         private var loadFailureMessage: String?
         /// When non-nil, this coordinator listens for
-        /// `.bentoSaveSurface` / `.bentoUndoSurface` notifications
+        /// `.rivenSaveSurface` / `.rivenUndoSurface` notifications
         /// whose payload matches and dispatches the corresponding
         /// action. Lets the editor toolbar's Save / Undo buttons + the
         /// controller's close-prompt fire save without holding a
@@ -212,7 +212,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         /// Cached fd backing `fileWatcher`. Closed when the watcher is
         /// torn down (via `cancel` handler).
         private nonisolated(unsafe) var watchedFD: Int32 = -1
-        /// True once we've posted `.bentoEditorFileVanished` for the
+        /// True once we've posted `.rivenEditorFileVanished` for the
         /// current buffer URL. Latches so a rapid burst of fsevents
         /// doesn't fire the notification ten times.
         private var hasNotifiedVanished = false
@@ -241,7 +241,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         private func attachSurfaceObserversIfNeeded() {
             guard let surfaceID else { return }
             saveObserver = NotificationCenter.default.addObserver(
-                forName: .bentoSaveSurface,
+                forName: .rivenSaveSurface,
                 object: nil,
                 queue: .main
             ) { [weak self] note in
@@ -253,7 +253,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
                 }
             }
             undoObserver = NotificationCenter.default.addObserver(
-                forName: .bentoUndoSurface,
+                forName: .rivenUndoSurface,
                 object: nil,
                 queue: .main
             ) { [weak self] note in
@@ -294,7 +294,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
                 teardownFileWatcher()
                 if hasNotifiedVanished, let surfaceID {
                     NotificationCenter.default.post(
-                        name: .bentoEditorFileRestored,
+                        name: .rivenEditorFileRestored,
                         object: surfaceID
                     )
                     hasNotifiedVanished = false
@@ -347,7 +347,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
             // post a restore so the controller clears its tracking.
             if hasNotifiedVanished, let surfaceID {
                 NotificationCenter.default.post(
-                    name: .bentoEditorFileRestored,
+                    name: .rivenEditorFileRestored,
                     object: surfaceID
                 )
             }
@@ -385,7 +385,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
             watchedFD = -1
         }
 
-        /// Post `.bentoEditorFileVanished` once per buffer URL. We
+        /// Post `.rivenEditorFileVanished` once per buffer URL. We
         /// don't reload, redraw, or mutate the buffer here — the user
         /// might still want to save their in-memory edits via Save As
         /// once that's wired (TODO below). The notification is purely
@@ -396,7 +396,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
             guard !hasNotifiedVanished, let surfaceID else { return }
             hasNotifiedVanished = true
             NotificationCenter.default.post(
-                name: .bentoEditorFileVanished,
+                name: .rivenEditorFileVanished,
                 object: surfaceID
             )
         }
@@ -432,7 +432,7 @@ struct STTextEditorRepresentable: NSViewRepresentable {
                 // vanished file resurrects it. `.atomic` writes
                 // through a new inode, so re-install the watcher on
                 // the fresh fd; that also clears the vanish latch and
-                // posts `.bentoEditorFileRestored`.
+                // posts `.rivenEditorFileRestored`.
                 installFileWatcher(for: url)
             } catch {
                 // Keep the buffer dirty so the user can retry. The view
@@ -540,7 +540,7 @@ enum EditorChrome {
     /// Editor body background. Blends `panel` (80%) with `background`
     /// (20%) so the editor reads as a different surface than the terminal
     /// at a glance, without introducing a new theme key. The blend lands
-    /// slightly darker on `bento`/`carbon`/`tokyo` (all dark themes) and
+    /// slightly darker on `riven`/`carbon`/`tokyo` (all dark themes) and
     /// slightly lighter on `paper`, which is the natural read in both
     /// directions.
     static func editorBackground(_ theme: ThemeSpec) -> NSColor {

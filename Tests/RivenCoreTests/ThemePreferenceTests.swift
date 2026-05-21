@@ -4,12 +4,12 @@ import Testing
 
 @Suite("Theme preference")
 struct ThemePreferenceTests {
-    @Test("defaults to bento until user selects a built-in theme")
+    @Test("defaults to riven until user selects a built-in theme")
     func defaultAndSelect() throws {
         let defaults = UserDefaults(suiteName: "RivenTests-\(UUID().uuidString)")!
         let preference = ThemePreferenceStore(defaults: defaults)
 
-        #expect(preference.selectedTheme.id == "bento")
+        #expect(preference.selectedTheme.id == "amber")
         try preference.selectTheme(id: "carbon")
         #expect(preference.selectedTheme.id == "carbon")
     }

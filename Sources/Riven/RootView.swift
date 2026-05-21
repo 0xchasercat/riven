@@ -277,7 +277,7 @@ struct RivenRootView: View {
     }
 
     /// Open the dismissible theme picker. Called by the
-    /// `.bentoShowThemePicker` notification (menu + palette + swatch
+    /// `.rivenShowThemePicker` notification (menu + palette + swatch
     /// "more" affordance). First-run picker is handled inline in the
     /// view body and uses `dismissible: false` — this entry is for
     /// users who already have an explicit selection but want to change
@@ -430,7 +430,7 @@ struct RivenRootView: View {
             CommandPaletteOverlay(
                 theme: theme,
                 query: $paletteQuery,
-                commands: CommandPalette(commands: Command.bentoBuiltIns).search(paletteQuery),
+                commands: CommandPalette(commands: Command.rivenBuiltIns).search(paletteQuery),
                 onSelect: { dispatch($0) },
                 onClose: { activeOverlay = nil }
             )
@@ -790,24 +790,24 @@ private struct NotificationWiring: ViewModifier {
                 onCommandSubmitted: onCommandSubmitted,
                 onCommandHistoryRequest: onCommandHistoryRequest
             ))
-            .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoShowThemePicker)) { _ in onShowThemePicker() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoShowShortcutsCheatsheet)) { _ in onShortcuts() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in onNewWorkspace() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoOpenProject)) { _ in onOpenProject() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseTab)) { _ in onCloseTab() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseEditor)) { _ in onCloseEditor() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoToggleSidebar)) { _ in onToggleSidebar() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoClearFocusedTerminal)) { _ in onClearTerminal() }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoFocusInnerTab)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenShowCommandPalette)) { _ in onPalette() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenShowSearch)) { _ in onSearch() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenShowThemePicker)) { _ in onShowThemePicker() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenShowShortcutsCheatsheet)) { _ in onShortcuts() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenNewTab)) { _ in onNewTab() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenNewWorkspace)) { _ in onNewWorkspace() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenOpenProject)) { _ in onOpenProject() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCloseTab)) { _ in onCloseTab() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCloseEditor)) { _ in onCloseEditor() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenToggleSidebar)) { _ in onToggleSidebar() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenClearFocusedTerminal)) { _ in onClearTerminal() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenFocusInnerTab)) { note in
                 if let id = note.object as? TabID { onFocusInnerTab(id) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseInnerTab)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCloseInnerTab)) { note in
                 if let id = note.object as? TabID { onCloseInnerTab(id) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoRenameInnerTab)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenRenameInnerTab)) { note in
                 if let rename = note.object as? InnerTabRename { onRenameInnerTab(rename) }
             }
     }
@@ -831,34 +831,34 @@ private struct SurfaceWiring: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onReceive(NotificationCenter.default.publisher(for: .bentoSplitFocusedSurface)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenSplitFocusedSurface)) { note in
                 if let direction = note.object as? SplitDirection { onSplitSurface(direction) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoFocusSurface)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenFocusSurface)) { note in
                 if let focus = note.object as? SurfaceFocus { onFocusSurface(focus) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCloseSurface)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCloseSurface)) { note in
                 if let focus = note.object as? SurfaceFocus { onCloseSurface(focus) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCycleSurfaceFocus)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCycleSurfaceFocus)) { _ in
                 onCycleSurfaceFocus()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoSendCtrlByte)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenSendCtrlByte)) { note in
                 if let n = note.object as? NSNumber { onSendCtrlByte(n.uint8Value) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorDirtyChanged)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenEditorDirtyChanged)) { note in
                 if let change = note.object as? EditorDirtyChange { onEditorDirtyChanged(change) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorFileVanished)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenEditorFileVanished)) { note in
                 if let id = note.object as? SurfaceID { onEditorFileVanished(id) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorFileRestored)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenEditorFileRestored)) { note in
                 if let id = note.object as? SurfaceID { onEditorFileRestored(id) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCommandSubmitted)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCommandSubmitted)) { note in
                 if let text = note.object as? String { onCommandSubmitted(text) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .bentoCommandHistoryRequest)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .rivenCommandHistoryRequest)) { note in
                 if let request = note.object as? CommandHistoryRequest { onCommandHistoryRequest(request) }
             }
     }

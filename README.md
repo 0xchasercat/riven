@@ -1,38 +1,75 @@
-# Bento
+# Riven
 
-Bento is a native macOS workspace for power users: fast terminal panes, native editor panes, project resurrection, task panes, and unified search without AI features, telemetry, Electron, or web-terminal fallbacks.
+A native macOS workspace for power users. Terminal panes, an integrated editor, project-aware search, theme-aware everything. No AI features, no telemetry, no Electron, no web-terminal fallback.
 
-## Current Alpha Scaffold
+> **Riven** — to split, to cleave, to rive a window into compartments. Every workspace splits into tabs, every tab splits into surfaces, every surface owns its own PTY or buffer.
 
-This repository now contains a Swift Package with three targets:
+---
 
-- `BentoCore`: pane graph, session YAML parsing, theme model, command palette model, snapshot persistence, scrollback persistence, unified search, and engine contracts.
-- `Bento`: a native AppKit/SwiftUI executable shell with the mockup-inspired pane layout, first-run theme picker, and STTextView editor panes.
-- `BentoAgent`: the beginning of the helper process boundary that will own terminal/task lifetime.
+## What's in the box
 
-Ghostty VT is built from the vendored Ghostty source under `External/ghostty` and linked via the generated `ghostty-vt.xcframework`. Editor panes use STTextView.
+- **Terminal panes** backed by [libghostty-vt](https://github.com/ghostty-org/ghostty). Out-of-process PTY broker so UI crashes don't kill your shells.
+- **Editor panes** as first-class tab citizens (not a side column), backed by [STTextView](https://github.com/krzyzanowskim/STTextView). Dirty indicators, save-on-close prompts, file-deletion detection.
+- **Workspaces, tabs, splits** — three nested levels of structure. Each workspace has its own sidebar following the live `cd`. Splits land inside a tab; the tab lives inside a workspace.
+- **Global search** across every project and every past session. Vendored ripgrep for file matches, scrollback metadata sidecars so `grep cargo` in last Tuesday's session still finds the hit.
+- **Four bundled themes** (Amber · Carbon · Tokyo · Paper) plus user-authored JSON themes. Live theme switching from the menu, palette, or status-bar swatch.
+- **Optional zsh shell integration** with a minimal theme-aware prompt, async git status, autosuggestions, fast-syntax-highlighting, substring history search, and a frecency-based smart `cd`. Two clicks to install, two clicks to remove.
+- **Hardening**: dirty-quit prompts, file-vanished detection, project-fallback banner, broker respawn that preserves focus, sleep/wake recovery.
 
-## Verify
+## Targets
+
+| Target | What it is |
+|---|---|
+| `RivenCore` | Pure model + persistence layer. Pane graph, session YAML, themes, scrollback store with metadata sidecars, ripgrep + unified search, IPC protocol, recent-searches ring. |
+| `Riven` | The macOS app: AppKit/SwiftUI shell, command palette, overlays, hosting controllers, BrokeredTerminalView wrapping libghostty-vt. |
+| `RivenAgent` | Helper process owning every PTY. Survives UI restarts; the app re-attaches by paneID. |
+
+External dependencies: [Yams](https://github.com/jpsim/Yams) for session YAML, [STTextView](https://github.com/krzyzanowskim/STTextView) for the editor, vendored Universal2 [ripgrep](https://github.com/BurntSushi/ripgrep) for file search.
+
+## Build
+
+Requires macOS 15+, Xcode 16+ toolchain (Swift 6.2), and [zig](https://ziglang.org) 0.15.x for the one-time Ghostty build.
 
 ```sh
-swift test
-swift build -c release
-swift run BentoAgent
+# First-time setup: clone Ghostty + build libghostty-vt.
+./scripts/setup-ghostty.sh
+
+# Subsequent builds:
+swift build              # debug
+swift build -c release   # release
+swift run RivenAgent     # broker on its own (rarely useful directly)
 ```
 
-## Shell Integration
+The `Riven` and `RivenAgent` executables drop into `.build/<config>/`. Launch `Riven` from Finder for the real experience — when launched that way the AgentLauncher spawns RivenAgent automatically and the app picks up `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=Riven` for every PTY it opens.
 
-Optional shell snippets in [`scripts/`](scripts/README.md) make your shell
-emit OSC 7 (cwd reports) and OSC 133 A/B/C/D (semantic prompt markers) so
-Bento's sidebar can follow `cd` and Bento can identify command boundaries
-for block grouping. Available for zsh, bash, and fish. See
-[`scripts/README.md`](scripts/README.md) for install + verification.
+## Shell integration
 
-## Non-Negotiables
+Open the command palette (`⌘⇧P`) and search for **shell integration** to install. Bundled inside the app — no clone, no manual sourcing.
+
+Installed files land at `~/.config/riven/shell/`. A fenced source block goes into `~/.zshrc`. Uninstall through the same menu or palette entry; it removes both halves and leaves your own zsh config intact.
+
+See [`Sources/RivenCore/Resources/shell-integration/README.md`](Sources/RivenCore/Resources/shell-integration/README.md) for what gets activated.
+
+## Tests
+
+```sh
+swift test --filter 'Theme|ScrollbackMetadata|ScrollbackStore|SearchIndex|RecentSearches|Ripgrep|CustomThemeLoader|EditorBuffer|WorkspaceStateDirtyFilename|CommandHistory|CommandPalette|PaneGraph|StringEllipsis|ProjectFileTreeCap|ProjectFileTree|ShellIntegrationInstaller|PseudoTerminal|WorkspaceController'
+```
+
+This curated filter excludes the broker IPC tests, which are flaky on contended CI but pass deterministically when run in isolation:
+
+```sh
+swift test --filter 'BrokerPersistence|LiveTerminalGhostty|AgentService|AgentIPC'
+```
+
+## Non-negotiables
 
 - No AI product features.
-- No telemetry.
+- No telemetry, no analytics, no phone-home.
 - No Electron, WebView terminal, or xterm.js fallback.
-- Real `libghostty` for terminal panes.
-- STTextView editor integration.
+- libghostty for terminals. STTextView for the editor. AppKit + SwiftUI for chrome.
 - Performance and UI precision over feature count.
+
+## Status
+
+Pre-1.0. Functional and used daily by the author; expect rough edges. See the commit log for the active work.

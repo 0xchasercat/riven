@@ -112,7 +112,7 @@ struct CustomThemeLoaderTests {
         let target = try #require(first)
         #expect(FileManager.default.fileExists(atPath: target.path))
 
-        // The seeded JSON should round-trip back to the Bento builtin
+        // The seeded JSON should round-trip back to the Riven builtin
         // so users start from something that actually loads.
         let data = try Data(contentsOf: target)
         let decoded = try JSONDecoder().decode(ThemeSpec.self, from: data)

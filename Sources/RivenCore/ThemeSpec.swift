@@ -116,8 +116,8 @@ public struct ThemeSpec: Equatable, Codable, Sendable, Identifiable {
 
     public static let builtIns: [ThemeSpec] = [
         ThemeSpec(
-            id: "bento",
-            name: "Bento",
+            id: "amber",
+            name: "Amber",
             chrome: ThemeChrome(
                 background: "#0e0a07",
                 panel: "#1a130d",
@@ -556,7 +556,7 @@ public struct ThemeGeometry: Equatable, Codable, Sendable {
     /// Stroke width (pt) of the active-pane outline.
     public var activeHighlightWidth: CGFloat
     /// Multiplier on the active border's color alpha when drawn (1.0 =
-    /// fully opaque; bento uses ~0.55 so the amber reads as a glow
+    /// fully opaque; riven uses ~0.55 so the amber reads as a glow
     /// rather than a hard line).
     public var activeHighlightAlpha: Double
 

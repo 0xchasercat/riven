@@ -196,7 +196,7 @@ struct WorkspaceResurrectionTests {
 
         let snapshot = WorkspaceSnapshot(
             projectRoot: project.standardizedFileURL.path,
-            selectedThemeID: "bento",
+            selectedThemeID: "riven",
             paneGraph: graph,
             openFiles: []
         )
@@ -263,7 +263,7 @@ struct WorkspaceResurrectionTests {
         )
         let snapshot = WorkspaceSnapshot(
             projectRoot: project.standardizedFileURL.path,
-            selectedThemeID: "bento",
+            selectedThemeID: "riven",
             paneGraph: PaneGraph(root: pane),
             openFiles: []
         )
@@ -339,7 +339,7 @@ struct WorkspaceResurrectionTests {
         )
         let snapshot = WorkspaceSnapshot(
             projectRoot: project.standardizedFileURL.path,
-            selectedThemeID: "bento",
+            selectedThemeID: "riven",
             paneGraph: PaneGraph(root: pane),
             openFiles: []
         )

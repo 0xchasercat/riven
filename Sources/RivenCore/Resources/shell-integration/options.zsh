@@ -28,19 +28,19 @@ setopt HIST_VERIFY            # show !! expansion before running
 # ─── Completion ───────────────────────────────────────────────────
 # Cache compinit's dump so subsequent shells start fast. Stamp lives
 # in ~/.cache so it's discoverable + clearable.
-typeset -g _bento_compdump="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump"
-mkdir -p "${_bento_compdump:h}"
+typeset -g _riven_compdump="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump"
+mkdir -p "${_riven_compdump:h}"
 
 # Load completion subsystem with the cache. `-C` skips security
 # checks (the dump's mtime drives the decision) — fast path. We
 # re-check perms only once a day.
 autoload -Uz compinit
-if [[ -n $_bento_compdump(#qN.mh+24) ]]; then
-  compinit -d "$_bento_compdump"
+if [[ -n $_riven_compdump(#qN.mh+24) ]]; then
+  compinit -d "$_riven_compdump"
 else
-  compinit -C -d "$_bento_compdump"
+  compinit -C -d "$_riven_compdump"
 fi
-unset _bento_compdump
+unset _riven_compdump
 
 # Smart matching: case-insensitive, partial-word, dashed-prefix all
 # count as matches. Order matters — first matcher wins.

@@ -73,7 +73,7 @@ struct WorkspaceControllerTests {
             trustStore: ProjectTrustStore(),
             snapshotStore: WorkspaceSnapshotStore(
                 root: URL(fileURLWithPath: NSTemporaryDirectory())
-                    .appendingPathComponent("bento-snap-\(UUID().uuidString)")
+                    .appendingPathComponent("riven-snap-\(UUID().uuidString)")
             ),
             scrollbackStore: .temporary()
         )
@@ -110,14 +110,14 @@ struct WorkspaceControllerTests {
         // Create a file (not a directory) at the requested path —
         // ProjectFileTree.scan would otherwise throw on this.
         let file = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("bento-file-\(UUID().uuidString).txt")
+            .appendingPathComponent("riven-file-\(UUID().uuidString).txt")
         try "not a directory".write(to: file, atomically: true, encoding: .utf8)
 
         let controller = WorkspaceController(
             trustStore: ProjectTrustStore(),
             snapshotStore: WorkspaceSnapshotStore(
                 root: URL(fileURLWithPath: NSTemporaryDirectory())
-                    .appendingPathComponent("bento-snap-\(UUID().uuidString)")
+                    .appendingPathComponent("riven-snap-\(UUID().uuidString)")
             ),
             scrollbackStore: .temporary()
         )

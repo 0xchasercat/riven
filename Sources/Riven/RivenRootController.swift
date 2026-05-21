@@ -50,8 +50,8 @@ final class RivenRootController: ObservableObject {
     @Published private(set) var dirtyEditorSurfaces: Set<SurfaceID> = []
     /// H-2: editor surfaces whose backing file has been deleted /
     /// renamed underneath the open buffer. Updated by the editor
-    /// coordinator's file watcher via `.bentoEditorFileVanished` /
-    /// `.bentoEditorFileRestored`. UI consumers:
+    /// coordinator's file watcher via `.rivenEditorFileVanished` /
+    /// `.rivenEditorFileRestored`. UI consumers:
     ///   * `EditorToolbar` disables Save + shows a tooltip when the
     ///     surface is here.
     ///   * `InnerTabStrip` / `InnerTabChip` append "(missing)" to the
@@ -280,7 +280,7 @@ You can rename or delete this tab — it's a regular file at
     /// H-5: when this fires for a **respawn** (epoch goes 1 → 2 → …,
     /// i.e. not the initial connect), we capture the focused pane +
     /// surface BEFORE the bump and re-apply them via a deferred
-    /// `.bentoBrokerRespawned` post AFTER the SwiftUI tree has had a
+    /// `.rivenBrokerRespawned` post AFTER the SwiftUI tree has had a
     /// runloop tick to rebuild against the fresh client. Without this,
     /// the cached-host teardown the epoch bump triggers can leave
     /// AppKit first-responder pointed at whichever surface SwiftUI
@@ -302,7 +302,7 @@ You can rename or delete this tab — it's a regular file at
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.restorePreservedFocus(preservedFocus)
-            NotificationCenter.default.post(name: .bentoBrokerRespawned, object: nil)
+            NotificationCenter.default.post(name: .rivenBrokerRespawned, object: nil)
         }
     }
 
@@ -653,7 +653,7 @@ You can rename or delete this tab — it's a regular file at
     ///
     /// When the tab contains a dirty editor surface, an NSAlert
     /// prompts the user to save / discard / cancel before closing.
-    /// Cancel aborts the close; Save sends a `.bentoSaveSurface`
+    /// Cancel aborts the close; Save sends a `.rivenSaveSurface`
     /// notification (the editor's coordinator picks it up
     /// synchronously and writes to disk) before proceeding; Don't
     /// Save proceeds without saving.
@@ -670,7 +670,7 @@ You can rename or delete this tab — it's a regular file at
             case .save:
                 for surface in dirty {
                     NotificationCenter.default.post(
-                        name: .bentoSaveSurface,
+                        name: .rivenSaveSurface,
                         object: surface.id
                     )
                 }
@@ -764,7 +764,7 @@ You can rename or delete this tab — it's a regular file at
             case .cancel: return
             case .save:
                 NotificationCenter.default.post(
-                    name: .bentoSaveSurface,
+                    name: .rivenSaveSurface,
                     object: surfaceID
                 )
             case .dontSave:
@@ -779,7 +779,7 @@ You can rename or delete this tab — it's a regular file at
     }
 
     /// Append a just-submitted command to the global history.
-    /// CommandBar's onSubmit posts `.bentoCommandSubmitted` with the
+    /// CommandBar's onSubmit posts `.rivenCommandSubmitted` with the
     /// submitted text; the wiring routes here. Dedupe + capacity
     /// limits handled inside `CommandHistory.submit`.
     func recordCommandSubmission(_ text: String) {
@@ -872,7 +872,7 @@ You can rename or delete this tab — it's a regular file at
         /// should return `.terminateNow`.
         case quitNow
         /// User picked "Save All". The controller has already posted
-        /// `.bentoSaveSurface` for every dirty surface; caller should
+        /// `.rivenSaveSurface` for every dirty surface; caller should
         /// return `.terminateNow` once those posts have propagated.
         case savedAllAndQuit
         /// User picked "Cancel". Caller should return `.terminateCancel`.
@@ -884,7 +884,7 @@ You can rename or delete this tab — it's a regular file at
     /// blocks on the alert (which is fine — quit is a discrete user
     /// action) and resolves to one of the three `QuitDecision` cases.
     ///
-    /// Save All posts `.bentoSaveSurface` for each dirty surface; the
+    /// Save All posts `.rivenSaveSurface` for each dirty surface; the
     /// editor coordinators observe the notification on the main thread
     /// and write to disk synchronously before returning. By the time
     /// the post call returns, the buffers are on disk.
@@ -901,7 +901,7 @@ You can rename or delete this tab — it's a regular file at
         case .save:
             for surfaceID in dirtyEditorSurfaces {
                 NotificationCenter.default.post(
-                    name: .bentoSaveSurface,
+                    name: .rivenSaveSurface,
                     object: surfaceID
                 )
             }
@@ -1046,7 +1046,7 @@ You can rename or delete this tab — it's a regular file at
     /// "clear screen". Editor tabs are a no-op for this command.
     ///
     /// Wired to Cmd+K (see `RivenApp.installMenu`) and routed through
-    /// the `.bentoClearFocusedTerminal` notification so menu, palette,
+    /// the `.rivenClearFocusedTerminal` notification so menu, palette,
     /// and any future entry point can converge on one path.
     func clearFocusedTerminal() {
         sendByteToFocusedTerminal(0x0C)
@@ -1098,7 +1098,7 @@ You can rename or delete this tab — it's a regular file at
     /// terminal, or when the workspace has only one tab left (we never
     /// let a workspace go tabless).
     ///
-    /// Wired to the `bentoCloseEditor` notification; the editor column
+    /// Wired to the `rivenCloseEditor` notification; the editor column
     /// header's `×` button used to fire this. Now that the editor is an
     /// inner tab, the per-tab `×` in `InnerTabStrip` is the primary
     /// close path — this remains as a fallback so older entry points

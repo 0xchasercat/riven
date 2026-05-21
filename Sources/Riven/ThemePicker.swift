@@ -224,7 +224,7 @@ private struct ThemeSwatch: View {
                 codeLine([
                     (text: "func", color: option.syntax.keyword.hex),
                     (text: " ", color: option.terminal.foreground.hex),
-                    (text: "bento", color: option.syntax.function.hex),
+                    (text: "riven", color: option.syntax.function.hex),
                     (text: "() {", color: option.terminal.foreground.hex)
                 ])
                 codeLine([

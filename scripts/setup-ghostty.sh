@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clone Ghostty and build libghostty-vt for Bento.
+# Clone Ghostty and build libghostty-vt for Riven.
 # Requires zig 0.15.x on PATH.
 set -euo pipefail
 
@@ -12,7 +12,7 @@ HOOKS="scripts/git-hooks"
 # Wire repo-local git hooks (currently: pre-commit guard against
 # re-tracking External/). Idempotent — setting hooksPath twice is fine.
 # Lives here so a fresh clone gets the hook installed as part of the
-# normal "I want to build Bento" flow rather than as a separate step
+# normal "I want to build Riven" flow rather than as a separate step
 # nobody remembers to run.
 if [ -d "$REPO_ROOT/$HOOKS" ]; then
   echo "Installing repo-local git hooks ($HOOKS)..."

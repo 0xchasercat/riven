@@ -60,7 +60,7 @@ struct PaneGridView: NSViewRepresentable {
         onCloseEditor: @escaping () -> Void = { }
     ) {
         // `onCloseEditor` is accepted for API symmetry; the actual close
-        // signal flows via NotificationCenter (`bentoCloseEditor`) so we
+        // signal flows via NotificationCenter (`rivenCloseEditor`) so we
         // don't thread the closure through six layers of nested workspace
         // views.
         self.theme = theme
@@ -170,7 +170,7 @@ final class RivenPaneContainerView: NSView {
     ///   * Deep-comparing every chrome/geometry/material field on a
     ///     ~50-field struct is the wrong shape for a hot path that
     ///     runs on every SwiftUI re-render — string compare wins on
-    ///     a 6-char id like `"bento"`.
+    ///     a 6-char id like `"riven"`.
     ///   * Custom themes (T-6) might reuse builtin ids by accident or
     ///     by intent (`riven.json` shadowing the builtin). The id is
     ///     still the canonical identity from the user's POV — a tweak
@@ -335,7 +335,7 @@ final class RivenPaneContainerView: NSView {
                 // [][] button in the inner tab strip and Cmd+D.
                 self?.requestFocus(id)
                 NotificationCenter.default.post(
-                    name: .bentoSplitFocusedSurface,
+                    name: .rivenSplitFocusedSurface,
                     object: SplitDirection.right
                 )
             },
@@ -409,7 +409,7 @@ final class RivenPaneContainerView: NSView {
     // screen model that's equivalent to "next tab", which the user
     // can do via the WorkspaceTabBar click or Cmd+W/Cmd+N. Ctrl+Tab
     // now cycles **surface** focus inside the current tab via the
-    // .bentoCycleSurfaceFocus notification.)
+    // .rivenCycleSurfaceFocus notification.)
 
     // MARK: - Keyboard handling
 
@@ -421,7 +421,7 @@ final class RivenPaneContainerView: NSView {
     /// WorkspaceTabBar). That was the right behavior pre-#23 when
     /// there was no concept of within-tab surfaces. Now that splits
     /// happen INSIDE a tab, those bindings live in the File menu
-    /// (RivenApp.installMenu) and post `.bentoSplitFocusedSurface`,
+    /// (RivenApp.installMenu) and post `.rivenSplitFocusedSurface`,
     /// which routes to the controller's surface-tree mutators. We
     /// stay out of the responder chain for those keys so the menu's
     /// key-equivalents fire normally.
@@ -446,7 +446,7 @@ final class RivenPaneContainerView: NSView {
         // one-workspace-per-screen model. Now it posts the same
         // notification the menu's "Cycle Surface Focus" item uses.
         if mods == [.control] && event.keyCode == 0x30 {
-            NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
+            NotificationCenter.default.post(name: .rivenCycleSurfaceFocus, object: nil)
             return true
         }
         return false

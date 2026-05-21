@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-commit hook for Bento.
+# Pre-commit hook for Riven.
 #
 # Blocks accidental re-tracking of vendored Ghostty sources / install dirs.
 # Those live under External/ and are provisioned per-machine by
@@ -29,7 +29,7 @@ blocked="$(printf '%s\n' "$staged" | grep -E '^External/.+' || true)"
 
 if [ -n "$blocked" ]; then
   cat >&2 <<EOF
-[bento pre-commit] Refusing to commit paths under External/:
+[riven pre-commit] Refusing to commit paths under External/:
 
 $blocked
 

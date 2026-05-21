@@ -2,7 +2,7 @@
 #
 # install-rg.sh — fetch ripgrep release tarballs for darwin/aarch64 and
 # darwin/x86_64, verify their SHA-256 sums, and lipo-fuse them into a single
-# Universal2 binary at Sources/BentoCore/Resources/rg.
+# Universal2 binary at Sources/RivenCore/Resources/rg.
 #
 # This script is the canonical way to refresh the vendored binary. CI / dev
 # machines without an `rg` already on PATH should run this once after a
@@ -21,7 +21,7 @@ set -euo pipefail
 RG_VERSION="${RG_VERSION:-15.1.0}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_DIR="$REPO_ROOT/Sources/BentoCore/Resources"
+DEST_DIR="$REPO_ROOT/Sources/RivenCore/Resources"
 DEST_BIN="$DEST_DIR/rg"
 
 mkdir -p "$DEST_DIR"

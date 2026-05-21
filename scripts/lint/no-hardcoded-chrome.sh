@@ -2,8 +2,8 @@
 # no-hardcoded-chrome.sh — fail if a hex color literal is being used
 # anywhere outside the two files that are *allowed* to know about hex:
 #
-#   - Sources/BentoCore/ThemeSpec.swift  (the literals live here)
-#   - Sources/Bento/ColorHelpers.swift   (the parser lives here)
+#   - Sources/RivenCore/ThemeSpec.swift  (the literals live here)
+#   - Sources/Riven/ColorHelpers.swift   (the parser lives here)
 #
 # Everything else in the app should route colors through `theme.chrome.*`,
 # `theme.terminal.*`, or `theme.syntax.*` tokens so a single theme switch
@@ -24,8 +24,8 @@ set -euo pipefail
 
 # Files that are explicitly allowed to contain hex literals.
 ALLOWED_FILES=(
-  "Sources/BentoCore/ThemeSpec.swift"
-  "Sources/Bento/ColorHelpers.swift"
+  "Sources/RivenCore/ThemeSpec.swift"
+  "Sources/Riven/ColorHelpers.swift"
 )
 
 # Build the grep --exclude args from ALLOWED_FILES.
@@ -61,8 +61,8 @@ if [ -n "$HITS" ]; then
   echo "" >&2
   echo "Route through a theme token (theme.chrome.*, theme.terminal.*," >&2
   echo "or theme.syntax.*) instead. If you genuinely need a new token," >&2
-  echo "add it to BentoCore/ThemeSpec.swift and populate it in all" >&2
-  echo "four builtins (bento/carbon/tokyo/paper)." >&2
+  echo "add it to RivenCore/ThemeSpec.swift and populate it in all" >&2
+  echo "four builtins (riven/carbon/tokyo/paper)." >&2
   exit 1
 fi
 

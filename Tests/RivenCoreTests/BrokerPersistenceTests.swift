@@ -199,7 +199,7 @@ struct BrokerPersistenceTests {
 
     private func uniqueScrollbackRoot() -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("bento-scrollback-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("riven-scrollback-\(UUID().uuidString)", isDirectory: true)
     }
 
     private func uniqueSocketURL() -> URL {

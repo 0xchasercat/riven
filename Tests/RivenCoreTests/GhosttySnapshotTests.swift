@@ -333,7 +333,7 @@ struct GhosttySnapshotTests {
         let (bridge, session) = try makeSession(cols: 40, rows: 6)
         defer { try? bridge.close(session) }
 
-        // Simulate a single command cycle the way bento-shell-integration
+        // Simulate a single command cycle the way riven-shell-integration
         // emits it:
         //   - OSC 133;A : prompt start
         //   - "$ "       : prompt body

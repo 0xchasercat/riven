@@ -13,7 +13,7 @@ final class StringEllipsisTests: XCTestCase {
     func testEllipsizesAtDefaultCap() {
         // 30 chars → 24 chars output, ellipsis in the middle, leading
         // half keeps the extra character on odd splits.
-        let input = "AReallyLongFilenameForBento.swift"  // 33 chars
+        let input = "AReallyLongFilenameForRiven.swift"  // 33 chars
         let out = input.middleEllipsized()
         XCTAssertEqual(out.count, 24)
         XCTAssertTrue(out.contains("\u{2026}"))

@@ -5,7 +5,7 @@ import Testing
 struct CommandPaletteTests {
     @Test("filters commands by title and group with stable ordering")
     func filtersCommands() {
-        let palette = CommandPalette(commands: Command.bentoBuiltIns)
+        let palette = CommandPalette(commands: Command.rivenBuiltIns)
 
         let matches = palette.search("pane")
 
@@ -22,8 +22,8 @@ struct CommandPaletteTests {
 
     @Test("empty query returns all commands")
     func emptyQuery() {
-        let palette = CommandPalette(commands: Command.bentoBuiltIns)
+        let palette = CommandPalette(commands: Command.rivenBuiltIns)
 
-        #expect(palette.search("").count == Command.bentoBuiltIns.count)
+        #expect(palette.search("").count == Command.rivenBuiltIns.count)
     }
 }

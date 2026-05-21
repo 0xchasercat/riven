@@ -16,7 +16,7 @@ struct WorkspaceSnapshotStoreTests {
         )
         let snapshot = WorkspaceSnapshot(
             projectRoot: "/repo",
-            selectedThemeID: "bento",
+            selectedThemeID: "riven",
             paneGraph: PaneGraph(root: pane),
             openFiles: ["/repo/Package.swift"]
         )
