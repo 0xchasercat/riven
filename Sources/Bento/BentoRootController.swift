@@ -21,6 +21,12 @@ final class BentoRootController: ObservableObject {
     /// pane-label context via `enrichScrollbackMetadata(...)` whenever
     /// it learns something the broker can't know.
     let scrollback: ScrollbackStore
+    /// Z-3: installer for Bento's optional zsh shell integration.
+    /// Stateless — the on-disk install status drives every read.
+    let shellIntegration = ShellIntegrationInstaller()
+    /// Mirrors `shellIntegration.isInstalled()` so SwiftUI views can
+    /// re-render on install / uninstall without polling the filesystem.
+    @Published private(set) var shellIntegrationInstalled: Bool = false
 
     @Published private(set) var state: WorkspaceState
     @Published var openFilePaths: [String] = []
@@ -96,6 +102,7 @@ final class BentoRootController: ObservableObject {
         let workspace = WorkspaceController(trustStore: trust, snapshotStore: snapshots, scrollbackStore: scrollback)
         self.workspace = workspace
         self.scrollback = scrollback
+        self.shellIntegrationInstalled = ShellIntegrationInstaller().isInstalled()
 
         let cwd = URL(fileURLWithPath: fileMgr.currentDirectoryPath)
         let themeID = preference.selectedTheme.id
@@ -143,6 +150,51 @@ final class BentoRootController: ObservableObject {
     /// The file is only written if it doesn't already exist, so a
     /// user who customized their welcome (or moved it elsewhere)
     /// won't get their copy clobbered if the gate somehow re-fires.
+    /// Install Bento's optional zsh shell integration. Copies the
+    /// bundled config + plugin tree to `~/.config/bento/shell/` and
+    /// appends a fenced source block to `~/.zshrc`. Surfaces success
+    /// or failure through the shared banner pipe.
+    ///
+    /// The install only affects newly-opened shells. Existing PTYs
+    /// don't reload — that's how zsh works, and forcing them to
+    /// would be more surprising than leaving them be.
+    func installShellIntegration() {
+        do {
+            try shellIntegration.install()
+            shellIntegrationInstalled = true
+            showBanner(
+                "Shell integration installed. Open a new terminal to see it.",
+                kind: .success
+            )
+        } catch {
+            showBanner(
+                "Couldn't install shell integration: \(error)",
+                kind: .error,
+                autoDismissAfter: nil
+            )
+        }
+    }
+
+    /// Reverse of `installShellIntegration`. Removes the fenced
+    /// block from `~/.zshrc` and deletes the destination directory.
+    /// Leaves `~/.zsh_history` + `~/.z` alone — those are user data.
+    func uninstallShellIntegration() {
+        do {
+            try shellIntegration.uninstall()
+            shellIntegrationInstalled = false
+            showBanner(
+                "Shell integration removed.",
+                kind: .info
+            )
+        } catch {
+            showBanner(
+                "Couldn't uninstall shell integration: \(error)",
+                kind: .error,
+                autoDismissAfter: nil
+            )
+        }
+    }
+
     func openWelcomeScratchTab() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -191,6 +243,23 @@ workspaces as one connected surface.
 - Open the command palette (`⌘⇧P`) and search "theme" to switch
   between Bento, Carbon, Tokyo Night, and Paper. The pick persists
   across launches.
+
+## Optional: install the Bento shell integration
+
+Bento ships with an optional zsh config that gives you:
+
+- A minimal, theme-aware prompt that follows whichever theme you pick.
+- Ghost-text completion from history (`→` or `⌃E` to accept).
+- Substring history search on `↑` / `↓` — type `git ` then `↑` to
+  walk every past `git …`.
+- Live syntax highlighting as you type.
+- `z <fragment>` for frecency-based jumps to past directories.
+- OSC 7 / 133 hooks so Bento's sidebar follows `cd` and Bento can
+  navigate by prompt boundaries.
+
+Open the command palette (`⌘⇧P`) and search for **shell integration**
+to install (or skip — every feature above is opt-in, and uninstalling
+later is one click).
 
 ## What now?
 

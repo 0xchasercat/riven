@@ -39,6 +39,12 @@ public enum CommandAction: Equatable, Sendable {
     /// asks the controller to update the persisted preference; live
     /// command bars re-render with the new mode on the next refresh.
     case toggleSubmitOnEnter
+    /// Z-4: install Bento's optional zsh shell integration. The
+    /// dispatcher routes this to `BentoRootController.installShellIntegration`.
+    case installShellIntegration
+    /// Reverse of the install action. Removes the fenced source
+    /// block from `~/.zshrc` and deletes `~/.config/bento/shell/`.
+    case uninstallShellIntegration
 }
 
 public extension CommandAction {
@@ -69,6 +75,10 @@ public extension CommandAction {
             return .pickTheme
         case .cycleTheme:
             return .cycleTheme
+        case .installShellIntegration:
+            return .installShellIntegration
+        case .uninstallShellIntegration:
+            return .uninstallShellIntegration
         case .flipPane, .zoomPane, .restoreSession:
             return nil
         }

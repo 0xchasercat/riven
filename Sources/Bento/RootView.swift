@@ -518,6 +518,10 @@ struct BentoRootView: View {
             activeOverlay = .trust
         case .toggleSubmitOnEnter:
             controller.toggleSubmitsOnEnter()
+        case .installShellIntegration:
+            controller.installShellIntegration()
+        case .uninstallShellIntegration:
+            controller.uninstallShellIntegration()
         }
     }
 

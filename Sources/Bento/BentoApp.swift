@@ -273,6 +273,19 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         prefsMenu.addItem(revealThemesItem)
+        prefsMenu.addItem(NSMenuItem.separator())
+        // Z-4: shell integration toggle. The validateMenuItem hook
+        // below swaps the title between "Install Shell Integration…"
+        // and "Uninstall Shell Integration" based on live disk state.
+        // Tag = 4221 lets validateMenuItem find this item without
+        // matching on the title (which we're going to mutate).
+        let shellItem = NSMenuItem(
+            title: "Install Shell Integration\u{2026}",
+            action: #selector(toggleShellIntegration),
+            keyEquivalent: ""
+        )
+        shellItem.tag = 4221
+        prefsMenu.addItem(shellItem)
         prefsItem.submenu = prefsMenu
         appMenu.addItem(prefsItem)
         appMenu.addItem(NSMenuItem.separator())
@@ -466,6 +479,33 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         // doesn't bring the app forward when it's already key.
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
+    /// Z-4: install (or uninstall) Bento's optional zsh shell
+    /// integration. Routes through `BentoRootController` so the
+    /// install/uninstall path and the banner surfacing match the
+    /// palette + first-run flows.
+    @objc private func toggleShellIntegration() {
+        guard let controller = rootController else { return }
+        if controller.shellIntegrationInstalled {
+            controller.uninstallShellIntegration()
+        } else {
+            controller.installShellIntegration()
+        }
+    }
+
+    /// Refresh the shell-integration menu item's title each time the
+    /// menu opens. Cheaper than observing the controller; the menu
+    /// is consulted on click which is the only time the user sees
+    /// the title anyway.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.tag == 4221 {
+            let installed = rootController?.shellIntegrationInstalled ?? false
+            menuItem.title = installed
+                ? "Uninstall Shell Integration"
+                : "Install Shell Integration\u{2026}"
+        }
+        return true
     }
 }
 

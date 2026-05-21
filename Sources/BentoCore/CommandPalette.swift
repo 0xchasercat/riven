@@ -22,6 +22,13 @@ public enum CommandAction: String, Codable, Sendable {
     /// who like to flip themes from the keyboard without opening the
     /// picker. Persists the new selection.
     case cycleTheme
+    /// Install Bento's optional zsh shell integration (Z-3). Idempotent
+    /// — running it on an already-installed system refreshes the files
+    /// from the bundle but produces the same observable state.
+    case installShellIntegration
+    /// Remove Bento's zsh shell integration. Leaves the user's
+    /// `~/.zsh_history` and `~/.z` alone.
+    case uninstallShellIntegration
 }
 
 public struct Command: Equatable, Codable, Sendable, Identifiable {
@@ -47,7 +54,9 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
         Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f"),
         Command(id: .toggleSubmitOnEnter, group: "Input", title: "Toggle Enter behavior in command bar"),
         Command(id: .pickTheme, group: "Theme", title: "Pick theme…"),
-        Command(id: .cycleTheme, group: "Theme", title: "Cycle to next theme")
+        Command(id: .cycleTheme, group: "Theme", title: "Cycle to next theme"),
+        Command(id: .installShellIntegration, group: "Shell", title: "Install Bento shell integration"),
+        Command(id: .uninstallShellIntegration, group: "Shell", title: "Uninstall Bento shell integration")
         // Removed: .flipPane (pre-#23 concept — terminal↔editor flip
         // doesn't apply now that surfaces have explicit kinds and a
         // split tree), .zoomPane (no in-tab zoom feature today),
