@@ -510,10 +510,13 @@ private final class WorkspaceContainerView: NSView {
     ) -> some View {
         WorkspaceSidebarView(
             theme: theme,
-            // Sidebar is pinned to the workspace's root — it does NOT
-            // follow OSC 7. `cd` in the shell still updates the status
-            // breadcrumb but doesn't yank the file viewer to a new path.
-            currentCwd: workspace.initialCwd,
+            // Sidebar follows the workspace's live pwd via OSC 7 —
+            // workspaces are spaces the user works in, not directory
+            // locks. `cd` in the shell moves the file viewer with
+            // you. The toolbar's editable path is just a convenience
+            // for jumping the shell, NOT a binding that pins the
+            // workspace to a specific cwd.
+            currentCwd: workspace.currentCwd,
             activePath: workspace.focusedTab.editorPath,
             isCollapsed: workspace.sidebarState == .collapsed,
             onOpenFile: onOpenFile

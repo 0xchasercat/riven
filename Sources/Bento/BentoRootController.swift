@@ -188,25 +188,34 @@ final class BentoRootController: ObservableObject {
         openNewWorkspace(at: NSHomeDirectory())
     }
 
-    /// Rebind the focused workspace's root (sidebar source + cwd cache)
-    /// to a new directory. Used by the editable toolbar path field.
+    /// Send a `cd <path>` into the focused workspace's focused
+    /// terminal. The shell processes it and emits OSC 7 on the next
+    /// prompt, which propagates back as `workspace.currentCwd` →
+    /// the sidebar + toolbar both follow automatically.
     ///
-    /// Note: this does NOT `cd` the running shell. The PTY keeps its
-    /// own working directory; OSC 7 will continue to drive
-    /// `currentCwd` from whatever the shell actually does. We only
-    /// retarget the workspace-level fields that the sidebar / window
-    /// title key off of.
+    /// This is the toolbar's editable-path-field commit path. We
+    /// deliberately do NOT mutate the workspace model directly — the
+    /// shell is the source of truth for "where am I", and the
+    /// workspace just mirrors what the shell is doing. This matches
+    /// the "workspaces are spaces, not directory locks" mental model.
     ///
     /// Path normalization:
     ///   - leading `~` expands to `$HOME`
-    ///   - relative paths resolve against the previous initialCwd
+    ///   - relative paths resolve against the workspace's current pwd
     ///   - the resolved path must exist as a directory; otherwise the
-    ///     call is a no-op and returns `false` so the toolbar can flag
-    ///     the bad input.
+    ///     call is a no-op and returns `false` so the toolbar can
+    ///     flag the bad input. The `cd` itself isn't sent unless the
+    ///     path validates client-side.
+    ///
+    /// No-op (returns false) when the focused surface isn't a
+    /// terminal (e.g. an editor tab is focused) — there's no PTY to
+    /// `cd` in that case.
     @discardableResult
-    func setFocusedWorkspaceCwd(_ raw: String) -> Bool {
-        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              var workspace = pane.workspace else { return false }
+    func changeFocusedShellPwd(_ raw: String) -> Bool {
+        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace,
+              let paneID = workspace.focusedTab.terminalPaneID,
+              let client = agentClient else { return false }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         let expanded = (trimmed as NSString).expandingTildeInPath
@@ -214,7 +223,7 @@ final class BentoRootController: ObservableObject {
         if expanded.hasPrefix("/") {
             resolved = (expanded as NSString).standardizingPath
         } else {
-            let base = URL(fileURLWithPath: workspace.initialCwd)
+            let base = URL(fileURLWithPath: workspace.currentCwd)
             resolved = base.appendingPathComponent(expanded)
                 .standardizedFileURL.path
         }
@@ -223,10 +232,11 @@ final class BentoRootController: ObservableObject {
               isDirectory.boolValue else {
             return false
         }
-        workspace.initialCwd = resolved
-        workspace.currentCwd = resolved
-        pane.kind = .workspace(workspace)
-        recordPaneGraph(state.paneGraph.replacingPane(pane))
+        // Single-quote so paths with spaces / special chars get
+        // through the shell intact.
+        let payload = "cd '\(resolved)'\n"
+        let data = Data(payload.utf8)
+        Task { try? await client.writeInput(paneID: paneID, data: data) }
         return true
     }
 
@@ -248,8 +258,10 @@ final class BentoRootController: ObservableObject {
 
     /// Add a new **inner tab** to the currently focused workspace. Wired
     /// to Cmd+T. The new tab gets its own broker PaneID (own PTY), and
-    /// focus moves to it. Sidebar stays put — that's the whole point of
-    /// keeping the sidebar at the workspace level.
+    /// focus moves to it. The new shell starts in the workspace's
+    /// **current** pwd (where the user is right now), not the
+    /// workspace's original directory — workspaces are spaces, not
+    /// directory locks.
     func openNewInnerTab() {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
               let workspace = pane.workspace else {
@@ -261,7 +273,7 @@ final class BentoRootController: ObservableObject {
         let tab = WorkspaceInnerTab(
             displayName: "shell",
             kind: .terminal(paneID: PaneID(), command: nil),
-            cwd: workspace.initialCwd
+            cwd: workspace.currentCwd
         )
         pane.kind = .workspace(workspace.appendingTab(tab))
         recordPaneGraph(state.paneGraph.replacingPane(pane))
@@ -283,15 +295,25 @@ final class BentoRootController: ObservableObject {
     }
 
     /// Split the focused workspace's focused tab's focused surface in
-    /// `direction`. The new surface is a terminal seeded with the
-    /// existing tab's cwd; focus moves to it so the user can
-    /// immediately type. No-op when no workspace is focused.
+    /// `direction`. The new surface is a terminal that starts in the
+    /// workspace's **current** pwd — where the user is right now,
+    /// not where the tab was originally created. Focus moves to the
+    /// new surface so the user can type immediately.
     ///
     /// Wired to Cmd+D (split right), Cmd+Shift+D (split down), and the
     /// `[][]` button next to `+` in the inner tab strip.
     func splitFocusedSurface(direction: SplitDirection) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace else { return }
+              var workspace = pane.workspace else { return }
+        // Update the focused tab's `cwd` to the workspace's live pwd
+        // before splitting — that field is what BrokeredTerminalView
+        // reads on PTY startup, and we want the new shell to start
+        // where the user is, not where the tab was originally
+        // created. Existing surfaces in the tab are unaffected:
+        // their PTYs are already running with their own cwds.
+        if let tabIdx = workspace.tabs.firstIndex(where: { $0.id == workspace.focusedTabID }) {
+            workspace.tabs[tabIdx].cwd = workspace.currentCwd
+        }
         let newSurface = TabSurface(
             kind: .terminal(paneID: PaneID(), command: nil)
         )

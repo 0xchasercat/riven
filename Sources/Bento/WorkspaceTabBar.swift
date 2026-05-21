@@ -42,6 +42,13 @@ struct WorkspaceTabBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Leave room for the macOS traffic-light buttons that sit
+            // in the top-left of the window. ~78pt is enough for the
+            // three buttons (close / minimize / fullscreen) at their
+            // default geometry plus a small breathing-room gap before
+            // the first tab. Without this the first tab would sit
+            // under the traffic lights and be unreachable.
+            Spacer().frame(width: 78)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
                     ForEach(tabs, id: \.id) { tab in
@@ -62,7 +69,11 @@ struct WorkspaceTabBar: View {
             Spacer(minLength: 0)
             AddTabButton(theme: theme, action: onAdd)
         }
-        .frame(height: 44)
+        // Slightly taller than before to comfortably absorb the
+        // titlebar's vertical real estate (~28pt of which is the
+        // macOS-reserved titlebar height). Tabs + close-× still
+        // breathe at this height.
+        .frame(height: 52)
         // Mostly-opaque tint sits on top of the .headerView vibrancy
         // wrapped around the chrome strip in `RootView.mainColumn`
         // (H8). At 0.92 the bar reads as a solid surface with just a
@@ -159,7 +170,7 @@ private struct TabChip: View {
             }
             .padding(.horizontal, BentoSpacing.l)
         }
-        .frame(height: 44)
+        .frame(height: 52)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             // Double-click → rename. Pre-fills the draft with the
@@ -221,7 +232,7 @@ private struct AddTabButton: View {
                 .foregroundStyle(Color(hex: isHovered
                     ? theme.chrome.text.hex
                     : theme.chrome.tertiaryText.hex))
-                .frame(width: 44, height: 44)
+                .frame(width: 52, height: 52)
                 .background(
                     Color(hex: theme.chrome.accentSoft.hex).opacity(isHovered ? 1 : 0)
                 )

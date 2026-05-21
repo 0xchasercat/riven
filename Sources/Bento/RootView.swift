@@ -31,6 +31,12 @@ struct BentoRootView: View {
     var body: some View {
         ZStack {
             mainColumn
+                // Extend the chrome into the OS titlebar area. The
+                // window's `fullSizeContentView` style mask + a 78pt
+                // leading spacer on WorkspaceTabBar make this safe;
+                // the traffic-light buttons stay clickable in the
+                // reserved corner.
+                .ignoresSafeArea(.container, edges: .top)
             if !controller.preference.hasExplicitSelection {
                 ThemePicker(theme: theme, onSelect: { id in
                     try? controller.preference.selectTheme(id: id)
@@ -84,6 +90,13 @@ struct BentoRootView: View {
     }
 
     private var mainColumn: some View {
+        // Pull the whole chrome up so the WorkspaceTabBar fills the
+        // titlebar area (the window already has
+        // `titlebarAppearsTransparent + .fullSizeContentView` set in
+        // BentoApp). Without this the OS-reserved titlebar height
+        // (~28pt) read as dead empty space above the tab bar.
+        // WorkspaceTabBar reserves a 78pt leading spacer for the
+        // traffic-light buttons so they remain clickable.
         VStack(spacing: 0) {
             // H8: WorkspaceTabBar + toolbar share a single
             // NSVisualEffectView background so the translucent title bar
@@ -182,13 +195,15 @@ struct BentoRootView: View {
         let requires: Bool
     }
 
-    /// The focused workspace's root cwd — what the toolbar input edits.
-    /// Falls back to the project root when no workspace is focused
-    /// (defensive; shouldn't happen in normal use).
+    /// The focused workspace's live pwd — what the toolbar input
+    /// displays. Updated by OSC 7 from any of the workspace's
+    /// terminal surfaces, so `cd` in the shell flows back into the
+    /// toolbar automatically. Falls back to the project root when no
+    /// workspace is focused (defensive; shouldn't happen).
     private var focusedWorkspaceCwd: String {
         controller.state.paneGraph
             .pane(controller.state.paneGraph.focusedPaneID)?
-            .workspace?.initialCwd
+            .workspace?.currentCwd
             ?? controller.state.projectRoot
     }
 
@@ -264,11 +279,18 @@ struct BentoRootView: View {
             }
     }
 
-    /// Hand the typed path to the controller; on rejection (path doesn't
-    /// exist), flip the rejected flag so the toolbar shows the hint.
-    /// Auto-clears after 3s so the user isn't stuck looking at it.
+    /// Send the typed path as a `cd` into the focused terminal. The
+    /// shell does the actual navigation and emits OSC 7 → the
+    /// workspace's `currentCwd` updates → the sidebar follows. We
+    /// don't mutate the workspace model directly here, so the path
+    /// field is genuinely a convenience indicator that mirrors what
+    /// the shell is doing, not a workspace-pinning binding.
+    ///
+    /// On rejection (path doesn't exist or focus is on an editor
+    /// tab), flip the rejected flag so the toolbar shows the hint
+    /// for ~3s, then auto-clear.
     private func commitWorkspacePath() {
-        let ok = controller.setFocusedWorkspaceCwd(workspacePathDraft)
+        let ok = controller.changeFocusedShellPwd(workspacePathDraft)
         if !ok {
             workspacePathRejected = true
             Task { @MainActor in
