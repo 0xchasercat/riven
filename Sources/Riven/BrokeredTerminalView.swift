@@ -914,7 +914,93 @@ public final class BrokeredTerminalView: NSView {
             }
         }
 
+        // Function keys (F1-F12). AppKit doesn't route these through
+        // `doCommand` — they arrive as NSEvent.charactersIgnoringModifiers
+        // containing the magic NSFunctionKey unicode scalars
+        // (0xF704+). nano uses the whole row (F1=help, F2=exit, F3=save,
+        // …) so they have to reach the PTY.
+        //
+        // F1-F4 use the older SS3 form (ESC O P/Q/R/S) — that's what
+        // every terminfo entry agrees on. F5+ uses the CSI <n> ~ form
+        // with parameter numbers that skip a few values for historical
+        // reasons (no, that gap isn't a typo — F5=15, F6=17, F11=23).
+        if let bytes = functionKeySequence(from: event) {
+            sendBytes(bytes)
+            return
+        }
+
         interpretKeyEvents([event])
+    }
+
+    /// Map an NSEvent representing F1-F12 to the xterm escape
+    /// sequence the PTY expects, or nil if the event isn't a
+    /// function key. Pulled out of `keyDown` so the dispatch reads
+    /// cleanly.
+    private func functionKeySequence(from event: NSEvent) -> [UInt8]? {
+        guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else {
+            return nil
+        }
+        // NSF1FunctionKey == 0xF704 and they march sequentially up to
+        // F12 == 0xF70F. AppKit unfortunately exposes these as
+        // OpenStep-era constants typed as `Int`, so we compare raw.
+        let v = scalar.value
+        guard v >= 0xF704 && v <= 0xF70F else { return nil }
+        switch v {
+        case 0xF704: return [0x1B, 0x4F, 0x50] // F1  ESC O P
+        case 0xF705: return [0x1B, 0x4F, 0x51] // F2  ESC O Q
+        case 0xF706: return [0x1B, 0x4F, 0x52] // F3  ESC O R
+        case 0xF707: return [0x1B, 0x4F, 0x53] // F4  ESC O S
+        case 0xF708: return [0x1B, 0x5B, 0x31, 0x35, 0x7E] // F5
+        case 0xF709: return [0x1B, 0x5B, 0x31, 0x37, 0x7E] // F6
+        case 0xF70A: return [0x1B, 0x5B, 0x31, 0x38, 0x7E] // F7
+        case 0xF70B: return [0x1B, 0x5B, 0x31, 0x39, 0x7E] // F8
+        case 0xF70C: return [0x1B, 0x5B, 0x32, 0x30, 0x7E] // F9
+        case 0xF70D: return [0x1B, 0x5B, 0x32, 0x31, 0x7E] // F10
+        case 0xF70E: return [0x1B, 0x5B, 0x32, 0x33, 0x7E] // F11
+        case 0xF70F: return [0x1B, 0x5B, 0x32, 0x34, 0x7E] // F12
+        default: return nil
+        }
+    }
+
+    // MARK: - Scroll wheel → PTY arrows
+
+    /// Translate scroll-wheel input into Up / Down arrow sequences
+    /// when the terminal is on the alt screen. Convention every
+    /// modern terminal honors (iTerm, Warp, kitty, alacritty): if a
+    /// fullscreen TUI doesn't know how to listen for mouse-tracking
+    /// events, scroll gestures are synthesized into arrow keys so
+    /// `less` / `man` / `nano` scroll their viewport the way users
+    /// expect.
+    ///
+    /// On the primary screen (regular shell prompt), there's no
+    /// natural target for forwarded scrolls — Riven doesn't yet
+    /// expose a scrollback viewport — so we just no-op there rather
+    /// than spam arrow keys into the shell.
+    public override func scrollWheel(with event: NSEvent) {
+        guard isInAltScreen else {
+            super.scrollWheel(with: event)
+            return
+        }
+        // Trackpads emit precise deltaY in pixels; mouse wheels emit
+        // discrete line-sized ticks. Both already go through
+        // `event.scrollingDeltaY`, which is logical-pixel-ish, so we
+        // bucket into "lines" using cellHeight. Macs report positive
+        // deltaY for "wheel rolled up / fingers swiped down" (i.e.
+        // natural scrolling), which maps to scrolling the document
+        // UP — which in turn means sending Up-arrow sequences.
+        let pixels = event.scrollingDeltaY
+        guard abs(pixels) >= 1 else { return }
+        // Cap so a fast flick doesn't dump 200 arrow keys into the
+        // PTY. 6 lines per dispatch matches what Warp + iTerm settle
+        // on; a follow-up flick will arrive shortly after.
+        let lines = max(1, min(6, Int(abs(pixels) / max(1, cellHeight))))
+        let arrow: [UInt8] = pixels > 0
+            ? [0x1B, 0x5B, 0x41]    // ESC [ A — Up
+            : [0x1B, 0x5B, 0x42]    // ESC [ B — Down
+        var payload = [UInt8]()
+        payload.reserveCapacity(arrow.count * lines)
+        for _ in 0..<lines { payload.append(contentsOf: arrow) }
+        sendBytes(payload)
     }
 
     public override func insertText(_ insertString: Any) {
@@ -959,6 +1045,38 @@ public final class BrokeredTerminalView: NSView {
             sendBytes([0x05])
         case #selector(NSResponder.deleteWordBackward(_:)):
             sendBytes([0x17])
+        case #selector(NSResponder.deleteWordForward(_:)):
+            // readline `kill-word` — ESC d.
+            sendBytes([0x1b, 0x64])
+        case #selector(NSResponder.moveWordLeft(_:)),
+             #selector(NSResponder.moveWordBackward(_:)):
+            // readline `backward-word` — ESC b.
+            sendBytes([0x1b, 0x62])
+        case #selector(NSResponder.moveWordRight(_:)),
+             #selector(NSResponder.moveWordForward(_:)):
+            // readline `forward-word` — ESC f.
+            sendBytes([0x1b, 0x66])
+        // Page Up / Page Down — xterm CSI 5 ~ / CSI 6 ~. AppKit maps
+        // both `pageUp:`/`pageDown:` (NSView) and `scrollPageUp:`/
+        // `scrollPageDown:` (NSResponder) to the same physical key
+        // depending on context, so we handle both selectors.
+        case #selector(NSResponder.pageUp(_:)),
+             #selector(NSResponder.scrollPageUp(_:)):
+            sendBytes([0x1b, 0x5b, 0x35, 0x7e])
+        case #selector(NSResponder.pageDown(_:)),
+             #selector(NSResponder.scrollPageDown(_:)):
+            sendBytes([0x1b, 0x5b, 0x36, 0x7e])
+        // Home / End on Mac usually fire via the function-modifier
+        // layer (Fn+Left/Right) which AppKit reports as the
+        // BeginningOf / EndOf Document selectors. Send xterm Home /
+        // End sequences (CSI H / CSI F). Most TUIs accept both
+        // these and the `CSI 1 ~` / `CSI 4 ~` alternates.
+        case #selector(NSResponder.moveToBeginningOfDocument(_:)),
+             #selector(NSResponder.scrollToBeginningOfDocument(_:)):
+            sendBytes([0x1b, 0x5b, 0x48])
+        case #selector(NSResponder.moveToEndOfDocument(_:)),
+             #selector(NSResponder.scrollToEndOfDocument(_:)):
+            sendBytes([0x1b, 0x5b, 0x46])
         default:
             break
         }
