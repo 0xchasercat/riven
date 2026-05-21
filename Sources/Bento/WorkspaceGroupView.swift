@@ -513,6 +513,17 @@ private final class WorkspaceContainerView: NSView {
         }
         let host = NSHostingController(rootView: root)
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        // Match the tab-area + leaf hosts: don't propagate SwiftUI's
+        // preferred size up to AutoLayout. The sidebar's contents
+        // (file rows) are scroll-clipped, so even a 10k-entry tree
+        // shouldn't push the parent split-view past viewport — but
+        // with default sizingOptions it could, and this is cheap
+        // insurance.
+        host.sizingOptions = []
+        host.view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        host.view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         coordinator?.sidebarHost = host
         return host
     }
@@ -551,6 +562,19 @@ private final class WorkspaceContainerView: NSView {
         }
         let host = NSHostingController(rootView: root)
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        // #40 follow-up: same fix as PaneGridView.hostingController —
+        // clear the default sizingOptions so the host's intrinsic
+        // height doesn't override the embed-edge constraints. Without
+        // this, an editor inner tab's first layout pass reported the
+        // STTextView's natural content height as the host's intrinsic
+        // height, which propagated up through the NSSplitView all the
+        // way to the mainColumn and pushed the status bar past the
+        // window's bottom edge.
+        host.sizingOptions = []
+        host.view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        host.view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         coordinator?.tabAreaHost = host
         return host
     }

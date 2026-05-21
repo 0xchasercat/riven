@@ -592,6 +592,27 @@ private struct PaneTreeBuilder {
         }
         let host = NSHostingController(rootView: leafView(for: id, pane: pane))
         host.view.translatesAutoresizingMaskIntoConstraints = false
+        // #40 follow-up: clear the default `[.preferredContentSize,
+        // .intrinsicContentSize]` so the hosting view doesn't
+        // advertise SwiftUI's preferred size as an AutoLayout
+        // intrinsic content size. With the default in place, opening
+        // a scratch editor inside a leaf made the host's intrinsic
+        // height fight the edge constraints embedding it into the
+        // BentoPaneContainerView; AutoLayout resolved the conflict by
+        // growing the container past the viewport, which pushed the
+        // status bar (and the scratch button) off-screen. With
+        // `sizingOptions = []`, the host only fills the space its
+        // pinned-edges constraints give it — exactly the behavior we
+        // want for a top-down VStack that wants to claim "everything
+        // left after the chrome + status bar."
+        host.sizingOptions = []
+        // Belt-and-braces for older macOS layout passes that still
+        // honor hugging / compression resistance even with empty
+        // sizingOptions — keep the host stretchy.
+        host.view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        host.view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        host.view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         coordinator?.leafHosts[id] = host
         return host
     }

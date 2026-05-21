@@ -43,18 +43,53 @@ struct TerminalPaneView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> BrokeredTerminalView {
+        // Spawn-time env. When Bento.app is launched from Finder /
+        // LaunchServices, the inherited process environment has no
+        // TERM, no COLORTARM, no TERM_PROGRAM — so the spawned shell
+        // negotiates down to `dumb` (no colors, no cursor positioning,
+        // breaks every modern prompt + vim + less + git). These four
+        // overrides bring it back up to what every other GUI
+        // terminal advertises:
+        //   * TERM = xterm-256color — the most-supported terminfo
+        //     advertising 256-color + every standard CSI/SGR we care
+        //     about. (Ghostty ships its own `xterm-ghostty` terminfo
+        //     with extra extensions but that's not installed by
+        //     default on a stock macOS, so picking the universally-
+        //     present xterm-256color is the safe call. Users who've
+        //     installed xterm-ghostty's terminfo via `tic` can
+        //     override via .zshrc.)
+        //   * COLORTERM = truecolor — lets bat/eza/delta/etc. emit
+        //     24-bit ANSI without a probing handshake.
+        //   * TERM_PROGRAM / TERM_PROGRAM_VERSION = Bento — lets
+        //     shells / scripts detect us specifically (Starship +
+        //     Powerlevel10k both branch on this).
+        //   * LANG = en_US.UTF-8 — only set when the inherited env
+        //     doesn't already carry one, so user-chosen locales still
+        //     win.
+        var env: [String: String] = [
+            "TERM": "xterm-256color",
+            "COLORTERM": "truecolor",
+            "TERM_PROGRAM": "Bento",
+            "TERM_PROGRAM_VERSION": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        ]
+        if ProcessInfo.processInfo.environment["LANG"] == nil {
+            env["LANG"] = "en_US.UTF-8"
+        }
+
         let shell: BrokeredTerminalView.ShellSpec
         if let command {
             shell = BrokeredTerminalView.ShellSpec(
                 executable: "/bin/zsh",
                 arguments: ["-l", "-c", command],
-                cwd: cwd
+                cwd: cwd,
+                environment: env
             )
         } else {
             shell = BrokeredTerminalView.ShellSpec(
                 executable: "/bin/zsh",
                 arguments: ["-il"],
-                cwd: cwd
+                cwd: cwd,
+                environment: env
             )
         }
         let view = BrokeredTerminalView(
