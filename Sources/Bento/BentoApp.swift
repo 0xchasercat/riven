@@ -15,6 +15,13 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     /// command bar. Stored on the delegate so the monitor lives as
     /// long as the app does. Removed in `applicationWillTerminate`.
     private var tabFocusMonitor: Any?
+    /// H-11: NSWorkspace observer for `didWakeNotification`. On wake we
+    /// nudge the broker connection with a `ping` (proactive failure
+    /// detection — without this we'd wait for the next watchdog tick
+    /// or the user typing into a stale terminal) and post a system-
+    /// wide redraw so every `BrokeredTerminalView` blits its current
+    /// state to screen rather than waiting for an idle redraw pass.
+    private var wakeObserver: NSObjectProtocol?
 
     static func main() {
         let app = NSApplication.shared
@@ -144,6 +151,39 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
                     _ = self // keep the closure capture alive
                 }
             }
+
+        // H-11: wake-from-sleep recovery. During a long sleep the
+        // broker's PTY children remain alive but the SwiftUI view tree
+        // may still hold stale renderer state, and (rarely) the Unix
+        // domain socket can hand us a half-broken connection that
+        // surfaces only on the next IPC call. Ping the broker
+        // proactively + tell every terminal view to redraw.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                NotificationCenter.default.post(name: .bentoSystemDidWake, object: nil)
+            }
+            Task { [weak self] in
+                await self?.handleSystemWake()
+            }
+        }
+    }
+
+    /// Ping the broker to catch a half-dead connection early. A failed
+    /// ping doesn't itself trigger a respawn — the AgentLauncher
+    /// watchdog already runs at 250 ms and will catch a dead process
+    /// inside one cycle — but pinging tickles the connection so the
+    /// watchdog notices any wedge faster than waiting for the next
+    /// user input to surface it. Ignored if the launcher hasn't
+    /// finished its initial connect yet (still in `connecting…`
+    /// placeholder state).
+    private func handleSystemWake() async {
+        guard let launcher = agentLauncher else { return }
+        guard let client = try? await launcher.client() else { return }
+        try? await client.ping()
     }
 
     /// Build the window title from the focused workspace. Falls back to
@@ -192,6 +232,10 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         if let tabFocusMonitor {
             NSEvent.removeMonitor(tabFocusMonitor)
             self.tabFocusMonitor = nil
+        }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
         }
         let workspace = rootController?.workspace
         let launcher = agentLauncher
@@ -496,6 +540,13 @@ extension Notification.Name {
     /// teardown that the epoch bump triggers can otherwise leave
     /// first-responder somewhere SwiftUI picked arbitrarily.
     static let bentoBrokerRespawned = Notification.Name("BentoBrokerRespawned")
+    /// H-11: posted by the BentoApp's NSWorkspace.didWakeNotification
+    /// observer. BrokeredTerminalView listens and forces a synchronous
+    /// redraw via `displayIfNeeded()` so the terminal grid blits its
+    /// current state to screen rather than waiting for the next idle
+    /// AppKit display pass — long sleeps can otherwise leave the
+    /// snapshot stale until the user moves the mouse over the pane.
+    static let bentoSystemDidWake = Notification.Name("BentoSystemDidWake")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow

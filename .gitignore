@@ -7,3 +7,4 @@ DerivedData/
 # Vendored Ghostty source — built locally via scripts/setup-ghostty.sh
 External/ghostty/
 External/ghostty-vt-install/
+.claude/

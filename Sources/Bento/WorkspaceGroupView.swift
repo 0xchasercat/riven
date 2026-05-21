@@ -991,6 +991,9 @@ private struct SurfaceCloseButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help("Close this split (⌘W still closes the whole tab)")
+        // H-14: × is decorative; screen readers should hear "Close split".
+        .accessibilityLabel("Close split")
+        .accessibilityHint("Removes this surface from the inner tab")
     }
 }
 
@@ -1252,6 +1255,13 @@ private struct ToolbarIconButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help(tooltip)
+        // H-14: the glyph is a decorative unicode char (✎ / ↶ / 〤),
+        // useless to VoiceOver — hide it and surface the tooltip as
+        // the accessibility label so screen-reader users hear "Save"
+        // / "Undo" / "Cycle pane" instead of a literal glyph name.
+        .accessibilityLabel(tooltip)
+        .accessibilityRemoveTraits(.isImage)
+        .accessibilityAddTraits(.isButton)
         .disabled(!isEnabled)
     }
 
@@ -1554,6 +1564,8 @@ private struct SidebarToggleButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+        // H-14: chevron glyphs are opaque; surface the action.
+        .accessibilityLabel(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }
@@ -1595,6 +1607,8 @@ private struct SidebarExpandAllButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help(allExpanded ? "Collapse all" : "Expand all")
+        // H-14: SF Symbol announces itself as "chevron.down.2" without help.
+        .accessibilityLabel(allExpanded ? "Collapse all folders" : "Expand all folders")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }
@@ -1710,6 +1724,14 @@ private struct WorkspaceFileRow: View {
                         onOpenFile: onOpenFile
                     )
                 }
+                // H-12: surface the elision count from the scan
+                // (`maxChildrenPerDirectory` cap) so the user knows
+                // there's hidden content. Clicking the row opens the
+                // directory in Finder — the sidebar isn't going to
+                // render 10k entries, but Finder will.
+                if isExpanded, node.truncatedChildren > 0 {
+                    truncatedMarker
+                }
             }
         }
         // Listen for global expand-all / collapse-all toggle so the
@@ -1790,6 +1812,33 @@ private struct WorkspaceFileRow: View {
             return Color(hex: theme.chrome.accentSoft.hex)
         }
         return Color.clear
+    }
+
+    /// "...N more" sentinel row appended below a directory's visible
+    /// children when the scan elided entries to keep the sidebar
+    /// bounded. Click reveals the directory in Finder.
+    @ViewBuilder
+    private var truncatedMarker: some View {
+        HStack(spacing: BentoSpacing.xs) {
+            Text(" ")
+                .font(BentoType.mono(BentoType.caption))
+                .frame(width: 10, alignment: .leading)
+            Text("… \(node.truncatedChildren) more — open in Finder")
+                .font(BentoType.mono(BentoType.caption))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                .italic()
+        }
+        .padding(.leading, BentoSpacing.s + CGFloat(depth + 1) * BentoSpacing.m)
+        .padding(.trailing, BentoSpacing.xs)
+        .frame(height: 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            NSWorkspace.shared.activateFileViewerSelecting([
+                URL(fileURLWithPath: node.path)
+            ])
+        }
+        .help("Reveal \(node.name) in Finder to browse all \(node.children.count + node.truncatedChildren) entries")
     }
 }
 

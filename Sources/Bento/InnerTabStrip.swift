@@ -153,6 +153,8 @@ private struct InnerTabChip: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help("Rename tab")
+                    // H-14: pencil is a glyph; VoiceOver needs the verb.
+                    .accessibilityLabel("Rename tab \(displayLabel)")
                 }
                 if canClose {
                     Button {
@@ -175,6 +177,9 @@ private struct InnerTabChip: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help("Close tab \u{00B7} \u{2318}W")
+                    // H-14: × is decorative; surface verb + target.
+                    .accessibilityLabel("Close tab \(displayLabel)")
+                    .accessibilityHint("Command-W. Closes this inner tab; prompts to save if unsaved.")
                 }
             }
             .padding(.horizontal, BentoSpacing.m)
@@ -297,6 +302,9 @@ private struct SplitSurfaceButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help("Split focused surface right (⌘D · ⌘⇧D for vertical)")
+        // H-14: glyph is two rounded rects, opaque to VoiceOver.
+        .accessibilityLabel("Split surface right")
+        .accessibilityHint("Creates a new terminal to the right of the focused surface. Hold Shift to split down.")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }
@@ -324,6 +332,9 @@ private struct AddInnerTabButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help("New tab (⌘T)")
+        // H-14: "+" reads literally to VoiceOver; replace.
+        .accessibilityLabel("New tab")
+        .accessibilityHint("Opens a new terminal in the focused workspace. Command-T.")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }

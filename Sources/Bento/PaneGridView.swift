@@ -166,9 +166,19 @@ final class BentoPaneContainerView: NSView {
     /// Inputs that influence the structural rebuild of the pane tree.
     /// Equatable so the container can short-circuit a no-op `apply`.
     /// Theme identity is compared by `id` (a String) rather than the
-    /// whole struct because ThemeSpec isn't Equatable; the id flips
-    /// when the user cycles themes which is the only theme change
-    /// that needs a rebuild.
+    /// whole `ThemeSpec` struct. Two reasons:
+    ///   * Deep-comparing every chrome/geometry/material field on a
+    ///     ~50-field struct is the wrong shape for a hot path that
+    ///     runs on every SwiftUI re-render — string compare wins on
+    ///     a 6-char id like `"bento"`.
+    ///   * Custom themes (T-6) might reuse builtin ids by accident or
+    ///     by intent (`bento.json` shadowing the builtin). The id is
+    ///     still the canonical identity from the user's POV — a tweak
+    ///     to a custom theme's hex literal should hot-reload via
+    ///     `selectTheme(id:)` not via the snapshot diff.
+    /// H-13: this is intentional cache-key minimalism; expanding it
+    /// to compare the whole `ThemeSpec` would regress theme-switch
+    /// perf on heavily-split workspaces.
     private struct AppliedSnapshot: Equatable {
         let graph: PaneGraph
         let projectRoot: String

@@ -173,7 +173,24 @@ public final class BrokeredTerminalView: NSView {
         self.layer?.backgroundColor = configuration.background.cgColor
         recomputeCellMetrics()
         rebuildAttributes()
+
+        // H-11: force a synchronous redraw on system wake. Without
+        // this, a long sleep leaves the renderer holding the
+        // pre-sleep snapshot until the next mouse move or PTY event
+        // — visible as a stale frame for several seconds.
+        wakeObserver = NotificationCenter.default.addObserver(
+            forName: .bentoSystemDidWake,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.needsDisplay = true
+                self?.displayIfNeeded()
+            }
+        }
     }
+
+    private nonisolated(unsafe) var wakeObserver: NSObjectProtocol?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
@@ -191,6 +208,9 @@ public final class BrokeredTerminalView: NSView {
         // weak self capture will already be releasing on next tick —
         // explicit invalidate keeps it from firing once after deinit.
         blinkTimer?.invalidate()
+        if let wakeObserver {
+            NotificationCenter.default.removeObserver(wakeObserver)
+        }
         if let session {
             try? bridge.close(session)
         }
@@ -357,6 +377,23 @@ public final class BrokeredTerminalView: NSView {
         } catch {
             NSLog("BrokeredTerminalView: createPane failed: \(error)")
             return
+        }
+
+        // H-10: if the user resized the window after the view
+        // computed its initial grid size but before createPane
+        // landed on the broker, the in-flight `applyResizeIfNeeded`
+        // calls would have failed with `unknown_pane` and been
+        // swallowed. Re-send the current grid size now that the
+        // broker is guaranteed to know about this pane — same call
+        // path as a normal resize. If `(cols, rows)` haven't
+        // changed since construction this is a no-op; if they have,
+        // the broker (and the child's TIOCSWINSZ) catch up to what
+        // the user is actually looking at, with no input from the
+        // user required.
+        let liveCols = await MainActor.run { self.cols }
+        let liveRows = await MainActor.run { self.rows }
+        if liveCols != initialCols || liveRows != initialRows {
+            try? await client.resize(paneID: id, columns: liveCols, rows: liveRows)
         }
 
         let stream: AsyncThrowingStream<IPCEvent, Error>

@@ -178,6 +178,7 @@ private struct TabChip: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help("Rename tab")
+                    .accessibilityLabel("Rename workspace tab \(label)")
                 }
                 if canClose {
                     Button(action: onClose) {
@@ -194,6 +195,8 @@ private struct TabChip: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help("Close workspace \u{00B7} \u{2318}W")
+                    .accessibilityLabel("Close workspace \(label)")
+                    .accessibilityHint("Command-W. Prompts to save unsaved editor changes first.")
                 }
             }
             .padding(.horizontal, BentoSpacing.l)
@@ -269,6 +272,10 @@ private struct AddTabButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help("New workspace \u{00B7} \u{2318}N")
+        // H-14: VoiceOver reads "+" literally — replace with the
+        // semantic label + shortcut.
+        .accessibilityLabel("New workspace")
+        .accessibilityHint("Command-N. Adds a new workspace tab.")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }
