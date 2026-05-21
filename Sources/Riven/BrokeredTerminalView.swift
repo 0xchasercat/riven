@@ -860,17 +860,60 @@ public final class BrokeredTerminalView: NSView {
     // MARK: - Keyboard input
 
     public override func keyDown(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
         // Cmd+C copies the active selection if one exists. We check
         // before forwarding to interpretKeyEvents so the user's
         // selection-copy gesture never accidentally lands as a Ctrl+C
         // SIGINT on the running command.
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if mods == .command,
            event.charactersIgnoringModifiers?.lowercased() == "c",
            selection != nil {
             copySelection()
             return
         }
+
+        // Ctrl+letter (or Ctrl+Shift+letter) → ASCII control byte.
+        //
+        // AppKit's `interpretKeyEvents` translates most Ctrl+letter
+        // combos into editing selectors (`cut:` for Ctrl+X,
+        // `pageDown:` for Ctrl+V, etc.). Our `doCommand` switch only
+        // covers the handful that map to TUI-shaped behaviors, which
+        // means Ctrl+X / Ctrl+O / Ctrl+W / Ctrl+K / Ctrl+R / …
+        // silently fall through the default branch — and nano /
+        // less / emacs / readline-driven shells lose their entire
+        // shortcut surface.
+        //
+        // The ASCII control byte for any letter is `letter & 0x1F`
+        // (so Ctrl+X = 0x18, Ctrl+O = 0x0F, Ctrl+W = 0x17, …).
+        // Sending that byte directly to the PTY is what every other
+        // terminal emulator does — short-circuiting interpretKeyEvents
+        // is the only way to keep AppKit from claiming the keystroke
+        // for its own editing pipeline.
+        //
+        // We explicitly skip C/D/Z here because the global key
+        // monitor in RivenApp already intercepts those and routes
+        // them through `.rivenSendCtrlByte` (so they work even when
+        // the command bar / sidebar holds first-responder). Other
+        // Ctrl combos with non-letter chars (`[`, `]`, `\`, etc.)
+        // fall through to interpretKeyEvents so the standard
+        // ESC / quit / group-switch handling still applies.
+        if mods == .control,
+           let chars = event.charactersIgnoringModifiers,
+           chars.count == 1,
+           let scalar = chars.unicodeScalars.first,
+           scalar.isASCII {
+            let lowered = scalar.value | 0x20  // a-z normalize
+            if lowered >= 0x61 && lowered <= 0x7A {
+                // C/D/Z handled upstream by the global monitor.
+                if lowered != 0x63, lowered != 0x64, lowered != 0x7A {
+                    let ctrlByte = UInt8(lowered & 0x1F)
+                    sendBytes([ctrlByte])
+                    return
+                }
+            }
+        }
+
         interpretKeyEvents([event])
     }
 
