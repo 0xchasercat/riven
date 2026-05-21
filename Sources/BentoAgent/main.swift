@@ -333,9 +333,14 @@ actor AgentBroker {
     /// replay so the UI can repaint.
     private var dormantHistory: Set<PaneID> = []
     let persister: ScrollbackPersister?
+    /// UUID generated once per broker process. Stamped onto every metadata
+    /// sidecar this broker writes so the search UI can group "panes from
+    /// the same Bento launch" without needing wall-clock heuristics.
+    let sessionID: String
 
-    init(persister: ScrollbackPersister?) {
+    init(persister: ScrollbackPersister?, sessionID: String = UUID().uuidString) {
         self.persister = persister
+        self.sessionID = sessionID
         if let persister, let ids = try? persister.store.listPaneIDs() {
             self.dormantHistory = Set(ids)
         }
@@ -388,6 +393,33 @@ actor AgentBroker {
         // Once a pane is live again, it owns the disk file going forward.
         dormantHistory.remove(paneID)
 
+        // Stamp a metadata sidecar with what the broker knows on spawn:
+        // session id, cwd, a command-derived label, and the timestamps.
+        // Project root + workspace name are deliberately nil here — those
+        // are app-level concepts; the controller patches them via
+        // `ScrollbackStore.updateMetadata*` once it knows the pane is
+        // alive (it shares the same scrollback root via Application
+        // Support). Best-effort: log + continue on failure so a broken
+        // metadata write never breaks pane creation.
+        if let persister {
+            let seed = ScrollbackMetadata(
+                paneID: paneID,
+                sessionID: sessionID,
+                projectRoot: nil,
+                workspaceName: nil,
+                cwd: cwd,
+                paneLabel: brokerSidecarLabel(command: command, args: args),
+                createdAt: Date(),
+                lastWriteAt: Date(),
+                byteCount: 0
+            )
+            do {
+                try persister.store.writeMetadata(seed)
+            } catch {
+                FileHandle.standardError.write(Data("BentoAgent metadata seed failed for \(paneID): \(error)\n".utf8))
+            }
+        }
+
         // Pump output into the pane state.
         Task.detached { [pty, state] in
             for await chunk in pty.output {
@@ -431,7 +463,21 @@ actor AgentBroker {
         // in-memory model where killing a pane discards it entirely.
         dormantHistory.remove(id)
         try? persister?.store.delete(id)
+        try? persister?.store.deleteMetadata(id)
     }
+}
+
+/// Derive a friendly metadata label from the spawn command + args, so a
+/// search hit reads "rg pattern" rather than "/bin/zsh". Falls back to
+/// the command's basename when args are empty (e.g. an interactive shell).
+private func brokerSidecarLabel(command: String, args: [String]) -> String {
+    let base = (command as NSString).lastPathComponent
+    if args.isEmpty { return base }
+    // Skip the conventional shell `-c <line>` wrapper so the label reads
+    // as the user's command, not the shell invocation.
+    if args.count == 2, args[0] == "-c" { return args[1] }
+    if args.count == 3, args[0] == "-lc" { return args[2] }
+    return ([base] + args).joined(separator: " ")
 }
 
 // MARK: - BentoAgentMain

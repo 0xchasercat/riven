@@ -13,6 +13,14 @@ final class BentoRootController: ObservableObject {
     let preference = ThemePreferenceStore()
     let workspace: WorkspaceController
     let fileMap = PaneFileMap()
+    /// Shared scrollback store. The broker and the controller write to
+    /// the same root under `~/Library/Application Support/Bento/
+    /// scrollback`. The broker (`Sources/BentoAgent/main.swift`) seeds
+    /// metadata sidecars at PTY spawn (sessionID, cwd, command-derived
+    /// label); the controller patches them with project + workspace +
+    /// pane-label context via `enrichScrollbackMetadata(...)` whenever
+    /// it learns something the broker can't know.
+    let scrollback: ScrollbackStore
 
     @Published private(set) var state: WorkspaceState
     @Published var openFilePaths: [String] = []
@@ -66,6 +74,7 @@ final class BentoRootController: ObservableObject {
         let scrollback = ScrollbackStore(root: support.appendingPathComponent("scrollback", isDirectory: true))
         let workspace = WorkspaceController(trustStore: trust, snapshotStore: snapshots, scrollbackStore: scrollback)
         self.workspace = workspace
+        self.scrollback = scrollback
 
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let themeID = preference.selectedTheme.id
@@ -251,6 +260,13 @@ final class BentoRootController: ObservableObject {
         workspace.currentCwd = cwd
         pane.kind = .workspace(workspace)
         let graph = state.paneGraph.replacingPane(pane)
+        // S-2: OSC 7 just reported a fresh pwd — patch the sidecar so
+        // search results stamp the right cwd. The focused inner tab is
+        // the one the shell is reporting from; other tabs in the same
+        // workspace have their own PTYs and report independently.
+        if let focusedPaneID = workspace.focusedTab.terminalPaneID {
+            try? scrollback.updateMetadataCwd(paneID: focusedPaneID, cwd: cwd)
+        }
         recordPaneGraph(graph)
     }
 
@@ -261,6 +277,60 @@ final class BentoRootController: ObservableObject {
             await workspace.updatePaneGraph(graph)
         }
         self.state.paneGraph = graph
+        // S-2: keep scrollback sidecars in sync with the live pane graph.
+        // Best-effort: if the broker hasn't seeded a sidecar for a brand-
+        // new pane yet, the helper is a no-op for it (touchMetadata-style
+        // semantics) and the next pane-graph mutation will retry.
+        syncScrollbackMetadataWithPaneGraph(graph)
+    }
+
+    /// Walk the live pane graph and patch every terminal pane's sidecar
+    /// to reflect the current project root + workspace label + inner-tab
+    /// label. Cheap to run on every `recordPaneGraph` — it only writes
+    /// when a field has actually changed.
+    private func syncScrollbackMetadataWithPaneGraph(_ graph: PaneGraph) {
+        let projectRoot = state.projectRoot
+        for pane in graph.panes.values {
+            guard let ws = pane.workspace else { continue }
+            for tab in ws.tabs {
+                guard let paneID = tab.terminalPaneID else { continue }
+                enrichScrollbackMetadata(
+                    paneID: paneID,
+                    projectRoot: projectRoot,
+                    workspaceName: ws.customName ?? URL(fileURLWithPath: ws.currentCwd).lastPathComponent,
+                    paneLabel: tab.displayName
+                )
+            }
+        }
+    }
+
+    /// Patch the metadata sidecar for `paneID` with whatever app-level
+    /// context we know. Each field is optional — pass `nil` to leave it
+    /// untouched. Skips the write when the sidecar doesn't exist yet
+    /// (the broker may still be spawning the PTY); subsequent calls will
+    /// retry.
+    private func enrichScrollbackMetadata(
+        paneID: PaneID,
+        projectRoot: String? = nil,
+        workspaceName: String? = nil,
+        paneLabel: String? = nil
+    ) {
+        guard var meta = try? scrollback.readMetadata(paneID) else { return }
+        var changed = false
+        if let projectRoot, meta.projectRoot != projectRoot {
+            meta.projectRoot = projectRoot
+            changed = true
+        }
+        if let workspaceName, meta.workspaceName != workspaceName {
+            meta.workspaceName = workspaceName
+            changed = true
+        }
+        if let paneLabel, meta.paneLabel != paneLabel {
+            meta.paneLabel = paneLabel
+            changed = true
+        }
+        guard changed else { return }
+        try? scrollback.writeMetadata(meta)
     }
 
     /// Run a unified search (files + scrollback) against the currently
