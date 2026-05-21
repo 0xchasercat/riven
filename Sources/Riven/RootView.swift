@@ -861,14 +861,18 @@ private struct SurfaceWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .rivenEditorFileRestored)) { note in
                 if let id = note.object as? SurfaceID { onEditorFileRestored(id) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .rivenAltScreenChanged)) { note in
-                if let change = note.object as? AltScreenChange { onAltScreenChanged(change) }
-            }
+            // NOTE: deliberately NOT subscribing to `.rivenAltScreenChanged`
+            // or `.rivenCommandHistoryRequest` here. Both are already
+            // handled synchronously by `NotificationCenter.addObserver`
+            // tokens in `RivenRootController.init` (see
+            // `altScreenObserver`, `historyObserver`). Adding `.onReceive`
+            // duplicates was a double-handling bug — the controller
+            // mutated state twice per notification, and the SwiftUI
+            // observer fired a render-tick later than the synchronous
+            // one (so command-bar history reads always saw a nil
+            // response box in the first race).
             .onReceive(NotificationCenter.default.publisher(for: .rivenCommandSubmitted)) { note in
                 if let text = note.object as? String { onCommandSubmitted(text) }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .rivenCommandHistoryRequest)) { note in
-                if let request = note.object as? CommandHistoryRequest { onCommandHistoryRequest(request) }
             }
     }
 }

@@ -942,7 +942,22 @@ private struct SurfaceLeafView: View {
             focusedLayout
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
+                        .onChanged { value in
+                            // DragGesture(minimumDistance: 0) fires onChanged
+                            // for mouseDown (translation == .zero) AND for
+                            // every cursor movement during the drag. The
+                            // earlier "post unconditionally" version
+                            // hammered .rivenFocusSurface dozens of times
+                            // during a drag-select gesture — each post
+                            // cascaded into a full SwiftUI tree invalidation
+                            // via state.paneGraph (the controller's
+                            // focusSurface mutates @Published state).
+                            //
+                            // SwiftUI's gesture event with `translation ==
+                            // .zero` corresponds to the initial mouseDown
+                            // before any cursor motion. Gate on that to
+                            // fire focus-shift exactly once per click.
+                            guard value.translation == .zero else { return }
                             NotificationCenter.default.post(
                                 name: .rivenFocusSurface,
                                 object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)

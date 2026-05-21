@@ -191,11 +191,21 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         // Control / Stage Manager / Cmd+Tab previews, and many users
         // toggle title visibility on. Keep both the WorkspaceTabBar
         // (interactive switcher) and the title (passive cue).
+        // Project state changes a lot more often than the window
+        // title needs to update (every keystroke routed through the
+        // controller, every OSC 7 cwd report, every dirty flag flip).
+        // Map to the derived title string up-front + `removeDuplicates`
+        // so we only touch `NSWindow.title` when the visible label
+        // actually changed. `NSWindow.title =` is a Cocoa setter that
+        // fires accessibility notifications and a window-title-bar
+        // redraw, so even the no-op writes added up.
         titleSubscription = controller.$state
+            .map(Self.windowTitle(for:))
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak window] state in
+            .sink { [weak self, weak window] title in
                 MainActor.assumeIsolated {
-                    window?.title = Self.windowTitle(for: state)
+                    window?.title = title
                     _ = self // keep the closure capture alive
                 }
             }

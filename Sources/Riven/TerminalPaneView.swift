@@ -109,7 +109,22 @@ struct TerminalPaneView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: BrokeredTerminalView, context: Context) {
-        nsView.configure(configuration(for: theme))
+        // Equality-gate the configure() call. SwiftUI invokes
+        // updateNSView whenever ANY parent's @Published state
+        // changes (so basically every controller mutation —
+        // focus shift, dirty flag flip, alt-screen toggle, OSC 7
+        // cwd report). `configure()` redoes CoreText cell-metric
+        // measurement, rebuilds the per-cell attribute cache, and
+        // fires an async broker resize RPC — none of that is free.
+        // For an identical configuration (the common case during
+        // unrelated controller mutations), skipping is a meaningful
+        // win — multiplied by every visible terminal surface in
+        // every split. Configuration is value-typed + Equatable so
+        // the diff is one cheap struct compare.
+        let newConfig = configuration(for: theme)
+        if nsView.configuration != newConfig {
+            nsView.configure(newConfig)
+        }
         // Re-bind the cwd callback so the closure captured here always
         // reflects the latest SwiftUI environment. Without this, a stale
         // closure from `makeNSView` would persist across orchestrator

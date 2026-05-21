@@ -41,7 +41,7 @@ public final class BrokeredTerminalView: NSView {
 
     /// Same shape as `GhosttyTerminalView.Configuration` so callers can
     /// swap the two views without touching their config plumbing.
-    public struct Configuration: Sendable {
+    public struct Configuration: Sendable, Equatable {
         public var foreground: NSColor
         public var background: NSColor
         public var cursor: NSColor
@@ -697,22 +697,41 @@ public final class BrokeredTerminalView: NSView {
     /// Feed broker output into the local Ghostty terminal and request a
     /// repaint. Already on `@MainActor` because the whole view is.
     ///
-    /// Setting `needsDisplay = true` alone is fragile when the source
-    /// of the update is a purely-async event (broker stream → for-await
-    /// → feedOutput) and the window is otherwise idle: AppKit's display
-    /// loop coalesces dirty rects and only flushes them when the
-    /// runloop processes a UI event. If nothing moves the mouse and no
-    /// other timer fires, the terminal sits stale until the user types
-    /// or hovers — which is the exact "doesn't refresh until I do
-    /// something" bug. `displayIfNeeded()` pumps the redraw
-    /// synchronously on the next CATransaction commit so each output
-    /// chunk lands on screen immediately.
+    /// Earlier this ran `displayIfNeeded()` synchronously after every
+    /// broker chunk to defeat AppKit's idle-coalescing — without it
+    /// the terminal would sit stale when no other UI event was firing.
+    /// That worked but turned heavy output (`npm install`, `cargo
+    /// build`, vim repaints, claude-code redraws) into hundreds of
+    /// full-grid renders per second, all blocking the main thread.
+    ///
+    /// New strategy: feed the bytes immediately (so libghostty's
+    /// internal state is up to date) and schedule a single
+    /// `displayIfNeeded()` for the next runloop tick via
+    /// `RunLoop.main.perform(inModes: [.common])`. Multiple
+    /// `feedOutput` calls within the same tick coalesce — only one
+    /// redraw fires per tick, no matter how many chunks arrive. The
+    /// CATransaction-coupled flush still happens; AppKit just no
+    /// longer paints the intermediate frames.
+    ///
+    /// The `pendingDisplay` flag prevents us scheduling redundant
+    /// `perform` blocks.
     private func feedOutput(_ data: Data) {
         guard let session else { return }
         try? bridge.feed(data, to: session)
         needsDisplay = true
-        displayIfNeeded()
+        guard !pendingDisplay else { return }
+        pendingDisplay = true
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            guard let self else { return }
+            self.pendingDisplay = false
+            self.displayIfNeeded()
+        }
     }
+
+    /// Set to true between `feedOutput` enqueuing a redraw and the
+    /// runloop tick that fires it. Suppresses redundant scheduling
+    /// during a burst.
+    private var pendingDisplay: Bool = false
 
     /// Pull the shell's OSC 7 cwd from the Ghostty bridge and, if it
     /// genuinely changed since the last report, fire `onCwdChanged`.
