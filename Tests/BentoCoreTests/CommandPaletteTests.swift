@@ -9,11 +9,14 @@ struct CommandPaletteTests {
 
         let matches = palette.search("pane")
 
-        #expect(matches.map(\.title).prefix(4) == [
+        // After dropping the flipPane / zoomPane entries (they mapped
+        // to nil in the dispatcher post-#23 and were silently no-ops
+        // from the palette), the surviving "pane" matches are the
+        // three actual operations on the focused surface.
+        #expect(matches.map(\.title) == [
             "Split pane right",
             "Split pane down",
-            "Flip pane: terminal/editor",
-            "Zoom active pane"
+            "Close active pane"
         ])
     }
 

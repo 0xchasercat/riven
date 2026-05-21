@@ -32,15 +32,19 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
     public static let bentoBuiltIns: [Command] = [
         Command(id: .splitRight, group: "Pane", title: "Split pane right", shortcut: "cmd+d"),
         Command(id: .splitDown, group: "Pane", title: "Split pane down", shortcut: "cmd+shift+d"),
-        Command(id: .flipPane, group: "Pane", title: "Flip pane: terminal/editor", shortcut: "cmd+return"),
-        Command(id: .zoomPane, group: "Pane", title: "Zoom active pane", shortcut: "cmd+/"),
         Command(id: .closePane, group: "Pane", title: "Close active pane", shortcut: "cmd+w"),
-        Command(id: .openProject, group: "Project", title: "Open project", shortcut: "cmd+o"),
-        Command(id: .openFile, group: "Project", title: "Open file…", shortcut: "cmd+p"),
+        Command(id: .openProject, group: "Project", title: "Open project", shortcut: "cmd+shift+o"),
+        Command(id: .openFile, group: "Project", title: "Open file…"),
         Command(id: .trustProject, group: "Project", title: "Trust this project"),
-        Command(id: .restoreSession, group: "Project", title: "Restore last session"),
         Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f"),
         Command(id: .toggleSubmitOnEnter, group: "Input", title: "Toggle Enter behavior in command bar")
+        // Removed: .flipPane (pre-#23 concept — terminal↔editor flip
+        // doesn't apply now that surfaces have explicit kinds and a
+        // split tree), .zoomPane (no in-tab zoom feature today),
+        // .restoreSession (snapshot restore happens automatically on
+        // launch — no manual "restore" command needed). These three
+        // mapped to nil in CommandAction.from and would silently
+        // no-op when picked from the palette.
     ]
 }
 

@@ -202,7 +202,16 @@ struct CommandPaletteOverlay: View {
     let onSelect: (CommandAction) -> Void
     let onClose: () -> Void
 
+    /// The keyboard-selected row. Up / down arrow + Enter operate on
+    /// this one. Auto-scroll fires when this changes so the
+    /// selection stays in view.
     @State private var highlightedIndex: Int = 0
+    /// The row the mouse is hovering, separate from the keyboard
+    /// selection. Renders the same hover-highlight styling but does
+    /// NOT trigger an auto-scroll — previously the hover handler set
+    /// highlightedIndex, which caused the scroll-to-center on every
+    /// mouse move and fought the user's manual scroll.
+    @State private var hoveredIndex: Int? = nil
 
     /// Flat list of rows we render: section headers + commands. Built from
     /// the input list by collapsing consecutive commands sharing a group.
@@ -284,7 +293,7 @@ struct CommandPaletteOverlay: View {
                             CommandPaletteRow(
                                 theme: theme,
                                 command: command,
-                                isHighlighted: index == highlightedIndex
+                                isHighlighted: index == highlightedIndex || index == hoveredIndex
                             )
                             .id(command.id)
                             .onTapGesture {
@@ -292,7 +301,14 @@ struct CommandPaletteOverlay: View {
                                 dispatchHighlighted()
                             }
                             .onHover { hovering in
-                                if hovering { highlightedIndex = index }
+                                // Visual hover only — do NOT mutate
+                                // highlightedIndex. The auto-scroll
+                                // is tied to highlightedIndex; if we
+                                // wrote here, hovering rows would
+                                // scroll the palette to center on
+                                // each row the mouse passed over,
+                                // making manual scroll impossible.
+                                hoveredIndex = hovering ? index : nil
                             }
                         }
                     }
