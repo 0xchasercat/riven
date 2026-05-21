@@ -73,7 +73,10 @@ struct BentoRootView: View {
             onCloseSurface: { focus in
                 controller.closeSurface(tabID: focus.tabID, surfaceID: focus.surfaceID)
             },
-            onCycleSurfaceFocus: { controller.cycleFocusedTabSurface() }
+            onCycleSurfaceFocus: { controller.cycleFocusedTabSurface() },
+            onSendCtrlByte: { byte in
+                controller.sendByteToFocusedTerminal(byte)
+            }
         ))
         // Auto-open the trust prompt the first time we see a project
         // that requires trust this session. The toolbar pill remains as
@@ -467,6 +470,7 @@ private struct NotificationWiring: ViewModifier {
     let onFocusSurface: (SurfaceFocus) -> Void
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
+    let onSendCtrlByte: (UInt8) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -474,7 +478,8 @@ private struct NotificationWiring: ViewModifier {
                 onSplitSurface: onSplitSurface,
                 onFocusSurface: onFocusSurface,
                 onCloseSurface: onCloseSurface,
-                onCycleSurfaceFocus: onCycleSurfaceFocus
+                onCycleSurfaceFocus: onCycleSurfaceFocus,
+                onSendCtrlByte: onSendCtrlByte
             ))
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
@@ -506,6 +511,7 @@ private struct SurfaceWiring: ViewModifier {
     let onFocusSurface: (SurfaceFocus) -> Void
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
+    let onSendCtrlByte: (UInt8) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -520,6 +526,9 @@ private struct SurfaceWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCycleSurfaceFocus)) { _ in
                 onCycleSurfaceFocus()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoSendCtrlByte)) { note in
+                if let n = note.object as? NSNumber { onSendCtrlByte(n.uint8Value) }
             }
     }
 }

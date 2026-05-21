@@ -446,13 +446,22 @@ final class BentoRootController: ObservableObject {
     /// the `.bentoClearFocusedTerminal` notification so menu, palette,
     /// and any future entry point can converge on one path.
     func clearFocusedTerminal() {
+        sendByteToFocusedTerminal(0x0C)
+    }
+
+    /// Generic byte-write helper for the global Ctrl+C / Ctrl+D /
+    /// Ctrl+Z monitor in BentoApp. Editor tabs no-op — there's no PTY
+    /// to send to. Lives here (not on the terminal view directly)
+    /// because the global key monitor doesn't know which surface is
+    /// focused; the controller's state graph does.
+    func sendByteToFocusedTerminal(_ byte: UInt8) {
         guard
             let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
             let workspace = pane.workspace,
             let paneID = workspace.focusedTab.terminalPaneID,
             let client = agentClient
         else { return }
-        let payload = Data([0x0C])
+        let payload = Data([byte])
         Task { try? await client.writeInput(paneID: paneID, data: payload) }
     }
 

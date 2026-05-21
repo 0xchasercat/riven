@@ -74,16 +74,48 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         // else (workspace path field, sidebar, tab bar, terminal grid
         // chrome), Tab snaps to the bar.
         tabFocusMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let responder = NSApp.keyWindow?.firstResponder
+
+            // Ctrl+C / Ctrl+D / Ctrl+Z — terminal control characters
+            // that the focused PTY needs to see directly. AppKit's
+            // text-view input system doesn't map these to any
+            // standard `doCommand:` selector, so without this they'd
+            // just get swallowed — meaning Ctrl+C couldn't interrupt
+            // a running shell command. Route them to the focused
+            // terminal's PTY regardless of which view holds the
+            // first-responder; the command bar / sidebar / editor
+            // never need Ctrl+C themselves (Cmd+C is the macOS copy
+            // binding via the Edit menu).
+            //
+            // The editor pane is one explicit exception: STTextView
+            // honors Ctrl+anything emacs-style bindings (Ctrl+A go to
+            // line start, Ctrl+E end, Ctrl+K kill-line, etc.) so if
+            // the user is actively editing a file we let those
+            // through unmodified.
+            if mods == .control, !(responder is EditorTextView) {
+                let ctrlByte: UInt8?
+                switch event.charactersIgnoringModifiers?.lowercased() {
+                case "c": ctrlByte = 0x03 // SIGINT
+                case "d": ctrlByte = 0x04 // EOF
+                case "z": ctrlByte = 0x1A // SIGTSTP
+                default: ctrlByte = nil
+                }
+                if let ctrlByte {
+                    NotificationCenter.default.post(
+                        name: .bentoSendCtrlByte,
+                        object: NSNumber(value: ctrlByte)
+                    )
+                    return nil
+                }
+            }
+
             // Tab keyCode is 48 on every modern Mac keyboard layout.
             // Only intercept bare Tab — Shift+Tab keeps native
             // backward focus traversal so Cocoa's keyView chain still
             // works for accessibility users.
-            guard
-                event.keyCode == 48,
-                event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
-            else { return event }
+            guard event.keyCode == 48, mods.isEmpty else { return event }
 
-            let responder = NSApp.keyWindow?.firstResponder
             if responder is CommandInputTextView {
                 // Already in the bar — let Tab insert "\t" as normal.
                 return event
@@ -325,6 +357,12 @@ extension Notification.Name {
     /// Posted by Ctrl+Tab when the user wants to cycle focus to the
     /// next surface within the currently-focused tab.
     static let bentoCycleSurfaceFocus = Notification.Name("BentoCycleSurfaceFocus")
+    /// Posted by the global key monitor when the user presses one of
+    /// the terminal control combinations (Ctrl+C / Ctrl+D / Ctrl+Z).
+    /// The notification's `object` is the raw control byte (UInt8 in
+    /// an NSNumber). RootView routes to
+    /// `controller.sendByteToFocusedTerminal`.
+    static let bentoSendCtrlByte = Notification.Name("BentoSendCtrlByte")
 }
 
 /// Carries a `(tabID, surfaceID)` pair as an `Any?` object payload
