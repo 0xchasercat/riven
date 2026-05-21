@@ -591,8 +591,8 @@ struct SearchOverlay: View {
     private func dispatchHighlighted() {
         guard results.indices.contains(highlightedIndex) else { return }
         switch results[highlightedIndex] {
-        case .file(let path, _, _):
-            let url = URL(fileURLWithPath: path)
+        case .file(let hit):
+            let url = URL(fileURLWithPath: hit.path)
             onClose()
             onOpenFile(url)
         case .scrollback:
@@ -635,27 +635,27 @@ private struct SearchResultRow: View {
 
     private var sourceText: String {
         switch result {
-        case .file(let path, _, _):
-            return path
-        case .scrollback(let match):
+        case .file(let hit):
+            return hit.path
+        case .scrollback(let match, _):
             return "pane \(match.paneID.rawValue)"
         }
     }
 
     private var titleText: String {
         switch result {
-        case .file(let path, let lineNumber, _):
-            return "\(URL(fileURLWithPath: path).lastPathComponent):\(lineNumber)"
-        case .scrollback(let match):
+        case .file(let hit):
+            return "\(URL(fileURLWithPath: hit.path).lastPathComponent):\(hit.lineNumber)"
+        case .scrollback(let match, _):
             return "\(match.paneID.rawValue):\(match.lineNumber)"
         }
     }
 
     private var detailText: String {
         switch result {
-        case .file(_, _, let line):
-            return line
-        case .scrollback(let match):
+        case .file(let hit):
+            return hit.line
+        case .scrollback(let match, _):
             return match.line
         }
     }
