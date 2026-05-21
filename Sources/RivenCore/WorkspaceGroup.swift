@@ -28,9 +28,12 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
     /// fill the whole tab area so this is informational only.
     public var editorWidth: CGFloat
     public var focusedSubpane: WorkspaceSubpane
-    /// Sidebar visibility. `.collapsed` (default) shows top-level
-    /// directory names only at a narrow width; `.expanded` shows the
-    /// full nested tree at the configured `sidebarWidth`.
+    /// Sidebar visibility. `.expanded` (default) shows the full
+    /// nested tree at the configured `sidebarWidth`; `.collapsed`
+    /// collapses to a narrow 56-pt icon rail. The file viewer is
+    /// the primary navigation surface for the workspace, so we
+    /// boot every new workspace with it visible — power users who
+    /// prefer the rail can collapse via the sidebar toggle.
     public var sidebarState: WorkspaceSidebarState
     /// Inner tabs within this workspace. Each tab is its own surface —
     /// either a terminal (with a unique broker `PaneID` for its PTY) or
@@ -59,7 +62,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         sidebarWidth: CGFloat = 220,
         editorWidth: CGFloat = 480,
         focusedSubpane: WorkspaceSubpane = .terminal,
-        sidebarState: WorkspaceSidebarState = .collapsed,
+        sidebarState: WorkspaceSidebarState = .expanded,
         tabs: [WorkspaceInnerTab]? = nil,
         focusedTabID: TabID? = nil,
         customName: String? = nil
@@ -263,7 +266,7 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
         self.sidebarWidth = try c.decodeIfPresent(CGFloat.self, forKey: .sidebarWidth) ?? 220
         self.editorWidth = try c.decodeIfPresent(CGFloat.self, forKey: .editorWidth) ?? 480
         self.focusedSubpane = try c.decodeIfPresent(WorkspaceSubpane.self, forKey: .focusedSubpane) ?? .terminal
-        self.sidebarState = try c.decodeIfPresent(WorkspaceSidebarState.self, forKey: .sidebarState) ?? .collapsed
+        self.sidebarState = try c.decodeIfPresent(WorkspaceSidebarState.self, forKey: .sidebarState) ?? .expanded
 
         var decodedTabs = try c.decodeIfPresent([WorkspaceInnerTab].self, forKey: .tabs) ?? []
         if decodedTabs.isEmpty {
