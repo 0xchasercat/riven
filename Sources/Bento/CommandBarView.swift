@@ -689,24 +689,40 @@ final class CommandInputTextView: NSTextView {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                // Only grab focus when our window is key — multi-window
-                // futures might post the notification from a different
-                // window, and we don't want every bar in every window
-                // to stomp on each other's responder state.
-                guard self.window?.isKeyWindow == true else { return }
-                self.window?.makeFirstResponder(self)
+                self.grabFocusIfAppropriate()
             }
         }
         // Also auto-grab on first mount. The tab-area subtree is `.id`'d
         // by tab + brokerEpoch, so a fresh CommandInputTextView lands
         // every time the user switches tabs — making us first-responder
         // on attach means the user can type immediately without
-        // clicking. The window-key guard mirrors the observer above so
-        // background windows don't fight for focus during launch.
+        // clicking.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.window?.isKeyWindow == true else { return }
-            self.window?.makeFirstResponder(self)
+            self?.grabFocusIfAppropriate()
         }
+    }
+
+    /// Take first-responder, but ONLY if no other text-input view is
+    /// already focused. Without this guard, every SwiftUI re-render
+    /// that detaches + reattaches the workspace subtree (which
+    /// happens on every keystroke into the toolbar's editable path
+    /// field) would trigger `viewDidMoveToWindow` on a fresh
+    /// CommandInputTextView and yank focus back here — making the
+    /// path field accept only one keystroke before losing focus.
+    /// The `is NSText` check catches both the path field (which uses
+    /// NSTextField's shared field editor, an NSText) AND the editor
+    /// pane's STTextView (also an NSText subclass); both are
+    /// surfaces the user deliberately chose to type into, so we
+    /// respect them.
+    private func grabFocusIfAppropriate() {
+        guard let window, window.isKeyWindow else { return }
+        if window.firstResponder is NSText {
+            // Either us already, the toolbar path field's editor, or
+            // the editor pane — in all three cases the right behavior
+            // is "don't change focus".
+            return
+        }
+        window.makeFirstResponder(self)
     }
 
     deinit {
