@@ -394,6 +394,26 @@ private final class WorkspaceContainerView: NSView {
         outer.addArrangedSubview(sidebarPane)
         outer.addArrangedSubview(tabPane)
         outerSplit = outer
+        // Holding priorities: the sidebar is the sticky pane (higher
+        // priority = resists shrinking), the tab area absorbs all
+        // window-resize delta. Without this, AppKit's default
+        // behavior is ambiguous and on some layout passes the
+        // sidebar collapses to ~zero — leaving the user staring at
+        // an invisible pane with no visible expand chevron.
+        outer.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
+        outer.setHoldingPriority(.defaultLow, forSubviewAt: 1)
+
+        // Hard floor on the sidebar pane width. Even with the holding
+        // priorities right, a stored-snapshot `setPosition(0)` from
+        // an earlier session can leave the sidebar at zero — once
+        // it's hidden the user can't drag it back without knowing
+        // the divider's at the window's left edge. This constraint
+        // guarantees the collapsed icon rail (48 pt) is the absolute
+        // minimum so the expand chevron is always reachable.
+        let sidebarMinWidth = sidebarPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 48)
+        sidebarMinWidth.priority = .required
+        sidebarMinWidth.isActive = true
+
         // Collapsed sidebar = a narrow icon rail (56 pt — wide enough
         // for a 32-pt tile centered in the column with 12 pt gutters).
         // Expanded = the user's saved width (220 pt default), clamped

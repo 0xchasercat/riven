@@ -455,6 +455,30 @@ public final class BrokeredTerminalView: NSView {
 
     // MARK: - Copy selection
 
+    /// Standard responder-chain `copy:` action. macOS's Edit menu
+    /// item for Copy is wired to this selector at key-equivalent
+    /// resolution time, which runs BEFORE the view's `keyDown` ever
+    /// sees the event — so without this method, Cmd+C from the
+    /// menu (and the system's default Cmd+C grab) would just bounce
+    /// off the responder chain and end in a beep. The keyDown
+    /// override remains as a belt-and-braces path for users who
+    /// disable the menu via accessibility prefs.
+    @objc public func copy(_ sender: Any?) {
+        copySelection()
+    }
+
+    /// Greys out the Edit menu's Copy item when no selection is
+    /// active. NSView doesn't override `validateMenuItem`, so we
+    /// adopt `NSMenuItemValidation` to participate in the
+    /// responder-chain validation pass that runs every time the
+    /// Edit menu opens.
+    @objc public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(BrokeredTerminalView.copy(_:)) {
+            return selection != nil
+        }
+        return true
+    }
+
     /// Pulls the cell text under the active selection from the most
     /// recent frame snapshot and writes it to `NSPasteboard.general`.
     /// Trailing whitespace is stripped per row so the user doesn't

@@ -128,6 +128,22 @@ final class RivenRootController: ObservableObject {
                 self.state = real
                 self.openFilePaths = real.openFiles
             }
+            // One-shot sidebar-visibility migration. Before the
+            // default flipped to `.expanded` the model shipped with
+            // `.collapsed`, so any user who ran Riven before that
+            // change has a snapshot saved with `sidebarState:
+            // .collapsed`. The Codable decoder reads stored values
+            // exactly, so the new default never takes effect for
+            // them — they keep getting a 56-pt icon rail (or worse,
+            // a width-zero pane if NSSplitView's holding priority
+            // lost an earlier layout fight). Flip everyone to
+            // `.expanded` exactly once and re-persist the snapshot
+            // so the change sticks.
+            let defaults = UserDefaults.standard
+            if !defaults.bool(forKey: Self.sidebarMigrationV1Key) {
+                self.forceExpandAllSidebars()
+                defaults.set(true, forKey: Self.sidebarMigrationV1Key)
+            }
             // H-15: append the welcome scratch tab AFTER the project
             // settles so the new tab lands inside the focused
             // workspace rather than the empty fallback graph.
@@ -218,6 +234,42 @@ final class RivenRootController: ObservableObject {
     /// One-shot: once `true`, the welcome never reappears for the
     /// life of the user account.
     static let welcomeShownDefaultsKey = "Riven.welcomeShown"
+    /// Marker for the one-shot sidebar-visibility migration that
+    /// flips any stored `.collapsed` workspace sidebar back to
+    /// `.expanded`. Bump the version suffix if a future change
+    /// needs the same kind of one-shot reset.
+    static let sidebarMigrationV1Key = "Riven.sidebarMigrationV1"
+
+    /// Walk every workspace currently in the pane graph and set
+    /// `sidebarState = .expanded` + bump `sidebarWidth` to at
+    /// least 240. Re-persists the snapshot so the heal sticks
+    /// across launches.
+    private func forceExpandAllSidebars() {
+        var graph = state.paneGraph
+        var anyChanged = false
+        for var pane in graph.panes.values {
+            guard var ws = pane.workspace else { continue }
+            var wsChanged = false
+            if ws.sidebarState != .expanded {
+                ws.sidebarState = .expanded
+                wsChanged = true
+            }
+            if ws.sidebarWidth < 240 {
+                ws.sidebarWidth = 240
+                wsChanged = true
+            }
+            guard wsChanged else { continue }
+            pane.kind = .workspace(ws)
+            graph = graph.replacingPane(pane)
+            anyChanged = true
+        }
+        if anyChanged {
+            recordPaneGraph(graph)
+            Task { [workspace] in
+                try? await workspace.persistSnapshot()
+            }
+        }
+    }
 
     /// H-15: append a primer markdown tab on first launch.
     ///
