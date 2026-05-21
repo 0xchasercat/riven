@@ -56,6 +56,14 @@ public final class BrokeredTerminalView: NSView {
         /// underline, overline all derive from `cellHeight` / `ascent`
         /// so they scale with this value automatically.
         public var lineHeightMultiplier: CGFloat
+        /// Translucent fill used to highlight cells under the active
+        /// text selection. Sourced from `theme.chrome.selectionBg`
+        /// (the 8-digit alpha-bearing hex token added in T-1) so the
+        /// highlight automatically matches whatever theme is active —
+        /// Amber's warm amber-22%, Tokyo's electric-violet-15%, etc.
+        /// Defaults to white@15% so the selection still renders if a
+        /// caller forgets to thread the theme color through.
+        public var selectionBackground: NSColor
 
         public init(
             foreground: NSColor = .white,
@@ -63,7 +71,8 @@ public final class BrokeredTerminalView: NSView {
             cursor: NSColor = NSColor(calibratedRed: 0.4, green: 0.85, blue: 1.0, alpha: 1.0),
             fontSize: CGFloat = 13,
             fontName: String? = nil,
-            lineHeightMultiplier: CGFloat = 1.15
+            lineHeightMultiplier: CGFloat = 1.15,
+            selectionBackground: NSColor = NSColor(white: 1.0, alpha: 0.15)
         ) {
             self.foreground = foreground
             self.background = background
@@ -71,6 +80,7 @@ public final class BrokeredTerminalView: NSView {
             self.fontSize = fontSize
             self.fontName = fontName
             self.lineHeightMultiplier = lineHeightMultiplier
+            self.selectionBackground = selectionBackground
         }
     }
 
@@ -126,6 +136,42 @@ public final class BrokeredTerminalView: NSView {
     private var rows: UInt16 = 24
 
     private var textAttributes: [NSAttributedString.Key: Any] = [:]
+
+    /// Drag-to-select state. `dragAnchor` is set on mouseDown; the
+    /// active `selection` updates on mouseDragged and survives mouseUp
+    /// so the user can Cmd+C the result. A plain click (no drag past
+    /// `dragThresholdPx`) clears the selection on mouseUp and bounces
+    /// focus to the command bar — the longstanding Riven gesture for
+    /// "I want to type a new command, not interact with the buffer."
+    private var dragAnchor: CellCoord?
+    private var dragDidMove: Bool = false
+    private(set) var selection: TerminalSelection?
+    /// Minimum pixel movement before a mouseDown promotes to a drag.
+    /// 3 px matches macOS-wide click-vs-drag conventions and avoids
+    /// "fingertip drift" registering as a 1-cell phantom selection.
+    private static let dragThresholdPx: CGFloat = 3
+
+    /// Cell coordinate in grid space. (0, 0) is top-left.
+    struct CellCoord: Equatable {
+        let row: Int
+        let col: Int
+    }
+
+    /// Half-open range describing the active text selection. Stored
+    /// in the order the user dragged so a backward drag selects the
+    /// same text as a forward one (we normalize for rendering / copy).
+    struct TerminalSelection: Equatable {
+        var anchor: CellCoord
+        var head: CellCoord
+
+        /// Top-left / bottom-right of the selection in reading order.
+        var ordered: (start: CellCoord, end: CellCoord) {
+            if anchor.row < head.row || (anchor.row == head.row && anchor.col <= head.col) {
+                return (anchor, head)
+            }
+            return (head, anchor)
+        }
+    }
 
     /// Timer that ticks `needsDisplay = true` while blink cells are on
     /// screen so the next draw can swap the alpha. Lazily started by
@@ -274,17 +320,115 @@ public final class BrokeredTerminalView: NSView {
     public override func resignFirstResponder() -> Bool { true }
 
     /// Riven's focus model: the command bar is the default writing
-    /// surface. A plain click on the terminal (no drag) bounces focus
-    /// to the command bar via `.rivenFocusCommandBar`. A click + drag
-    /// keeps focus on the terminal so future text-selection work has a
-    /// place to land. Today we don't implement text selection, so the
-    /// drag branch is reserved — every mouseDown bounces.
+    /// surface. A plain click on the terminal (no drag past
+    /// `dragThresholdPx`) bounces focus to the command bar via
+    /// `.rivenFocusCommandBar` on mouseUp. A click + drag enters
+    /// text-selection mode — the renderer paints a translucent
+    /// `theme.chrome.selectionBg` overlay across the selected cells
+    /// and Cmd+C copies the text.
+    ///
+    /// We deliberately wait for mouseUp before bouncing focus so a
+    /// drag-to-select gesture doesn't flash the cursor into the
+    /// command bar mid-drag.
     public override func mouseDown(with event: NSEvent) {
-        // Post immediately; the command bar listens on the same window.
-        // No need to wait for mouseUp — the user's intent is clear from
-        // the first click that the terminal pane is the target context.
-        NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
+        let local = convert(event.locationInWindow, from: nil)
+        dragAnchor = cellCoord(at: local)
+        dragDidMove = false
+        // Clear any pre-existing selection so the next drag starts
+        // fresh; clicking outside the selection should always reset.
+        if selection != nil {
+            selection = nil
+            needsDisplay = true
+        }
         super.mouseDown(with: event)
+    }
+
+    public override func mouseDragged(with event: NSEvent) {
+        guard let anchor = dragAnchor else { return }
+        let local = convert(event.locationInWindow, from: nil)
+        // Promote to a real drag only after the cursor has moved past
+        // the click-vs-drag threshold. Without this guard, a hand
+        // tremor on mouseDown would register as a 1-cell selection
+        // and steal focus from the command bar.
+        if !dragDidMove {
+            let downPoint = convert(event.locationInWindow, from: nil)
+            let pixelDelta = hypot(
+                downPoint.x - (CGFloat(anchor.col) * cellWidth + Self.textInset.left),
+                downPoint.y - (CGFloat(anchor.row) * cellHeight + Self.textInset.top)
+            )
+            if pixelDelta < Self.dragThresholdPx { return }
+            dragDidMove = true
+        }
+        let head = cellCoord(at: local)
+        let updated = TerminalSelection(anchor: anchor, head: head)
+        if selection != updated {
+            selection = updated
+            needsDisplay = true
+        }
+        super.mouseDragged(with: event)
+    }
+
+    public override func mouseUp(with event: NSEvent) {
+        defer {
+            dragAnchor = nil
+            dragDidMove = false
+        }
+        if !dragDidMove {
+            // Plain click — no drag occurred. Bounce focus to the
+            // command bar (the longstanding Riven gesture) and leave
+            // any existing selection cleared.
+            NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
+        }
+        super.mouseUp(with: event)
+    }
+
+    /// Translate a view-local point into a cell grid coordinate.
+    /// Clamps into bounds so an edge-of-view drag still produces a
+    /// usable selection at the corner cell.
+    private func cellCoord(at point: NSPoint) -> CellCoord {
+        let inset = Self.textInset
+        let x = max(0, point.x - inset.left)
+        let y = max(0, point.y - inset.top)
+        let col = min(max(0, Int(x / max(1, cellWidth))), max(0, Int(cols) - 1))
+        let row = min(max(0, Int(y / max(1, cellHeight))), max(0, Int(rows) - 1))
+        return CellCoord(row: row, col: col)
+    }
+
+    // MARK: - Copy selection
+
+    /// Pulls the cell text under the active selection from the most
+    /// recent frame snapshot and writes it to `NSPasteboard.general`.
+    /// Trailing whitespace is stripped per row so the user doesn't
+    /// paste invisible padding that confuses the next shell.
+    private func copySelection() {
+        guard let sel = selection,
+              let session,
+              let frame = try? bridge.snapshotFrame(session) else { return }
+        let (start, end) = sel.ordered
+        guard start.row < frame.cells.count else { return }
+        var lines: [String] = []
+        for rowIdx in start.row...min(end.row, frame.cells.count - 1) {
+            let row = frame.cells[rowIdx]
+            let firstCol = rowIdx == start.row ? start.col : 0
+            let lastCol = rowIdx == end.row ? min(end.col, row.count - 1) : row.count - 1
+            guard firstCol <= lastCol, lastCol >= 0 else { continue }
+            var line = ""
+            for col in firstCol...lastCol {
+                if col < row.count {
+                    line.append(row[col].text.isEmpty ? " " : row[col].text)
+                }
+            }
+            // Strip trailing spaces — terminals pad every row to the
+            // viewport width, copying that padding would paste a wall
+            // of whitespace.
+            while line.hasSuffix(" ") { line.removeLast() }
+            lines.append(line)
+        }
+        let text = lines.joined(separator: "\n")
+        guard !text.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 
     public override func viewDidMoveToWindow() {
@@ -580,6 +724,21 @@ public final class BrokeredTerminalView: NSView {
         ctx.saveGState()
         ctx.translateBy(x: inset.left, y: inset.top)
 
+        // Translate our cell-coord selection into the renderer's
+        // inclusive `SelectionRange`. Normalized + clamped to the
+        // active frame so a selection that survived a viewport resize
+        // can't paint outside the grid.
+        let renderSelection: GhosttyRenderer.SelectionRange? = {
+            guard let sel = self.selection else { return nil }
+            let (start, end) = sel.ordered
+            return GhosttyRenderer.SelectionRange(
+                startRow: start.row,
+                startCol: start.col,
+                endRow: end.row,
+                endCol: end.col
+            )
+        }()
+
         GhosttyRenderer.draw(
             frame: frame,
             configuration: GhosttyRenderer.TerminalRenderConfiguration(
@@ -588,7 +747,9 @@ public final class BrokeredTerminalView: NSView {
                 cursorColor: configuration.cursor,
                 fontSize: configuration.fontSize,
                 fontName: configuration.fontName,
-                blinkAlpha: blinkAlpha
+                blinkAlpha: blinkAlpha,
+                selection: renderSelection,
+                selectionColor: configuration.selectionBackground
             ),
             metrics: GhosttyRenderer.TerminalCellMetrics(
                 cellWidth: cellWidth,
@@ -645,6 +806,17 @@ public final class BrokeredTerminalView: NSView {
     // MARK: - Keyboard input
 
     public override func keyDown(with event: NSEvent) {
+        // Cmd+C copies the active selection if one exists. We check
+        // before forwarding to interpretKeyEvents so the user's
+        // selection-copy gesture never accidentally lands as a Ctrl+C
+        // SIGINT on the running command.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "c",
+           selection != nil {
+            copySelection()
+            return
+        }
         interpretKeyEvents([event])
     }
 

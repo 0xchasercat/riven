@@ -76,6 +76,16 @@ enum GhosttyRenderer {
         /// clock (~500 ms half-cycle) and passes it on each draw. When
         /// no cell on the frame has `blink`, this value has no effect.
         var blinkAlpha: CGFloat
+        /// Active text selection, or nil when nothing is selected. The
+        /// renderer paints `selectionColor` over the cells covered by
+        /// this range between the background pass and the glyph pass,
+        /// so the underlying glyphs stay legible. Coordinates are
+        /// inclusive cell indices in reading order (start <= end).
+        var selection: SelectionRange?
+        /// Translucent fill for the selection overlay. Typically the
+        /// theme's `chrome.selectionBg` token — Amber's amber-22%,
+        /// Tokyo's violet-15%, etc.
+        var selectionColor: NSColor
 
         init(
             defaultForeground: NSColor,
@@ -84,7 +94,9 @@ enum GhosttyRenderer {
             fontSize: CGFloat,
             fontName: String? = nil,
             blockSeparator: NSColor? = nil,
-            blinkAlpha: CGFloat = 1.0
+            blinkAlpha: CGFloat = 1.0,
+            selection: SelectionRange? = nil,
+            selectionColor: NSColor = NSColor(white: 1.0, alpha: 0.15)
         ) {
             self.defaultForeground = defaultForeground
             self.defaultBackground = defaultBackground
@@ -104,7 +116,19 @@ enum GhosttyRenderer {
             // Clamp defensively so a misbehaving host doesn't blow past
             // 0..1 and produce a negative-alpha glyph.
             self.blinkAlpha = max(0, min(1, blinkAlpha))
+            self.selection = selection
+            self.selectionColor = selectionColor
         }
+    }
+
+    /// Inclusive cell range painted by the selection overlay pass.
+    /// Two callers: `BrokeredTerminalView` (drag-to-select) and any
+    /// future "select all" / programmatic-highlight feature.
+    struct SelectionRange: Equatable, Sendable {
+        var startRow: Int
+        var startCol: Int
+        var endRow: Int
+        var endCol: Int
     }
 
     /// Cached per-cell sizing. The owning view computes these from its
@@ -184,6 +208,24 @@ enum GhosttyRenderer {
         // row N-1's trailing semantic) doesn't have to re-coalesce.
         ctx.textMatrix = .identity
         let perRowRuns: [[StyledRun]] = frame.cells.map { TerminalRunCoalescer.runs(in: $0) }
+
+        // Pre-compute the selection rects (one per covered row). The
+        // selection passes draws BEFORE the per-row backgrounds get
+        // their own overlays so a translucent selection tint blends
+        // cleanly across mixed-color runs. Multi-row selections produce
+        // up to three rects: a partial first row, full middle rows
+        // (drawn as one combined rect), and a partial last row.
+        let selectionRects = computeSelectionRects(
+            selection: configuration.selection,
+            frame: frame,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            viewWidth: bounds.width
+        )
+        if !selectionRects.isEmpty {
+            ctx.setFillColor(configuration.selectionColor.cgColor)
+            for rect in selectionRects { ctx.fill(rect) }
+        }
 
         for (rowIdx, row) in frame.cells.enumerated() {
             let runs = perRowRuns[rowIdx]
@@ -373,6 +415,75 @@ enum GhosttyRenderer {
     /// "Blank" here means an empty grapheme or a literal space with no
     /// background color override: those cells are usually just padding
     /// between commands and shouldn't drive the boundary.
+    /// Translate an inclusive `SelectionRange` into 1–3 fill rects,
+    /// one per covered row (or one combined rect for full-width
+    /// middle rows). Returns empty for a nil / empty selection.
+    ///
+    /// Coordinate space: the renderer's frame, with y=0 at the top
+    /// (the host pinned `isFlipped = true` so AppKit's bottom-origin
+    /// math doesn't apply). Cells outside the frame are clipped.
+    private static func computeSelectionRects(
+        selection: SelectionRange?,
+        frame: GhosttyRenderFrame,
+        cellWidth: CGFloat,
+        cellHeight: CGFloat,
+        viewWidth: CGFloat
+    ) -> [NSRect] {
+        guard let sel = selection,
+              !frame.cells.isEmpty,
+              sel.startRow <= sel.endRow,
+              sel.startRow < frame.cells.count else { return [] }
+
+        let firstRow = max(0, sel.startRow)
+        let lastRow = min(sel.endRow, frame.cells.count - 1)
+        guard firstRow <= lastRow else { return [] }
+
+        var rects: [NSRect] = []
+        for rowIdx in firstRow...lastRow {
+            let row = frame.cells[rowIdx]
+            let rowWidthCols = max(0, row.count)
+            let firstCol: Int
+            let lastCol: Int
+            if rowIdx == sel.startRow && rowIdx == sel.endRow {
+                // Single-row selection.
+                firstCol = max(0, min(sel.startCol, sel.endCol))
+                lastCol = max(sel.startCol, sel.endCol)
+            } else if rowIdx == sel.startRow {
+                firstCol = max(0, sel.startCol)
+                lastCol = max(0, rowWidthCols - 1)
+            } else if rowIdx == sel.endRow {
+                firstCol = 0
+                lastCol = max(0, sel.endCol)
+            } else {
+                // Middle row — full width.
+                firstCol = 0
+                lastCol = max(0, rowWidthCols - 1)
+            }
+            // Inclusive col span → width of (last - first + 1) cells.
+            let widthCols = lastCol - firstCol + 1
+            guard widthCols > 0 else { continue }
+            // Middle rows + the trailing edge of multi-row selections
+            // extend to the full viewport width so the highlight looks
+            // like a continuous block, the way every other terminal
+            // renders text selection.
+            let extendToEdge = (rowIdx != sel.endRow) || (rowIdx != sel.startRow && rowIdx < sel.endRow)
+            let x = CGFloat(firstCol) * cellWidth
+            let width: CGFloat
+            if extendToEdge {
+                width = max(viewWidth - x, CGFloat(widthCols) * cellWidth)
+            } else {
+                width = CGFloat(widthCols) * cellWidth
+            }
+            rects.append(NSRect(
+                x: x,
+                y: CGFloat(rowIdx) * cellHeight,
+                width: width,
+                height: cellHeight
+            ))
+        }
+        return rects
+    }
+
     private static func leadingSemantic(
         runs: [StyledRun],
         cells: [GhosttyResolvedCell]

@@ -1,4 +1,4 @@
-// BentoOverlay — detail screens that sit over a dimmed workspace.
+// RivenOverlay — detail screens that sit over a dimmed workspace.
 // Three variants: 'palette' (⌘K command palette), 'ripgrep' (project search),
 // 'resurrect' (project launcher / session resurrection).
 
@@ -8,7 +8,7 @@ const { useState: useState_OV } = React;
 function DimmedBackdrop({ theme, dim = 0.55 }) {
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
-      <BentoWorkspace theme={theme} />
+      <RivenWorkspace theme={theme} />
       <div style={{
         position: 'absolute', inset: 0,
         background: `rgba(0,0,0,${dim})`,
@@ -141,7 +141,7 @@ function CommandPalette({ theme }) {
 
 // ─── Ripgrep search ──────────────────────────────────────────
 const RG_RESULTS = [
-  { file: 'Sources/Bento/Panes/PaneGrid.swift', matches: [
+  { file: 'Sources/Riven/Panes/PaneGrid.swift', matches: [
     { ln: 42, before: '        guard let active = active else { return }', match: 'split', after: null,
       segs: [
         { v: '        ' },
@@ -159,7 +159,7 @@ const RG_RESULTS = [
       { t: 'hit', v: 'split' }, { v: '(parent: active.id, child: child.id, dir: dir)' },
     ]},
   ]},
-  { file: 'crates/bento-core/src/registry.rs', matches: [
+  { file: 'crates/riven-core/src/registry.rs', matches: [
     { ln: 24, segs: [
       { v: '    ' },
       { t: 'kw', v: 'pub async fn' }, { v: ' ' },
@@ -173,7 +173,7 @@ const RG_RESULTS = [
       { t: 'ty', v: 'Split' }, { v: ' { parent, child, dir })' },
     ]},
   ]},
-  { file: 'crates/bento-core/src/split.rs', matches: [
+  { file: 'crates/riven-core/src/split.rs', matches: [
     { ln: 8, segs: [
       { t: 'kw', v: 'pub fn' }, { v: ' ' }, { t: 'hit', v: 'split' }, { v: '_inheriting(' },
       { t: 'punc', v: '&' }, { t: 'kw', v: 'self' }, { v: ', dir: ' }, { t: 'ty', v: 'Direction' }, { v: ') -> ' },
@@ -309,7 +309,7 @@ function RipgrepPanel({ theme }) {
 // ─── Session resurrection / launcher ─────────────────────────
 const RECENT_PROJECTS = [
   {
-    name: 'bento', path: '~/code/bento', branch: 'main',
+    name: 'riven', path: '~/code/riven', branch: 'main',
     panes: 4, layout: '2x2', last: 'today · 14:32',
     files: ['PaneView.swift', 'registry.rs'],
     terms: ['cargo run', 'cargo test'],
@@ -504,7 +504,7 @@ function ResurrectLauncher({ theme }) {
 }
 
 // ─── Public wrapper ──────────────────────────────────────────
-function BentoOverlay({ theme, overlay }) {
+function RivenOverlay({ theme, overlay }) {
   return (
     <div style={{
       width: 1400, height: 900, position: 'relative',
@@ -519,4 +519,4 @@ function BentoOverlay({ theme, overlay }) {
   );
 }
 
-window.BentoOverlay = BentoOverlay;
+window.RivenOverlay = RivenOverlay;

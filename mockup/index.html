@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Bento · Mockups</title>
+<title>Riven · Mockups</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,20 +35,20 @@ function App() {
     <DesignCanvas>
       <DCSection
         id="workspaces"
-        title="Bento · macOS workspace"
+        title="Riven · macOS workspace"
         subtitle="Four aesthetic directions for the same layout · tiling multiplexer + native editor"
       >
         <DCArtboard id="carbon" label="A · Carbon — monochrome, hairlines" width={1400} height={900}>
-          <BentoWorkspace theme={T.carbon} />
+          <RivenWorkspace theme={T.carbon} />
         </DCArtboard>
-        <DCArtboard id="bento" label="B · Bento — lacquer black, amber accent" width={1400} height={900}>
-          <BentoWorkspace theme={T.bento} />
+        <DCArtboard id="amber" label="A · Amber — lacquer black, amber accent" width={1400} height={900}>
+          <RivenWorkspace theme={T.amber} />
         </DCArtboard>
         <DCArtboard id="tokyo" label="C · Tokyo — violet over ink" width={1400} height={900}>
-          <BentoWorkspace theme={T.tokyo} />
+          <RivenWorkspace theme={T.tokyo} />
         </DCArtboard>
         <DCArtboard id="paper" label="D · Paper — warm cream, ink, restraint" width={1400} height={900}>
-          <BentoWorkspace theme={T.paper} />
+          <RivenWorkspace theme={T.paper} />
         </DCArtboard>
       </DCSection>
 
@@ -58,13 +58,13 @@ function App() {
         subtitle="The same workspace, focused on the three pillars: command palette · ripgrep search · session resurrection"
       >
         <DCArtboard id="palette" label="Command palette (⌘K) · Carbon" width={1400} height={900}>
-          <BentoOverlay theme={T.carbon} overlay="palette" />
+          <RivenOverlay theme={T.carbon} overlay="palette" />
         </DCArtboard>
         <DCArtboard id="ripgrep" label="Project search (⌘⇧F) · Tokyo" width={1400} height={900}>
-          <BentoOverlay theme={T.tokyo} overlay="ripgrep" />
+          <RivenOverlay theme={T.tokyo} overlay="ripgrep" />
         </DCArtboard>
-        <DCArtboard id="resurrect" label="Session resurrection · Bento" width={1400} height={900}>
-          <BentoOverlay theme={T.bento} overlay="resurrect" />
+        <DCArtboard id="resurrect" label="Session resurrection · Riven" width={1400} height={900}>
+          <RivenOverlay theme={T.amber} overlay="resurrect" />
         </DCArtboard>
       </DCSection>
     </DesignCanvas>

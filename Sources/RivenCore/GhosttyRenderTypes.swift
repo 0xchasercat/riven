@@ -27,8 +27,9 @@ public struct GhosttyRGB: Equatable, Hashable, Sendable {
 ///   0 = OUTPUT, 1 = INPUT, 2 = PROMPT.
 ///
 /// Set by libghostty's OSC 133 (semantic prompt) handling — see
-/// `scripts/riven-shell-integration.{zsh,bash,fish}` for the markers
-/// the shell emits. Cells default to `.output`, which means "not
+/// `Sources/RivenCore/Resources/shell-integration/integration.zsh`
+/// for the markers the in-app shell integration emits. Cells default
+/// to `.output`, which means "not
 /// part of a prompt or user input" — i.e. command output (or just
 /// idle cells before any integration runs). The renderer uses this
 /// to draw a 1-px separator between command blocks (output → prompt

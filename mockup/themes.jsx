@@ -1,4 +1,4 @@
-// Theme definitions for Bento workspace mockups.
+// Theme definitions for Riven workspace mockups.
 // Each theme is a complete visual language: surfaces, borders, text,
 // accent, AND a syntax highlighting palette. All exposed on window.
 
@@ -33,7 +33,7 @@ const THEMES = {
     },
     // terminal
     term: { prompt: '#888', cmd: '#e8e8e8', ok: '#a3a3a3', warn: '#9a9a9a', err: '#c0c0c0', info: '#888' },
-    // bento-box compartments (divider thickness in px)
+    // compartment walls (divider thickness in px)
     dividerWeight: 1,
     paneRadius: 0,
     windowRadius: 10,
@@ -41,8 +41,8 @@ const THEMES = {
     shadow: '0 24px 80px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.06)',
   },
 
-  bento: {
-    name: 'Bento',
+  amber: {
+    name: 'Amber',
     blurb: 'Lacquer black. Amber on the active pane.',
     font: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace',
     uiFont: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
@@ -69,7 +69,7 @@ const THEMES = {
       punc: '#7a6a52', tag: '#c89858', prop: '#ece1cb',
     },
     term: { prompt: '#d9a663', cmd: '#ece1cb', ok: '#a8b07a', warn: '#d9a663', err: '#c87858', info: '#8a7a62' },
-    dividerWeight: 6,        // thick — reads as bento compartments
+    dividerWeight: 6,        // thick — reads as compartment walls
     paneRadius: 4,
     windowRadius: 12,
     activeHighlight: 'inset 0 0 0 1px rgba(217,166,99,0.55)',

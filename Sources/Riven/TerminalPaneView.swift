@@ -123,7 +123,13 @@ struct TerminalPaneView: NSViewRepresentable {
             background: NSColor(hex: theme.terminal.background.hex),
             cursor: NSColor(hex: theme.terminal.cursor.hex),
             fontSize: 13,
-            fontName: nil
+            fontName: nil,
+            // Drag-to-select highlight color. `chrome.selectionBg` is
+            // the 8-digit alpha-bearing hex token added in T-1 — it
+            // automatically follows the active theme so Amber gets
+            // amber-22%, Tokyo gets violet-15%, Paper gets ink-10%
+            // on cream, etc.
+            selectionBackground: NSColor(hex: theme.chrome.selectionBg.hex)
         )
     }
 }

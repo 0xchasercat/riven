@@ -1,12 +1,12 @@
-// Static content for Bento mockups: file tree, code samples (Swift + Rust),
+// Static content for Riven mockups: file tree, code samples (Swift + Rust),
 // terminal sessions. Pre-tokenized with class names that map to theme.sx.
 
 // ─── File tree ───────────────────────────────────────────────
 const FILE_TREE = [
-  { kind: 'group', label: 'BENTO', expanded: true, children: [
+  { kind: 'group', label: 'RIVEN', expanded: true, children: [
     { kind: 'dir', name: 'Sources', expanded: true, children: [
-      { kind: 'dir', name: 'Bento', expanded: true, children: [
-        { kind: 'file', name: 'BentoApp.swift' },
+      { kind: 'dir', name: 'Amber', expanded: true, children: [
+        { kind: 'file', name: 'RivenApp.swift' },
         { kind: 'file', name: 'AppDelegate.swift' },
         { kind: 'file', name: 'PaneView.swift', active: true, dirty: true },
         { kind: 'file', name: 'WindowController.swift' },
@@ -20,7 +20,7 @@ const FILE_TREE = [
       ]},
     ]},
     { kind: 'dir', name: 'crates', expanded: true, children: [
-      { kind: 'dir', name: 'bento-core', expanded: true, children: [
+      { kind: 'dir', name: 'riven-core', expanded: true, children: [
         { kind: 'dir', name: 'src', expanded: true, children: [
           { kind: 'file', name: 'lib.rs' },
           { kind: 'file', name: 'registry.rs', active: true, dirty: true },
@@ -28,7 +28,7 @@ const FILE_TREE = [
         ]},
         { kind: 'file', name: 'Cargo.toml' },
       ]},
-      { kind: 'dir', name: 'bento-search', expanded: false, children: [] },
+      { kind: 'dir', name: 'riven-search', expanded: false, children: [] },
     ]},
     { kind: 'file', name: 'Package.swift' },
     { kind: 'file', name: 'README.md' },
@@ -97,32 +97,32 @@ const RUST_CODE = [
 // ─── Terminal sessions ───────────────────────────────────────
 // Each line: {t: term-class, v: text}. Classes: prompt, cmd, ok, warn, err, info, plain
 const TERM_CARGO = [
-  { t: 'prompt', v: '~/bento ' }, { t: 'cmd', v: '$ cargo run --release' },
+  { t: 'prompt', v: '~/riven ' }, { t: 'cmd', v: '$ cargo run --release' },
   '\n',
-  { t: 'info', v: '   Compiling' }, { v: ' bento-core v0.4.2' },
+  { t: 'info', v: '   Compiling' }, { v: ' riven-core v0.4.2' },
   '\n',
-  { t: 'info', v: '   Compiling' }, { v: ' bento-pane v0.4.2' },
+  { t: 'info', v: '   Compiling' }, { v: ' riven-pane v0.4.2' },
   '\n',
-  { t: 'info', v: '   Compiling' }, { v: ' bento v0.4.2 ' }, { v: '(/Users/jp/bento)' },
+  { t: 'info', v: '   Compiling' }, { v: ' riven v0.4.2 ' }, { v: '(/Users/jp/riven)' },
   '\n',
   { t: 'ok', v: '    Finished' }, { v: ' `release` profile [optimized] in 8.24s' },
   '\n',
-  { t: 'info', v: '     Running' }, { v: ' `target/release/bento`' },
+  { t: 'info', v: '     Running' }, { v: ' `target/release/riven`' },
   '\n\n',
-  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' bento::session] restoring workspace ' }, { t: 'ok', v: "'bento'" }, { v: ' (4 panes)' },
+  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' riven::session] restoring workspace ' }, { t: 'ok', v: "'riven'" }, { v: ' (4 panes)' },
   '\n',
-  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' bento::ghostty] libghostty 1.2.0 ready · ' }, { t: 'ok', v: 'metal' },
+  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' riven::ghostty] libghostty 1.2.0 ready · ' }, { t: 'ok', v: 'metal' },
   '\n',
-  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' bento::sttextview] TextKit 2 editor ready: ' }, { t: 'ok', v: 'native' },
+  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' riven::sttextview] TextKit 2 editor ready: ' }, { t: 'ok', v: 'native' },
   '\n',
-  { v: '[' }, { t: 'warn', v: 'WARN ' }, { v: ' bento::pane] pane 3 fps drop: 119 → 117' },
+  { v: '[' }, { t: 'warn', v: 'WARN ' }, { v: ' riven::pane] pane 3 fps drop: 119 → 117' },
   '\n',
-  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' bento::ipc] socket /tmp/bento.sock listening' },
+  { v: '[' }, { t: 'info', v: 'INFO ' }, { v: ' riven::ipc] socket /tmp/riven.sock listening' },
   '\n',
 ];
 
 const TERM_TEST = [
-  { t: 'prompt', v: '~/bento ' }, { t: 'cmd', v: '$ cargo test -p bento-pane' },
+  { t: 'prompt', v: '~/riven ' }, { t: 'cmd', v: '$ cargo test -p riven-pane' },
   '\n',
   { t: 'info', v: '    Finished' }, { v: ' `test` profile [unoptimized] in 3.1s' },
   '\n',
@@ -144,7 +144,7 @@ const TERM_TEST = [
   '\n\n',
   { t: 'ok', v: 'test result: ok.' }, { v: ' 14 passed; 0 failed; ' }, { t: 'info', v: '0.04s' },
   '\n\n',
-  { t: 'prompt', v: '~/bento ' }, { t: 'cmd', v: '$ ' }, { t: 'cursor', v: '' },
+  { t: 'prompt', v: '~/riven ' }, { t: 'cmd', v: '$ ' }, { t: 'cursor', v: '' },
 ];
 
-window.BENTO_CONTENT = { FILE_TREE, SWIFT_CODE, RUST_CODE, TERM_CARGO, TERM_TEST };
+window.RIVEN_CONTENT = { FILE_TREE, SWIFT_CODE, RUST_CODE, TERM_CARGO, TERM_TEST };

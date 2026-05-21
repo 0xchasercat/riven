@@ -1,5 +1,5 @@
-// BentoWorkspace — the full app mockup, parameterized by theme.
-// Usage: <BentoWorkspace theme={THEMES.carbon} />
+// RivenWorkspace — the full app mockup, parameterized by theme.
+// Usage: <RivenWorkspace theme={THEMES.carbon} />
 
 const { useState } = React;
 
@@ -18,7 +18,7 @@ function TrafficLights() {
   );
 }
 
-function TitleBar({ theme, project = '~/bento' }) {
+function TitleBar({ theme, project = '~/riven' }) {
   return (
     <div style={{
       height: 38, display: 'flex', alignItems: 'center', gap: 14,
@@ -37,7 +37,7 @@ function TitleBar({ theme, project = '~/bento' }) {
           fontFamily: theme.font, fontSize: 12, color: theme.dim,
           letterSpacing: 0.2,
         }}>
-          <span style={{ color: theme.text, fontWeight: 500 }}>bento</span>
+          <span style={{ color: theme.text, fontWeight: 500 }}>riven</span>
           <span style={{ margin: '0 8px' }}>—</span>
           {project}
           <span style={{ margin: '0 8px', color: theme.veryDim }}>·</span>
@@ -177,7 +177,7 @@ function FileTree({ theme }) {
         <span style={{ marginLeft: 'auto', color: theme.veryDim }}>2</span>
       </div>
       <div style={{ flex: 1, overflow: 'hidden', padding: '4px 0' }}>
-        {window.BENTO_CONTENT.FILE_TREE.map((n, i) => (
+        {window.RIVEN_CONTENT.FILE_TREE.map((n, i) => (
           <TreeNode key={i} node={n} theme={theme} />
         ))}
       </div>
@@ -337,25 +337,25 @@ function PaneGrid({ theme }) {
       {/* top-left: Swift editor (active) */}
       <Pane theme={theme} kind="editor" title="PaneView.swift" badge="Swift" active dirty>
         <div style={{ height: '100%', overflow: 'hidden', padding: '8px 0 0 0' }}>
-          <CodeLines lines={window.BENTO_CONTENT.SWIFT_CODE} theme={theme} highlightLine={14} />
+          <CodeLines lines={window.RIVEN_CONTENT.SWIFT_CODE} theme={theme} highlightLine={14} />
         </div>
       </Pane>
 
       {/* top-right: cargo run terminal */}
       <Pane theme={theme} kind="term" title="zsh — cargo run" badge="ghostty">
-        <TermBody stream={window.BENTO_CONTENT.TERM_CARGO} theme={theme} cursor={false} />
+        <TermBody stream={window.RIVEN_CONTENT.TERM_CARGO} theme={theme} cursor={false} />
       </Pane>
 
       {/* bottom-left: Rust editor */}
       <Pane theme={theme} kind="editor" title="registry.rs" badge="Rust" dirty>
         <div style={{ height: '100%', overflow: 'hidden', padding: '8px 0 0 0' }}>
-          <CodeLines lines={window.BENTO_CONTENT.RUST_CODE} theme={theme} />
+          <CodeLines lines={window.RIVEN_CONTENT.RUST_CODE} theme={theme} />
         </div>
       </Pane>
 
       {/* bottom-right: cargo test */}
       <Pane theme={theme} kind="term" title="zsh — cargo test" badge="ghostty">
-        <TermBody stream={window.BENTO_CONTENT.TERM_TEST} theme={theme} cursor={true} />
+        <TermBody stream={window.RIVEN_CONTENT.TERM_TEST} theme={theme} cursor={true} />
       </Pane>
     </div>
   );
@@ -405,7 +405,7 @@ function StatusBar({ theme }) {
 }
 
 // ─── Workspace (the full window) ─────────────────────────────
-function BentoWorkspace({ theme, width = 1400, height = 900 }) {
+function RivenWorkspace({ theme, width = 1400, height = 900 }) {
   return (
     <div style={{
       width, height, background: theme.bg,
@@ -425,4 +425,4 @@ function BentoWorkspace({ theme, width = 1400, height = 900 }) {
   );
 }
 
-Object.assign(window, { BentoWorkspace, Kbd, TrafficLights });
+Object.assign(window, { RivenWorkspace, Kbd, TrafficLights });
