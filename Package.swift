@@ -21,10 +21,25 @@ let package = Package(
             name: "RivenCore",
             dependencies: ["Yams", "GhosttyVt"],
             resources: [
-                // Ships the vendored Universal2 ripgrep binary so
-                // RipgrepFileSearch can locate it via Bundle.module.
-                // Refresh via `scripts/install-rg.sh`.
-                .process("Resources")
+                // Use `.copy` (preserves layout) rather than
+                // `.process` (flattens directories). The shell
+                // integration NEEDS its subdirectory tree intact
+                // — riven.zsh sources its siblings by relative
+                // path, and fast-syntax-highlighting sources a
+                // multi-file tree from a single entry point.
+                // `.process("Resources")` flattened both, so
+                // `Bundle.module.url(forResource: "shell-integration",
+                // withExtension: nil)` returned nil and the
+                // installer reported "missing bundle resources."
+                //
+                // The ripgrep binary still ships via the same
+                // bundle; RipgrepFileSearch resolves it via
+                // `Bundle.module.url(forResource: "rg",
+                // withExtension: nil)` which keeps working
+                // because the file lives at the bundle root either
+                // way (we just declare it explicitly now).
+                .copy("Resources/rg"),
+                .copy("Resources/shell-integration"),
             ]
         ),
         .executableTarget(
