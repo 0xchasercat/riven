@@ -245,9 +245,34 @@ public final class BrokeredTerminalView: NSView {
                 self?.displayIfNeeded()
             }
         }
+
+        // Window-becomes-key → restore first-responder when the
+        // notification carries our own paneID. The app delegate
+        // only fires this when the focused tab is on the alt screen
+        // (vim, nano, etc.) so a regular shell-prompt click doesn't
+        // get hijacked.
+        focusRestoreObserver = NotificationCenter.default.addObserver(
+            forName: .rivenRestoreTerminalFocus,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            // Copy the typed payload out before crossing the actor
+            // hop — `note` itself is Sendable-suspicious so we read
+            // its object on the calling queue (main, set above) and
+            // pass the value-typed PaneID into the assumeIsolated
+            // block. PaneID is a struct of a String, Sendable.
+            let target = note.object as? PaneID
+            MainActor.assumeIsolated {
+                guard let self,
+                      let target,
+                      target == self.paneID else { return }
+                self.window?.makeFirstResponder(self)
+            }
+        }
     }
 
     private nonisolated(unsafe) var wakeObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var focusRestoreObserver: NSObjectProtocol?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
@@ -267,6 +292,9 @@ public final class BrokeredTerminalView: NSView {
         blinkTimer?.invalidate()
         if let wakeObserver {
             NotificationCenter.default.removeObserver(wakeObserver)
+        }
+        if let focusRestoreObserver {
+            NotificationCenter.default.removeObserver(focusRestoreObserver)
         }
         if let session {
             try? bridge.close(session)
@@ -342,13 +370,23 @@ public final class BrokeredTerminalView: NSView {
     /// drag-to-select gesture doesn't flash the cursor into the
     /// command bar mid-drag.
     public override func mouseDown(with event: NSEvent) {
-        // Alt-screen TUIs (vim, nano, htop, less, claude-code, …) own
-        // the keyboard + mouse — Riven's command-bar-as-default-input
-        // model would otherwise eat their input. Skip every Riven
-        // focus-stealing gesture in that mode and let AppKit's
-        // standard responder chain hand the click through.
+        // A click on the terminal pane means "I want to interact
+        // with what's running here" — for a TUI (vim, nano, htop)
+        // that's literal mouse forwarding; for a shell at a prompt
+        // OR a long-running interactive program (ssh, python REPL,
+        // a `read -p` script) it means "park focus on the terminal
+        // so my keystrokes reach the PTY." Either way we grab
+        // first-responder unconditionally.
+        //
+        // Previously this bounced to the command bar on mouseUp,
+        // which made ssh / repls / any character-at-a-time program
+        // impossible to drive (every keystroke landed in the bar
+        // and only reached the PTY after Enter). Tab still snaps
+        // to the command bar from anywhere, so users who prefer
+        // the typed-command flow keep their muscle memory.
+        window?.makeFirstResponder(self)
+
         if isInAltScreen {
-            window?.makeFirstResponder(self)
             super.mouseDown(with: event)
             return
         }
@@ -394,18 +432,12 @@ public final class BrokeredTerminalView: NSView {
             dragAnchor = nil
             dragDidMove = false
         }
-        // Alt-screen mode owns the click — `mouseDown` already
-        // forwarded; don't bounce focus or reset state from here.
-        if isInAltScreen {
-            super.mouseUp(with: event)
-            return
-        }
-        if !dragDidMove {
-            // Plain click — no drag occurred. Bounce focus to the
-            // command bar (the longstanding Riven gesture) and leave
-            // any existing selection cleared.
-            NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
-        }
+        // No focus-bounce here anymore. mouseDown already took
+        // first-responder; if the gesture was a drag the selection
+        // overlay is in place, if it was a plain click focus stays
+        // on the terminal so keystrokes reach the PTY. Users who
+        // want the command bar can Tab from anywhere or click into
+        // the bar directly.
         super.mouseUp(with: event)
     }
 

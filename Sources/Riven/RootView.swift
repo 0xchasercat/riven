@@ -118,6 +118,9 @@ struct RivenRootView: View {
             onEditorFileRestored: { surfaceID in
                 controller.clearSurfaceVanished(surfaceID)
             },
+            onAltScreenChanged: { change in
+                controller.setAltScreen(paneID: change.paneID, isInAltScreen: change.isInAltScreen)
+            },
             onCommandSubmitted: { text in
                 controller.recordCommandSubmission(text)
             },
@@ -773,6 +776,7 @@ private struct NotificationWiring: ViewModifier {
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
     let onEditorFileVanished: (SurfaceID) -> Void
     let onEditorFileRestored: (SurfaceID) -> Void
+    let onAltScreenChanged: (AltScreenChange) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -787,6 +791,7 @@ private struct NotificationWiring: ViewModifier {
                 onEditorDirtyChanged: onEditorDirtyChanged,
                 onEditorFileVanished: onEditorFileVanished,
                 onEditorFileRestored: onEditorFileRestored,
+                onAltScreenChanged: onAltScreenChanged,
                 onCommandSubmitted: onCommandSubmitted,
                 onCommandHistoryRequest: onCommandHistoryRequest
             ))
@@ -826,6 +831,7 @@ private struct SurfaceWiring: ViewModifier {
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
     let onEditorFileVanished: (SurfaceID) -> Void
     let onEditorFileRestored: (SurfaceID) -> Void
+    let onAltScreenChanged: (AltScreenChange) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -854,6 +860,9 @@ private struct SurfaceWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .rivenEditorFileRestored)) { note in
                 if let id = note.object as? SurfaceID { onEditorFileRestored(id) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenAltScreenChanged)) { note in
+                if let change = note.object as? AltScreenChange { onAltScreenChanged(change) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .rivenCommandSubmitted)) { note in
                 if let text = note.object as? String { onCommandSubmitted(text) }

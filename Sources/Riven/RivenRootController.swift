@@ -57,6 +57,14 @@ final class RivenRootController: ObservableObject {
     ///   * `InnerTabStrip` / `InnerTabChip` append "(missing)" to the
     ///     displayName.
     @Published private(set) var vanishedFileSurfaces: Set<SurfaceID> = []
+    /// PaneIDs whose underlying terminal is currently on the alt
+    /// screen (vim, nano, less, htop, claude-code, …). Posted by
+    /// every `BrokeredTerminalView.draw` and mirrored here so the
+    /// global Ctrl-byte monitor in `RivenApp` can route the entire
+    /// Ctrl+letter surface to the PTY (not just C/D/Z) whenever a
+    /// TUI owns the focused tab — without having to query the
+    /// libghostty mode-state from app-delegate code.
+    @Published private(set) var altScreenPaneIDs: Set<PaneID> = []
     /// Window-global command history. Each command bar submit
     /// appends here, and the up/down arrows in any command bar walk
     /// through the entries. Scoped to the controller (one history
@@ -842,6 +850,32 @@ You can rename or delete this tab — it's a regular file at
 
     func clearSurfaceVanished(_ surfaceID: SurfaceID) {
         vanishedFileSurfaces.remove(surfaceID)
+    }
+
+    /// Mirror a `.rivenAltScreenChanged` payload into
+    /// `altScreenPaneIDs`. Called from RootView's notification
+    /// wiring so SwiftUI surfaces re-evaluate (the command bar
+    /// dim-while-TUI signal lands on this state).
+    func setAltScreen(paneID: PaneID, isInAltScreen: Bool) {
+        if isInAltScreen {
+            altScreenPaneIDs.insert(paneID)
+        } else {
+            altScreenPaneIDs.remove(paneID)
+        }
+    }
+
+    /// True when the focused inner-tab's terminal is currently on
+    /// the alt screen. The global key monitor in RivenApp uses this
+    /// to route every Ctrl+letter combo to the PTY whenever a TUI
+    /// owns the focused tab — without it, only Ctrl+C/D/Z would
+    /// reach (e.g.) nano when focus is on the command bar.
+    var focusedTerminalIsInAltScreen: Bool {
+        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace,
+              let paneID = workspace.focusedTab.terminalPaneID else {
+            return false
+        }
+        return altScreenPaneIDs.contains(paneID)
     }
 
     /// Filter `tab.surfaces` down to the editor surfaces currently

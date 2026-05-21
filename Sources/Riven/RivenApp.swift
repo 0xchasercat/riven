@@ -22,6 +22,14 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
     /// wide redraw so every `BrokeredTerminalView` blits its current
     /// state to screen rather than waiting for an idle redraw pass.
     private var wakeObserver: NSObjectProtocol?
+    /// Observer for `NSWindow.didBecomeKeyNotification`. When the
+    /// user comes back to Riven from another app, the focused-
+    /// responder gets reset by AppKit to whatever it claimed before.
+    /// If a TUI was running (vim, nano, claude-code, …) that path
+    /// usually lands focus back in the command bar — keystrokes
+    /// type into the bar instead of reaching the TUI. We snap
+    /// first-responder back to the focused terminal on the way in.
+    private var keyWindowObserver: NSObjectProtocol?
 
     static func main() {
         let app = NSApplication.shared
@@ -101,19 +109,52 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
             // the user is actively editing a file we let those
             // through unmodified.
             if mods == .control, !(responder is EditorTextView) {
-                let ctrlByte: UInt8?
+                // C/D/Z: signals that always need to reach the
+                // focused PTY regardless of which view holds the
+                // first-responder — Ctrl+C from the command bar
+                // should still interrupt a running command.
+                let signalByte: UInt8?
                 switch event.charactersIgnoringModifiers?.lowercased() {
-                case "c": ctrlByte = 0x03 // SIGINT
-                case "d": ctrlByte = 0x04 // EOF
-                case "z": ctrlByte = 0x1A // SIGTSTP
-                default: ctrlByte = nil
+                case "c": signalByte = 0x03
+                case "d": signalByte = 0x04
+                case "z": signalByte = 0x1A
+                default:  signalByte = nil
                 }
-                if let ctrlByte {
+                if let signalByte {
                     NotificationCenter.default.post(
                         name: .rivenSendCtrlByte,
-                        object: NSNumber(value: ctrlByte)
+                        object: NSNumber(value: signalByte)
                     )
                     return nil
+                }
+                // Every OTHER Ctrl+letter combo — also route to the
+                // focused PTY, but only when the focused tab's
+                // terminal is currently on the alt screen (i.e. a
+                // TUI is running). Without this carve-out, the user
+                // returning to a Riven window after focusing another
+                // app lands with first-responder on the command bar,
+                // so Ctrl+X / Ctrl+O / Ctrl+W / Ctrl+R inside nano
+                // hit AppKit's editing pipeline (cut / nothing /
+                // nothing / nothing) instead of reaching the PTY.
+                //
+                // On the primary screen (no TUI), we deliberately
+                // let these fall through so the command bar keeps
+                // its standard text-editing affordances.
+                if let controller = self.rootController,
+                   controller.focusedTerminalIsInAltScreen,
+                   let chars = event.charactersIgnoringModifiers,
+                   chars.count == 1,
+                   let scalar = chars.unicodeScalars.first,
+                   scalar.isASCII {
+                    let lowered = scalar.value | 0x20
+                    if lowered >= 0x61 && lowered <= 0x7A {
+                        let ctrlByte = UInt8(lowered & 0x1F)
+                        NotificationCenter.default.post(
+                            name: .rivenSendCtrlByte,
+                            object: NSNumber(value: ctrlByte)
+                        )
+                        return nil
+                    }
                 }
             }
 
@@ -177,6 +218,41 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 await self?.handleSystemWake()
             }
         }
+
+        // Restore terminal focus when the user comes back from
+        // another app. Without this, AppKit re-installs whoever
+        // claimed first-responder before the window lost key,
+        // which is usually the command bar — so a Cmd+Tab to
+        // Slack and back leaves nano typing into the bar.
+        keyWindowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.restoreTerminalFocusIfAltScreen()
+            }
+        }
+    }
+
+    /// On window-becomes-key, if the focused inner tab's terminal
+    /// is currently on the alt screen, broadcast the paneID and let
+    /// the matching `BrokeredTerminalView` grab first-responder.
+    /// We can't reach the view from app-delegate code, so we hop
+    /// through a notification — the view subscribes during its
+    /// init and ignores anything that doesn't carry its own paneID.
+    private func restoreTerminalFocusIfAltScreen() {
+        guard let controller = rootController,
+              controller.focusedTerminalIsInAltScreen,
+              let pane = controller.state.paneGraph.pane(controller.state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace,
+              let paneID = workspace.focusedTab.terminalPaneID else {
+            return
+        }
+        NotificationCenter.default.post(
+            name: .rivenRestoreTerminalFocus,
+            object: paneID
+        )
     }
 
     /// Ping the broker to catch a half-dead connection early. A failed
@@ -243,6 +319,10 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
             self.wakeObserver = nil
+        }
+        if let keyWindowObserver {
+            NotificationCenter.default.removeObserver(keyWindowObserver)
+            self.keyWindowObserver = nil
         }
         let workspace = rootController?.workspace
         let launcher = agentLauncher
@@ -601,6 +681,13 @@ extension Notification.Name {
     /// tracker in `RivenRootController` both listen so Riven steps
     /// out of the way while a TUI is active.
     static let rivenAltScreenChanged = Notification.Name("RivenAltScreenChanged")
+    /// Posted by the app delegate on `NSWindow.didBecomeKeyNotification`
+    /// when the focused tab's terminal is currently on the alt screen.
+    /// Object is the PaneID. The matching `BrokeredTerminalView`
+    /// (the one whose own paneID equals the object) grabs first-
+    /// responder so keystrokes flow back into the TUI without the
+    /// user having to click into the pane.
+    static let rivenRestoreTerminalFocus = Notification.Name("RivenRestoreTerminalFocus")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow
