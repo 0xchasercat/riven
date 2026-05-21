@@ -8,3 +8,4 @@ DerivedData/
 External/ghostty/
 External/ghostty-vt-install/
 .claude/
+dist/

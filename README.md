@@ -42,6 +42,28 @@ swift run RivenAgent     # broker on its own (rarely useful directly)
 
 The `Riven` and `RivenAgent` executables drop into `.build/<config>/`. Launch `Riven` from Finder for the real experience — when launched that way the AgentLauncher spawns RivenAgent automatically and the app picks up `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=Riven` for every PTY it opens.
 
+## Release
+
+Riven ships as a `.dmg` from [GitHub Releases](https://github.com/0xchasercat/riven/releases). Drag `Riven.app` to `/Applications` and launch.
+
+To cut a fresh release locally:
+
+```sh
+VERSION=0.1.0 scripts/release/build-release.sh
+```
+
+The script builds in release mode, assembles `Riven.app` with the right `Info.plist` + nested binaries + resource bundle, ad-hoc signs it (or Developer-ID signs + Apple-notarises when the relevant env vars are set), and produces `dist/Riven-<VERSION>.dmg` ready to upload.
+
+Signed + notarised builds require an Apple Developer Program enrollment. Set:
+
+```sh
+export APPLE_DEVELOPER_ID="Developer ID Application: <Name> (<TEAM_ID>)"
+export APPLE_NOTARY_KEYCHAIN_PROFILE="riven-notary"   # configured via `xcrun notarytool store-credentials`
+export APPLE_TEAM_ID="<TEAM_ID>"
+```
+
+Until then the script produces ad-hoc-signed builds — users will see "developer cannot be verified" on first launch and have to right-click → Open.
+
 ## Shell integration
 
 Open the command palette (`⌘⇧P`) and search for **shell integration** to install. Bundled inside the app — no clone, no manual sourcing.

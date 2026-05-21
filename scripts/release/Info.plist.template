@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist template baked into the .app bundle by
+  scripts/release/build-release.sh. Placeholders are substituted at
+  build time:
+
+    @VERSION@        — CFBundleShortVersionString (user-visible
+                       semver, e.g. "0.1.0"). Read from the
+                       script's VERSION env var or the top of
+                       CHANGELOG.md.
+    @BUILD@          — CFBundleVersion (monotonic integer that
+                       Sparkle and the App Store would use to
+                       compare updates). Defaults to a date stamp
+                       like 202605211800 when not provided.
+
+  SwiftPM auto-generates a minimal Info.plist for executable
+  targets but it lacks the keys a real Mac app needs (version,
+  identifier, system version requirement, etc.). This template
+  replaces the SwiftPM stub at .app-assembly time.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Riven</string>
+    <key>CFBundleDisplayName</key>
+    <string>Riven</string>
+    <key>CFBundleIdentifier</key>
+    <string>sh.riven.app</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@BUILD@</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>Riven</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+
+    <!-- macOS 15+ — same floor as Package.swift. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
+
+    <!-- We want a Dock icon + a regular menu bar. (Background apps
+         set LSUIElement to true; we're a foreground app.) -->
+    <key>LSUIElement</key>
+    <false/>
+
+    <!-- Native macOS, no Apple Events / scripting bridge needed. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+
+    <!-- High-DPI rendering. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Riven is opaque to AppleEvents but ships an in-bundle
+         RivenAgent broker; this key keeps the broker's spawn path
+         from being flagged by Privacy & Security as an unauthorised
+         child process. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Riven needs to spawn its broker process to manage terminal panes.</string>
+
+    <!-- Standard about-box copy. -->
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Marc Xavier · MIT licensed</string>
+</dict>
+</plist>
