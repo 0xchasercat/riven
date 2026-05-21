@@ -35,6 +35,16 @@
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>Riven</string>
+    <!-- Icon. The release script copies `assets/AppIcon.icns` into
+         Contents/Resources/AppIcon.icns; this key tells Finder /
+         Dock / Cmd-Tab to use it. `CFBundleIconName` is the modern
+         equivalent for SwiftUI image-asset workflows, but the
+         legacy `CFBundleIconFile` is what every non-Xcode tooling
+         path still expects. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleSignature</key>

@@ -57,6 +57,18 @@ DMG_PATH="$DIST_DIR/$DMG_NAME"
 
 echo "→ Building $APP_NAME v$VERSION (build $BUILD_NUMBER)"
 
+# ─── Icon ──────────────────────────────────────────────────────────
+# Regenerate AppIcon.icns from the source PNG so a fresh
+# `assets/AppIcon-source.png` is always picked up. Cheap (~ms);
+# skipped silently if the .icns already exists and the source
+# hasn't changed since (mtime-based).
+if [ -f "assets/AppIcon-source.png" ]; then
+  if [ ! -f "assets/AppIcon.icns" ] || \
+     [ "assets/AppIcon-source.png" -nt "assets/AppIcon.icns" ]; then
+    "$REPO_ROOT/scripts/release/build-icon.sh"
+  fi
+fi
+
 # ─── Tool checks ───────────────────────────────────────────────────
 require() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -115,6 +127,15 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/Riven"      "$APP_BUNDLE/Contents/MacOS/Riven"
 cp "$BUILD_DIR/RivenAgent" "$APP_BUNDLE/Contents/MacOS/RivenAgent"
+
+# Drop the .icns into Contents/Resources/. Info.plist already
+# references `AppIcon` (without extension) via CFBundleIconFile, so
+# Finder + Dock + Cmd-Tab pick it up automatically. Skipped quietly
+# if the user hasn't generated one yet — the bundle stays valid,
+# just falls back to the generic .app icon.
+if [ -f "assets/AppIcon.icns" ]; then
+  cp "assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
 
 # SwiftPM emits the resource bundle as Riven_RivenCore.bundle —
 # carries the vendored rg + shell-integration tree. AgentLauncher
