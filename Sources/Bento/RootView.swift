@@ -259,6 +259,19 @@ struct BentoRootView: View {
                     controller.updateWorkspaceCwd(paneID: paneID, cwd: cwd)
                 }
             )
+            // #40 follow-up: opening a scratch editor inner tab used
+            // to grow the mainColumn past the viewport (status bar
+            // pushed off-screen) because the editor's STTextView
+            // intrinsic content height leaked up through SwiftUI's
+            // VStack sizing — even with `.frame(maxHeight: .infinity)`
+            // on EditorTabContent itself, the VStack still needed a
+            // sibling claiming the slack to anchor against. Pinning
+            // PaneGridView to maxHeight: .infinity tells the outer
+            // VStack "the pane area takes whatever's left after the
+            // chrome strip + banner + status bar," and the layout
+            // stays inside the window even when a brand-new scratch
+            // tab is doing its first layout pass.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             statusBar
         }
     }
