@@ -20,6 +20,25 @@ struct InnerTabStrip: View {
     /// down from the controller so each chip can render a "•" prefix
     /// when its tab contains any dirty editor surface.
     let dirtySurfaces: Set<SurfaceID>
+    /// H-2: SurfaceIDs whose backing file vanished underneath the
+    /// open buffer. Drives the "(missing)" suffix on the chip's
+    /// displayName when the tab's focused editor surface is in the
+    /// set.
+    let vanishedSurfaces: Set<SurfaceID>
+
+    init(
+        theme: ThemeSpec,
+        tabs: [WorkspaceInnerTab],
+        focusedID: TabID,
+        dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID> = []
+    ) {
+        self.theme = theme
+        self.tabs = tabs
+        self.focusedID = focusedID
+        self.dirtySurfaces = dirtySurfaces
+        self.vanishedSurfaces = vanishedSurfaces
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -31,7 +50,8 @@ struct InnerTabStrip: View {
                             tab: tab,
                             isActive: tab.id == focusedID,
                             canClose: tabs.count > 1,
-                            isDirty: tab.surfaces.contains(where: { dirtySurfaces.contains($0.id) })
+                            isDirty: tab.surfaces.contains(where: { dirtySurfaces.contains($0.id) }),
+                            isVanished: tab.surfaces.contains(where: { vanishedSurfaces.contains($0.id) })
                         )
                         Hairline(theme: theme, axis: .vertical)
                     }
@@ -52,6 +72,11 @@ private struct InnerTabChip: View {
     let isActive: Bool
     let canClose: Bool
     let isDirty: Bool
+    /// H-2: when true the chip appends " (missing)" to the
+    /// displayName so the strip surfaces the deleted-under-the-editor
+    /// state without needing a banner. The tab is still
+    /// closeable / focusable — this is a label-only treatment.
+    var isVanished: Bool = false
 
     @State private var isHovered = false
     @State private var isEditing = false
@@ -95,11 +120,9 @@ private struct InnerTabChip: View {
                 if isEditing {
                     inlineEditor
                 } else {
-                    Text(tab.displayName)
+                    Text(displayLabel)
                         .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
-                        .foregroundStyle(Color(hex: isActive
-                            ? theme.chrome.text.hex
-                            : theme.chrome.dimText.hex))
+                        .foregroundStyle(Color(hex: labelHex))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -173,6 +196,20 @@ private struct InnerTabChip: View {
         case .terminal: return "›_"
         case .editor: return "✎"
         }
+    }
+
+    /// Tab label with the H-2 "(missing)" suffix appended when the
+    /// underlying editor file was deleted / renamed under us.
+    private var displayLabel: String {
+        isVanished ? "\(tab.displayName) (missing)" : tab.displayName
+    }
+
+    /// Active = the standard text colour; vanished = the warning
+    /// tone (matches the editor toolbar treatment); otherwise the
+    /// usual dim text.
+    private var labelHex: String {
+        if isVanished { return theme.chrome.warning.hex }
+        return isActive ? theme.chrome.text.hex : theme.chrome.dimText.hex
     }
 
     private var inlineEditor: some View {

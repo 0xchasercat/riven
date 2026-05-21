@@ -30,6 +30,11 @@ struct PaneGridView: NSViewRepresentable {
     /// `BentoRootController.dirtyEditorSurfaces`; reaches the inner
     /// tab strip so it can render a "•" prefix on the relevant tab.
     let dirtySurfaces: Set<SurfaceID>
+    /// H-2: editor surfaces whose file vanished underneath the open
+    /// buffer (delete / rename). Sourced from
+    /// `BentoRootController.vanishedFileSurfaces`; reaches the inner
+    /// tab strip ("(missing)" suffix) + editor toolbar (Save disabled).
+    let vanishedSurfaces: Set<SurfaceID>
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (PaneID, String) -> Void
@@ -43,6 +48,7 @@ struct PaneGridView: NSViewRepresentable {
         brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
+        vanishedSurfaces: Set<SurfaceID> = [],
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
@@ -60,6 +66,7 @@ struct PaneGridView: NSViewRepresentable {
         self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
+        self.vanishedSurfaces = vanishedSurfaces
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
@@ -81,6 +88,7 @@ struct PaneGridView: NSViewRepresentable {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -103,6 +111,7 @@ struct PaneGridView: NSViewRepresentable {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -160,6 +169,7 @@ final class BentoPaneContainerView: NSView {
         let themeID: String
         let submitMode: CommandBarView.SubmitMode
         let dirtySurfaces: Set<SurfaceID>
+        let vanishedSurfaces: Set<SurfaceID>
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -231,6 +241,7 @@ final class BentoPaneContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         onGraphChange: @escaping (PaneGraph) -> Void,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
@@ -259,7 +270,8 @@ final class BentoPaneContainerView: NSView {
             agentClientID: agentClient.map { ObjectIdentifier($0) },
             themeID: theme.id,
             submitMode: submitMode,
-            dirtySurfaces: dirtySurfaces
+            dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces
         )
         if lastAppliedSnapshot == snapshot {
             return
@@ -286,6 +298,7 @@ final class BentoPaneContainerView: NSView {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -439,6 +452,7 @@ private struct PaneTreeBuilder {
     let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
+    let vanishedSurfaces: Set<SurfaceID>
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
     let onSplit: @MainActor (PaneID) -> Void
@@ -579,6 +593,7 @@ private struct PaneTreeBuilder {
                         brokerEpoch: brokerEpoch,
                         submitMode: submitMode,
                         dirtySurfaces: dirtySurfaces,
+                        vanishedSurfaces: vanishedSurfaces,
                         onOpenFile: onOpenFile,
                         onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )

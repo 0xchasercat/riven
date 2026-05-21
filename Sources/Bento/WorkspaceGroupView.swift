@@ -51,6 +51,10 @@ struct WorkspaceGroupView: View {
     /// Threaded down so the InnerTabStrip can render a "•" prefix
     /// without having to reach for the controller via env.
     let dirtySurfaces: Set<SurfaceID>
+    /// H-2: editor surfaces whose file vanished underneath the open
+    /// buffer. Threaded down to InnerTabStrip ("(missing)" suffix)
+    /// and EditorTabContent → EditorToolbar (Save disabled).
+    let vanishedSurfaces: Set<SurfaceID>
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -63,6 +67,7 @@ struct WorkspaceGroupView: View {
         brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
+        vanishedSurfaces: Set<SurfaceID> = [],
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (String) -> Void = { _ in },
         onCloseEditor: @escaping () -> Void = { }
@@ -80,6 +85,7 @@ struct WorkspaceGroupView: View {
         self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
+        self.vanishedSurfaces = vanishedSurfaces
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
     }
@@ -94,6 +100,7 @@ struct WorkspaceGroupView: View {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -121,6 +128,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
+    let vanishedSurfaces: Set<SurfaceID>
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -140,6 +148,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -157,6 +166,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -228,6 +238,7 @@ private final class WorkspaceContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -280,6 +291,7 @@ private final class WorkspaceContainerView: NSView {
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
+                vanishedSurfaces: vanishedSurfaces,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -295,6 +307,7 @@ private final class WorkspaceContainerView: NSView {
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
+                vanishedSurfaces: vanishedSurfaces,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -314,6 +327,7 @@ private final class WorkspaceContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -348,6 +362,7 @@ private final class WorkspaceContainerView: NSView {
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
+            vanishedSurfaces: vanishedSurfaces,
             fileMap: fileMap,
             onCwdChanged: onCwdChanged
         )
@@ -443,6 +458,7 @@ private final class WorkspaceContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -458,6 +474,7 @@ private final class WorkspaceContainerView: NSView {
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
+                vanishedSurfaces: vanishedSurfaces,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -493,6 +510,7 @@ private final class WorkspaceContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
@@ -505,6 +523,7 @@ private final class WorkspaceContainerView: NSView {
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
+                vanishedSurfaces: vanishedSurfaces,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -555,6 +574,7 @@ private final class WorkspaceContainerView: NSView {
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
+        vanishedSurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
@@ -564,7 +584,8 @@ private final class WorkspaceContainerView: NSView {
                 theme: theme,
                 tabs: workspace.tabs,
                 focusedID: workspace.focusedTabID,
-                dirtySurfaces: dirtySurfaces
+                dirtySurfaces: dirtySurfaces,
+                vanishedSurfaces: vanishedSurfaces
             )
             Hairline(theme: theme)
             tabContent(
@@ -573,6 +594,7 @@ private final class WorkspaceContainerView: NSView {
                 workspace: workspace,
                 agentClient: agentClient,
                 fileMap: fileMap,
+                vanishedSurfaces: vanishedSurfaces,
                 onCwdChanged: onCwdChanged
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -606,6 +628,7 @@ private final class WorkspaceContainerView: NSView {
         workspace: WorkspaceGroup,
         agentClient: AgentClient,
         fileMap: PaneFileMap,
+        vanishedSurfaces: Set<SurfaceID>,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
         // The tab's surface tree is rendered recursively. A single-
@@ -617,6 +640,7 @@ private final class WorkspaceContainerView: NSView {
             tab: tab,
             agentClient: agentClient,
             fileMap: fileMap,
+            vanishedSurfaces: vanishedSurfaces,
             onCwdChanged: onCwdChanged
         )
     }
@@ -652,7 +676,24 @@ struct TabLayoutView: View {
     let tab: WorkspaceInnerTab
     let agentClient: AgentClient
     let fileMap: PaneFileMap
+    let vanishedSurfaces: Set<SurfaceID>
     let onCwdChanged: (String) -> Void
+
+    init(
+        theme: ThemeSpec,
+        tab: WorkspaceInnerTab,
+        agentClient: AgentClient,
+        fileMap: PaneFileMap,
+        vanishedSurfaces: Set<SurfaceID> = [],
+        onCwdChanged: @escaping (String) -> Void
+    ) {
+        self.theme = theme
+        self.tab = tab
+        self.agentClient = agentClient
+        self.fileMap = fileMap
+        self.vanishedSurfaces = vanishedSurfaces
+        self.onCwdChanged = onCwdChanged
+    }
 
     var body: some View {
         renderLayout(tab.layout)
@@ -677,6 +718,7 @@ struct TabLayoutView: View {
                         tabCwd: tab.cwd,
                         agentClient: agentClient,
                         fileMap: fileMap,
+                        isVanished: vanishedSurfaces.contains(surface.id),
                         // Only the focused surface gets the cwd-change
                         // callback wired through; other surfaces still
                         // emit OSC 7 events that update their own
@@ -740,6 +782,10 @@ private struct SurfaceLeafView: View {
     let tabCwd: String
     let agentClient: AgentClient
     let fileMap: PaneFileMap
+    /// H-2: true when the editor surface's backing file has been
+    /// deleted / renamed. Used to disable the toolbar's Save and
+    /// surface a "(missing)" hint to the user.
+    let isVanished: Bool
     let onCwdChanged: (String) -> Void
 
     @State private var isHovered = false
@@ -816,7 +862,8 @@ private struct SurfaceLeafView: View {
                 tabID: tabID,
                 surfaceID: surface.id,
                 path: path,
-                fileMap: fileMap
+                fileMap: fileMap,
+                isVanished: isVanished
             )
         }
     }
@@ -902,8 +949,28 @@ private struct EditorTabContent: View {
     let surfaceID: SurfaceID
     let path: String?
     @ObservedObject var fileMap: PaneFileMap
+    /// H-2: true when the editor's file has been deleted / renamed
+    /// underneath. Threaded into EditorToolbar so Save can be
+    /// disabled + tooltipped appropriately.
+    let isVanished: Bool
 
     @State private var isDirty: Bool = false
+
+    init(
+        theme: ThemeSpec,
+        tabID: TabID,
+        surfaceID: SurfaceID,
+        path: String?,
+        fileMap: PaneFileMap,
+        isVanished: Bool = false
+    ) {
+        self.theme = theme
+        self.tabID = tabID
+        self.surfaceID = surfaceID
+        self.path = path
+        self.fileMap = fileMap
+        self.isVanished = isVanished
+    }
 
     /// Stable virtual paneID — `editor-tab-<tab>-<surface>`. Survives
     /// focus changes because both the tab id and the surface id
@@ -919,7 +986,8 @@ private struct EditorTabContent: View {
                 theme: theme,
                 surfaceID: surfaceID,
                 isDirty: isDirty,
-                path: path
+                path: path,
+                isVanished: isVanished
             )
             Hairline(theme: theme)
             EditorPaneView(
@@ -994,6 +1062,14 @@ private struct EditorToolbar: View {
     let surfaceID: SurfaceID
     let isDirty: Bool
     let path: String?
+    /// H-2: when true, the file backing this editor was deleted /
+    /// renamed under us. Save is disabled (writing to the old path
+    /// would re-create a phantom file under the deleted name); the
+    /// label gets a "(missing)" suffix to signal the state to the
+    /// user. TODO: wire a Save-As flow so users can still rescue the
+    /// unsaved buffer to a new path; for now Save just becomes a
+    /// no-op with an explanatory tooltip.
+    var isVanished: Bool = false
 
     @State private var isSaveHovered = false
     @State private var isUndoHovered = false
@@ -1010,9 +1086,14 @@ private struct EditorToolbar: View {
                     .opacity(isDirty ? 1 : 0)
                 Text(filenameLabel)
                     .font(BentoType.mono(BentoType.small, weight: isDirty ? .semibold : .regular))
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+                    .foregroundStyle(Color(hex: filenameHex))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if isVanished {
+                    Text("(missing)")
+                        .font(BentoType.mono(BentoType.small, weight: .regular))
+                        .foregroundStyle(Color(hex: theme.chrome.warning.hex))
+                }
             }
             Spacer(minLength: BentoSpacing.s)
             // Undo button — posts via NotificationCenter so the
@@ -1029,15 +1110,17 @@ private struct EditorToolbar: View {
                     object: surfaceID
                 )
             }
-            // Save button — disabled when buffer is clean. Same
-            // path the close-prompt uses (`.bentoSaveSurface`) so
-            // there's exactly one save code path.
+            // Save button — disabled when buffer is clean OR when
+            // the backing file vanished underneath us. Same path the
+            // close-prompt uses (`.bentoSaveSurface`).
             ToolbarIconButton(
                 theme: theme,
                 glyph: "⌘S",
-                tooltip: "Save (⌘S)",
+                tooltip: isVanished
+                    ? "File no longer exists — use Save As (coming soon)"
+                    : "Save (⌘S)",
                 isHovered: $isSaveHovered,
-                isEnabled: isDirty
+                isEnabled: isDirty && !isVanished
             ) {
                 NotificationCenter.default.post(
                     name: .bentoSaveSurface,
@@ -1053,6 +1136,14 @@ private struct EditorToolbar: View {
     private var filenameLabel: String {
         guard let path, !path.isEmpty else { return "Untitled" }
         return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    /// Highlight the filename in the warning tone when the file
+    /// vanished so the toolbar reads as visually "uh oh" without
+    /// needing a banner. Falls back to the normal dim text when the
+    /// file is intact.
+    private var filenameHex: String {
+        isVanished ? theme.chrome.warning.hex : theme.chrome.dimText.hex
     }
 }
 

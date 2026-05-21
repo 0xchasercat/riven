@@ -34,6 +34,15 @@ final class BentoRootController: ObservableObject {
     /// prefix, editor toolbar save-enabled state) read from this
     /// directly.
     @Published private(set) var dirtyEditorSurfaces: Set<SurfaceID> = []
+    /// H-2: editor surfaces whose backing file has been deleted /
+    /// renamed underneath the open buffer. Updated by the editor
+    /// coordinator's file watcher via `.bentoEditorFileVanished` /
+    /// `.bentoEditorFileRestored`. UI consumers:
+    ///   * `EditorToolbar` disables Save + shows a tooltip when the
+    ///     surface is here.
+    ///   * `InnerTabStrip` / `InnerTabChip` append "(missing)" to the
+    ///     displayName.
+    @Published private(set) var vanishedFileSurfaces: Set<SurfaceID> = []
     /// Window-global command history. Each command bar submit
     /// appends here, and the up/down arrows in any command bar walk
     /// through the entries. Scoped to the controller (one history
@@ -86,9 +95,71 @@ final class BentoRootController: ObservableObject {
     /// to rebuild against the new one. We bump `brokerEpoch` so views
     /// that key off it (`PaneGridView`, terminal tab content) tear down
     /// their cached NSViews and ask SwiftUI for a fresh build.
+    ///
+    /// H-5: when this fires for a **respawn** (epoch goes 1 → 2 → …,
+    /// i.e. not the initial connect), we capture the focused pane +
+    /// surface BEFORE the bump and re-apply them via a deferred
+    /// `.bentoBrokerRespawned` post AFTER the SwiftUI tree has had a
+    /// runloop tick to rebuild against the fresh client. Without this,
+    /// the cached-host teardown the epoch bump triggers can leave
+    /// AppKit first-responder pointed at whichever surface SwiftUI
+    /// happened to mount first.
     func attachAgentClient(_ client: AgentClient) {
+        // Initial connect has no prior focus to preserve; only the
+        // respawn path needs the restore dance.
+        let isRespawn = brokerEpoch > 0
+        let preservedFocus = preservedSurfaceFocus()
         self.agentClient = client
         self.brokerEpoch &+= 1
+        guard isRespawn else { return }
+
+        // Hop the focus restore to the next runloop tick so the
+        // SwiftUI tree has rebuilt against the new agentClient +
+        // brokerEpoch first. Re-applying focus immediately would race
+        // against the teardown of the old hosting controllers and
+        // either no-op or leave AppKit pointed at a stale view.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.restorePreservedFocus(preservedFocus)
+            NotificationCenter.default.post(name: .bentoBrokerRespawned, object: nil)
+        }
+    }
+
+    /// Snapshot of the user's pre-respawn focus position. Pair of
+    /// (workspace pane id, optional inner surface focus). Used by
+    /// `attachAgentClient` to restore exactly where the user was after
+    /// the broker respawn rebuilds the view tree.
+    private struct PreservedFocus {
+        let paneID: PaneID
+        let tabFocus: (tabID: TabID, surfaceID: SurfaceID)?
+    }
+
+    private func preservedSurfaceFocus() -> PreservedFocus {
+        let paneID = state.paneGraph.focusedPaneID
+        if let workspace = state.paneGraph.pane(paneID)?.workspace {
+            let tab = workspace.focusedTab
+            return PreservedFocus(
+                paneID: paneID,
+                tabFocus: (tab.id, tab.focusedSurfaceID)
+            )
+        }
+        return PreservedFocus(paneID: paneID, tabFocus: nil)
+    }
+
+    private func restorePreservedFocus(_ preserved: PreservedFocus) {
+        // Re-apply the pane-graph focus first. If the focused pane
+        // already matches (typical case), `focus(...)` no-ops.
+        let next = state.paneGraph.focus(preserved.paneID)
+        if next != state.paneGraph {
+            recordPaneGraph(next)
+        }
+        // If we were inside a workspace, also re-apply the inner-tab
+        // surface focus so the visible accent border + the
+        // command-bar target route to the surface the user had
+        // before the respawn.
+        if let tabFocus = preserved.tabFocus {
+            focusSurface(tabID: tabFocus.tabID, surfaceID: tabFocus.surfaceID)
+        }
     }
 
     /// Open `url` in the focused workspace as an editor tab.
@@ -468,11 +539,107 @@ final class BentoRootController: ObservableObject {
         }
     }
 
+    /// H-2: mirror the editor coordinator's file-watcher signals. The
+    /// view-tree consumers read from `vanishedFileSurfaces` to render
+    /// the "(missing)" affordance and disable Save.
+    func markSurfaceVanished(_ surfaceID: SurfaceID) {
+        if !vanishedFileSurfaces.contains(surfaceID) {
+            vanishedFileSurfaces.insert(surfaceID)
+        }
+    }
+
+    func clearSurfaceVanished(_ surfaceID: SurfaceID) {
+        vanishedFileSurfaces.remove(surfaceID)
+    }
+
     /// Filter `tab.surfaces` down to the editor surfaces currently
     /// tracked as dirty. Used by the close-prompt to decide whether
     /// to show the alert + which filenames to list.
     private func dirtySurfacesIn(_ tab: WorkspaceInnerTab) -> [TabSurface] {
         tab.surfaces.filter { dirtyEditorSurfaces.contains($0.id) }
+    }
+
+    /// Walk every workspace + tab + surface in `state` and collect the
+    /// display filenames for editor surfaces whose ids appear in
+    /// `dirtyEditorSurfaces`. Used by the quit-prompt (H-1) to list
+    /// "you have unsaved changes in N file(s)" with each file enumerated.
+    ///
+    /// Thin wrapper over `WorkspaceState.dirtyEditorFilenames(in:)` —
+    /// the actual enumeration lives in BentoCore so it can be unit-
+    /// tested without instantiating the @MainActor controller (which
+    /// does file I/O at init).
+    func dirtyFilenames() -> [String] {
+        state.dirtyEditorFilenames(in: dirtyEditorSurfaces)
+    }
+
+    /// Outcome of the H-1 quit prompt. Surfaces the user's choice to
+    /// the AppDelegate as a small enum so the delegate doesn't have to
+    /// know about `NSAlert` button-return codes.
+    enum QuitDecision {
+        /// No dirty buffers, or the user picked "Don't Save". Caller
+        /// should return `.terminateNow`.
+        case quitNow
+        /// User picked "Save All". The controller has already posted
+        /// `.bentoSaveSurface` for every dirty surface; caller should
+        /// return `.terminateNow` once those posts have propagated.
+        case savedAllAndQuit
+        /// User picked "Cancel". Caller should return `.terminateCancel`.
+        case cancel
+    }
+
+    /// Run the H-1 modal alert if any editor surface is dirty. Returns
+    /// `.quitNow` synchronously when there's nothing to save. Otherwise
+    /// blocks on the alert (which is fine — quit is a discrete user
+    /// action) and resolves to one of the three `QuitDecision` cases.
+    ///
+    /// Save All posts `.bentoSaveSurface` for each dirty surface; the
+    /// editor coordinators observe the notification on the main thread
+    /// and write to disk synchronously before returning. By the time
+    /// the post call returns, the buffers are on disk.
+    @discardableResult
+    func handleQuitDirtyCheck() -> QuitDecision {
+        let filenames = dirtyFilenames()
+        if filenames.isEmpty { return .quitNow }
+
+        switch promptForQuit(filenames: filenames) {
+        case .cancel:
+            return .cancel
+        case .dontSave:
+            return .quitNow
+        case .save:
+            for surfaceID in dirtyEditorSurfaces {
+                NotificationCenter.default.post(
+                    name: .bentoSaveSurface,
+                    object: surfaceID
+                )
+            }
+            return .savedAllAndQuit
+        }
+    }
+
+    /// Modal "you have unsaved changes" alert specifically for the
+    /// app-quit path (H-1). Same three-button shape as the per-tab
+    /// close prompt but with copy that reads as "quitting the whole
+    /// app" rather than "closing this tab".
+    private func promptForQuit(filenames: [String]) -> DirtyCloseChoice {
+        let alert = NSAlert()
+        switch filenames.count {
+        case 1:
+            alert.messageText = "Save changes to “\(filenames[0])” before quitting?"
+            alert.informativeText = "Your edits will be lost otherwise."
+        default:
+            alert.messageText = "You have unsaved changes in \(filenames.count) file\(filenames.count == 1 ? "" : "s")."
+            alert.informativeText = filenames.map { "• \($0)" }.joined(separator: "\n")
+        }
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save All")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .dontSave
+        default: return .cancel
+        }
     }
 
     private enum DirtyCloseChoice { case save, dontSave, cancel }
@@ -673,6 +840,14 @@ final class BentoRootController: ObservableObject {
     func toggleSubmitsOnEnter() {
         preference.toggleSubmitsOnEnter()
         submitsOnEnter = preference.submitsOnEnter
+    }
+
+    /// Clear `state.projectFallbackReason` after the user acknowledges
+    /// the "project moved or deleted" banner. The cwd we landed in
+    /// (`~`) stays put — only the banner copy goes away.
+    func dismissProjectFallbackReason() {
+        guard state.projectFallbackReason != nil else { return }
+        state.projectFallbackReason = nil
     }
 
     /// Cycle to the next built-in theme. Wired through `CommandAction.cycleTheme`.
