@@ -1407,7 +1407,24 @@ private struct CommandBarBand: View {
 /// hairline colour so the workspace reads as one coherent surface rather
 /// than three disconnected boxes. The colour follows the active theme so
 /// switching themes mid-session repaints the divider too.
-private final class RivenWorkspaceSplitView: NSSplitView {
+private final class RivenWorkspaceSplitView: NSSplitView, NSSplitViewDelegate {
+    /// Hard floor for the sidebar pane: even the collapsed icon
+    /// rail keeps a 48-pt-wide hit target so the user can always
+    /// see + click the expand chevron. AppKit's default lets the
+    /// user drag the divider all the way to 0 — once the sidebar
+    /// is hidden there's no visible affordance to drag it back.
+    /// This is the contract the user articulated: there should be
+    /// no scenario where the sidebar is collapsed to the point of
+    /// not being visible.
+    static let sidebarMinimumWidth: CGFloat = 48
+
+    /// Mirror floor for the tab area so a user dragging the
+    /// divider all the way RIGHT doesn't hide the terminal. 48 pt
+    /// is just enough to render the close-tab × + a few chars of
+    /// label — a "rescue" affordance, not a comfortable working
+    /// width, but it keeps the gesture reversible.
+    static let tabAreaMinimumWidth: CGFloat = 48
+
     var theme: ThemeSpec {
         didSet { needsDisplay = true }
     }
@@ -1415,6 +1432,10 @@ private final class RivenWorkspaceSplitView: NSSplitView {
     init(theme: ThemeSpec) {
         self.theme = theme
         super.init(frame: .zero)
+        // Self-delegate: the split view's two `splitView(_:constrain*)`
+        // delegate methods clamp the divider drag range so neither
+        // pane can be crushed below the rescue width above.
+        self.delegate = self
     }
 
     @available(*, unavailable)
@@ -1427,6 +1448,34 @@ private final class RivenWorkspaceSplitView: NSSplitView {
     }
 
     override var dividerThickness: CGFloat { 1 }
+
+    // MARK: NSSplitViewDelegate
+
+    /// Minimum divider position (i.e. the smallest the left/sidebar
+    /// pane can shrink to). Called continuously during drag and
+    /// also during programmatic `setPosition(_:ofDividerAt:)`, so
+    /// this is the SINGLE place that enforces the "sidebar always
+    /// visible" invariant.
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        guard dividerIndex == 0 else { return proposedMinimumPosition }
+        return max(proposedMinimumPosition, Self.sidebarMinimumWidth)
+    }
+
+    /// Maximum divider position (i.e. the largest the left/sidebar
+    /// pane can grow to before the right pane hits its own floor).
+    /// We back off `tabAreaMinimumWidth` from the right edge.
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        guard dividerIndex == 0 else { return proposedMaximumPosition }
+        return min(proposedMaximumPosition, splitView.bounds.width - Self.tabAreaMinimumWidth)
+    }
 }
 
 // MARK: - Sidebar (workspace-scoped)
