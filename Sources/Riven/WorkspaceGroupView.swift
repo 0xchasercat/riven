@@ -1667,19 +1667,57 @@ private struct WorkspaceSidebarView: View {
         // ProjectFileTree.scan is synchronous file I/O; hop off the main
         // actor for the scan, then publish back. Catching is important —
         // a missing or unreadable cwd shouldn't take the workspace down.
+        // Two-phase load with stale-while-revalidate semantics:
+        //
+        //   1. Synchronous cache lookup — render the previously-
+        //      scanned tree immediately so the sidebar updates with
+        //      zero I/O latency on every `cd`. The home-directory
+        //      case (depth-3 walk of ~/ with thousands of entries)
+        //      used to take several hundred ms per navigation;
+        //      cached it's instant.
+        //
+        //   2. Background refresh — always runs after surfacing the
+        //      cache hit. Picks up filesystem changes since the
+        //      last scan (new files, `git checkout` swaps, etc.).
+        //      The view updates again when the fresh scan lands.
+        //
+        // On a cache miss the foreground path is what we had
+        // before: hop off the main actor for the scan, then
+        // publish back.
         let url = URL(fileURLWithPath: cwd)
+        let cache = ProjectFileTreeCache.shared
+
+        let hadCacheHit: Bool
+        if let cached = await cache.snapshot(for: cwd) {
+            await MainActor.run {
+                self.tree = cached
+                self.loadError = nil
+            }
+            hadCacheHit = true
+        } else {
+            hadCacheHit = false
+        }
+
+        // Background revalidate. Errors during refresh on a cache
+        // hit are silent — the user is already seeing valid
+        // content, surfacing a transient error would be noise. On
+        // cache miss they populate `loadError` so the empty
+        // sidebar explains itself.
         do {
             let scanned = try await Task.detached(priority: .userInitiated) {
                 try ProjectFileTree.scan(root: url, maxDepth: 3)
             }.value
+            await cache.store(scanned, for: cwd)
             await MainActor.run {
                 self.tree = scanned
                 self.loadError = nil
             }
         } catch {
-            await MainActor.run {
-                self.tree = nil
-                self.loadError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
+            if !hadCacheHit {
+                await MainActor.run {
+                    self.tree = nil
+                    self.loadError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
+                }
             }
         }
     }
