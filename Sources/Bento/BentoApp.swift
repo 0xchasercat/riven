@@ -363,6 +363,29 @@ extension Notification.Name {
     /// an NSNumber). RootView routes to
     /// `controller.sendByteToFocusedTerminal`.
     static let bentoSendCtrlByte = Notification.Name("BentoSendCtrlByte")
+    /// Posted by the controller when closing a tab/surface with a
+    /// dirty editor and the user picks "Save" in the prompt. Object
+    /// is the SurfaceID. EditorTabContent observes this; the matching
+    /// editor's coordinator runs its save synchronously before the
+    /// close proceeds.
+    static let bentoSaveSurface = Notification.Name("BentoSaveSurface")
+    /// Posted by the editor toolbar's Undo button. Object is the
+    /// SurfaceID. The matching editor's coordinator triggers
+    /// `textView.undoManager?.undo()`. Cmd+Z still works via the
+    /// standard Edit menu; this is the button-driven path.
+    static let bentoUndoSurface = Notification.Name("BentoUndoSurface")
+    /// Posted by EditorTabContent whenever its underlying buffer's
+    /// dirty flag flips. Object is an `EditorDirtyChange` payload.
+    /// RootView routes to `controller.setSurfaceDirty(_:, dirty:)`.
+    static let bentoEditorDirtyChanged = Notification.Name("BentoEditorDirtyChanged")
+}
+
+/// Payload for `.bentoEditorDirtyChanged`. Equatable so the value can
+/// sit in `@State` without ceremony and so NotificationCenter doesn't
+/// trip over `Any?` shape inference.
+struct EditorDirtyChange: Equatable {
+    let surfaceID: SurfaceID
+    let isDirty: Bool
 }
 
 /// Carries a `(tabID, surfaceID)` pair as an `Any?` object payload

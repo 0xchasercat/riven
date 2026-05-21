@@ -19,6 +19,13 @@ import SwiftUI
 struct EditorPaneView: View {
     let theme: ThemeSpec
     let paneID: PaneID
+    /// Tab-surface identity. When non-nil, the underlying coordinator
+    /// listens for `.bentoSaveSurface` / `.bentoUndoSurface`
+    /// notifications carrying this id and dispatches the save / undo
+    /// internally. Legacy callers (PaneGridView's `.editor` leaf in
+    /// the old single-tab-per-pane model) pass nil and rely solely on
+    /// Cmd+S via the responder chain.
+    let surfaceID: SurfaceID?
     @ObservedObject var fileMap: PaneFileMap
     @Binding var isDirty: Bool
 
@@ -28,11 +35,13 @@ struct EditorPaneView: View {
     init(
         theme: ThemeSpec,
         paneID: PaneID,
+        surfaceID: SurfaceID? = nil,
         fileMap: PaneFileMap,
         isDirty: Binding<Bool> = .constant(false)
     ) {
         self.theme = theme
         self.paneID = paneID
+        self.surfaceID = surfaceID
         self.fileMap = fileMap
         self._isDirty = isDirty
     }
@@ -42,6 +51,7 @@ struct EditorPaneView: View {
             theme: theme,
             openFile: fileMap.binding(for: paneID),
             isDirty: $isDirty,
+            surfaceID: surfaceID,
             onSaveResult: handleSaveResult
         )
         .overlay(alignment: .top) {
@@ -143,10 +153,15 @@ struct STTextEditorRepresentable: NSViewRepresentable {
     let theme: ThemeSpec
     @Binding var openFile: URL?
     @Binding var isDirty: Bool
+    let surfaceID: SurfaceID?
     let onSaveResult: (Result<Void, Error>) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(isDirty: $isDirty, onSaveResult: onSaveResult)
+        Coordinator(
+            isDirty: $isDirty,
+            onSaveResult: onSaveResult,
+            surfaceID: surfaceID
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -233,10 +248,62 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         private let isDirtyBinding: Binding<Bool>
         private var onSaveResult: (Result<Void, Error>) -> Void
         private var loadFailureMessage: String?
+        /// When non-nil, this coordinator listens for
+        /// `.bentoSaveSurface` / `.bentoUndoSurface` notifications
+        /// whose payload matches and dispatches the corresponding
+        /// action. Lets the editor toolbar's Save / Undo buttons + the
+        /// controller's close-prompt fire save without holding a
+        /// reference to the coordinator.
+        private let surfaceID: SurfaceID?
+        /// `nonisolated(unsafe)` so the nonisolated deinit can remove
+        /// them without a MainActor hop. NotificationCenter's
+        /// `removeObserver` is documented to be thread-safe.
+        private nonisolated(unsafe) var saveObserver: Any?
+        private nonisolated(unsafe) var undoObserver: Any?
 
-        init(isDirty: Binding<Bool>, onSaveResult: @escaping (Result<Void, Error>) -> Void) {
+        init(
+            isDirty: Binding<Bool>,
+            onSaveResult: @escaping (Result<Void, Error>) -> Void,
+            surfaceID: SurfaceID? = nil
+        ) {
             self.isDirtyBinding = isDirty
             self.onSaveResult = onSaveResult
+            self.surfaceID = surfaceID
+            super.init()
+            attachSurfaceObserversIfNeeded()
+        }
+
+        deinit {
+            if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) }
+            if let undoObserver { NotificationCenter.default.removeObserver(undoObserver) }
+        }
+
+        private func attachSurfaceObserversIfNeeded() {
+            guard let surfaceID else { return }
+            saveObserver = NotificationCenter.default.addObserver(
+                forName: .bentoSaveSurface,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let self,
+                      let id = note.object as? SurfaceID,
+                      id == surfaceID else { return }
+                MainActor.assumeIsolated {
+                    self.save()
+                }
+            }
+            undoObserver = NotificationCenter.default.addObserver(
+                forName: .bentoUndoSurface,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let self,
+                      let id = note.object as? SurfaceID,
+                      id == surfaceID else { return }
+                MainActor.assumeIsolated {
+                    self.textView?.undoManager?.undo()
+                }
+            }
         }
 
         func attach(textView: EditorTextView) {

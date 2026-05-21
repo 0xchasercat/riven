@@ -27,6 +27,13 @@ final class BentoRootController: ObservableObject {
     /// the moment the user toggles via the palette. `false` (default) =
     /// Enter inserts a newline, Cmd+Enter submits — Slack/Claude pattern.
     @Published private(set) var submitsOnEnter: Bool = false
+    /// Set of editor surfaces with unsaved changes. Updated by
+    /// EditorTabContent via `setSurfaceDirty(_:, dirty:)` whenever
+    /// its underlying EditorBuffer's `isDirty` flips. Views that
+    /// need to display the dirty indicator (inner tab strip "•"
+    /// prefix, editor toolbar save-enabled state) read from this
+    /// directly.
+    @Published private(set) var dirtyEditorSurfaces: Set<SurfaceID> = []
 
     init() {
         let support = FileManager.default
@@ -283,13 +290,43 @@ final class BentoRootController: ObservableObject {
     /// last inner tab, no-op — the workspace always has at least one
     /// terminal. If the closed tab was focused, focus moves to a
     /// neighbour.
+    ///
+    /// When the tab contains a dirty editor surface, an NSAlert
+    /// prompts the user to save / discard / cancel before closing.
+    /// Cancel aborts the close; Save sends a `.bentoSaveSurface`
+    /// notification (the editor's coordinator picks it up
+    /// synchronously and writes to disk) before proceeding; Don't
+    /// Save proceeds without saving.
     func closeInnerTab(_ id: TabID) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace else {
+              let workspace = pane.workspace,
+              let tab = workspace.tabs.first(where: { $0.id == id }) else {
             return
+        }
+        let dirty = dirtySurfacesIn(tab)
+        if !dirty.isEmpty {
+            switch promptForDirtyClose(filenames: dirty.compactMap(\.filename)) {
+            case .cancel: return
+            case .save:
+                for surface in dirty {
+                    NotificationCenter.default.post(
+                        name: .bentoSaveSurface,
+                        object: surface.id
+                    )
+                }
+            case .dontSave:
+                break
+            }
         }
         let updated = workspace.removingTab(id)
         guard updated != workspace else { return }
+        // Drop dirty tracking for surfaces inside the closed tab so
+        // we don't carry stale state if a new tab reuses an id later
+        // (UUIDs make collisions vanishingly rare but the cleanup is
+        // free).
+        for surface in tab.surfaces {
+            dirtyEditorSurfaces.remove(surface.id)
+        }
         pane.kind = .workspace(updated)
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
@@ -354,13 +391,82 @@ final class BentoRootController: ObservableObject {
     /// have their only surface closed via this path — close the whole
     /// tab via `closeInnerTab` instead. If the closed surface was the
     /// focused one, focus shifts to a neighbour.
+    ///
+    /// If the surface is a dirty editor, prompts (same alert flow as
+    /// `closeInnerTab`).
     func closeSurface(tabID: TabID, surfaceID: SurfaceID) {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace else { return }
+              let workspace = pane.workspace,
+              let tab = workspace.tabs.first(where: { $0.id == tabID }),
+              let surface = tab.surfaces.first(where: { $0.id == surfaceID }) else { return }
+        if dirtyEditorSurfaces.contains(surfaceID) {
+            switch promptForDirtyClose(filenames: [surface.filename].compactMap { $0 }) {
+            case .cancel: return
+            case .save:
+                NotificationCenter.default.post(
+                    name: .bentoSaveSurface,
+                    object: surfaceID
+                )
+            case .dontSave:
+                break
+            }
+        }
         let updated = workspace.removingSurface(tabID: tabID, surfaceID: surfaceID)
         guard updated != workspace else { return }
+        dirtyEditorSurfaces.remove(surfaceID)
         pane.kind = .workspace(updated)
         recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Mark / clear a surface's dirty state. EditorTabContent's
+    /// dirty binding writes here whenever its EditorBuffer flips.
+    func setSurfaceDirty(_ surfaceID: SurfaceID, dirty: Bool) {
+        if dirty {
+            if !dirtyEditorSurfaces.contains(surfaceID) {
+                dirtyEditorSurfaces.insert(surfaceID)
+            }
+        } else {
+            dirtyEditorSurfaces.remove(surfaceID)
+        }
+    }
+
+    /// Filter `tab.surfaces` down to the editor surfaces currently
+    /// tracked as dirty. Used by the close-prompt to decide whether
+    /// to show the alert + which filenames to list.
+    private func dirtySurfacesIn(_ tab: WorkspaceInnerTab) -> [TabSurface] {
+        tab.surfaces.filter { dirtyEditorSurfaces.contains($0.id) }
+    }
+
+    private enum DirtyCloseChoice { case save, dontSave, cancel }
+
+    /// Modal NSAlert for the "you have unsaved changes" prompt.
+    /// Returns the user's choice (Save / Don't Save / Cancel). Modal
+    /// presentation is fine here — close is a discrete user action
+    /// that's expected to block until they resolve the conflict.
+    private func promptForDirtyClose(filenames: [String]) -> DirtyCloseChoice {
+        let alert = NSAlert()
+        switch filenames.count {
+        case 0:
+            // Should only happen if we lost track of which file was
+            // dirty — fall back to the generic prompt.
+            alert.messageText = "Save changes before closing?"
+            alert.informativeText = "Your edits will be lost otherwise."
+        case 1:
+            alert.messageText = "Save changes to “\(filenames[0])” before closing?"
+            alert.informativeText = "Your edits will be lost otherwise."
+        default:
+            alert.messageText = "Save changes to \(filenames.count) files before closing?"
+            alert.informativeText = filenames.map { "• \($0)" }.joined(separator: "\n")
+        }
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .dontSave
+        default: return .cancel
+        }
     }
 
     /// Rename a workspace tab (the top strip). Empty / whitespace input

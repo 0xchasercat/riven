@@ -76,6 +76,9 @@ struct BentoRootView: View {
             onCycleSurfaceFocus: { controller.cycleFocusedTabSurface() },
             onSendCtrlByte: { byte in
                 controller.sendByteToFocusedTerminal(byte)
+            },
+            onEditorDirtyChanged: { change in
+                controller.setSurfaceDirty(change.surfaceID, dirty: change.isDirty)
             }
         ))
         // Auto-open the trust prompt the first time we see a project
@@ -161,6 +164,7 @@ struct BentoRootView: View {
                 agentClient: controller.agentClient,
                 brokerEpoch: controller.brokerEpoch,
                 submitMode: controller.submitsOnEnter ? .enterSubmits : .enterIsNewline,
+                dirtySurfaces: controller.dirtyEditorSurfaces,
                 onGraphChange: { controller.recordPaneGraph($0) },
                 onOpenFile: { controller.openFile($0) },
                 onCwdChanged: { paneID, cwd in
@@ -483,6 +487,7 @@ private struct NotificationWiring: ViewModifier {
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
+    let onEditorDirtyChanged: (EditorDirtyChange) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -491,7 +496,8 @@ private struct NotificationWiring: ViewModifier {
                 onFocusSurface: onFocusSurface,
                 onCloseSurface: onCloseSurface,
                 onCycleSurfaceFocus: onCycleSurfaceFocus,
-                onSendCtrlByte: onSendCtrlByte
+                onSendCtrlByte: onSendCtrlByte,
+                onEditorDirtyChanged: onEditorDirtyChanged
             ))
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
@@ -524,6 +530,7 @@ private struct SurfaceWiring: ViewModifier {
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
+    let onEditorDirtyChanged: (EditorDirtyChange) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -541,6 +548,9 @@ private struct SurfaceWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoSendCtrlByte)) { note in
                 if let n = note.object as? NSNumber { onSendCtrlByte(n.uint8Value) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorDirtyChanged)) { note in
+                if let change = note.object as? EditorDirtyChange { onEditorDirtyChanged(change) }
             }
     }
 }

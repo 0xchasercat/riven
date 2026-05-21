@@ -618,6 +618,14 @@ public struct TabSurface: Hashable, Codable, Sendable, Identifiable {
         self.id = id
         self.kind = kind
     }
+
+    /// Display-friendly filename for editor surfaces (used by the
+    /// close-prompt to name the file being saved). `nil` when the
+    /// surface is a terminal OR an unsaved scratch editor.
+    public var filename: String? {
+        guard case let .editor(path) = kind, let path else { return nil }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
 }
 
 /// Stable identifier for surfaces (panes inside a tab). Same shape as

@@ -26,6 +26,10 @@ struct PaneGridView: NSViewRepresentable {
     /// Which key submits the command bar. Sourced from
     /// `BentoRootController.submitsOnEnter`.
     let submitMode: CommandBarView.SubmitMode
+    /// Editor surfaces with unsaved changes. Sourced from
+    /// `BentoRootController.dirtyEditorSurfaces`; reaches the inner
+    /// tab strip so it can render a "•" prefix on the relevant tab.
+    let dirtySurfaces: Set<SurfaceID>
     let onGraphChange: (PaneGraph) -> Void
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (PaneID, String) -> Void
@@ -38,6 +42,7 @@ struct PaneGridView: NSViewRepresentable {
         agentClient: AgentClient?,
         brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
+        dirtySurfaces: Set<SurfaceID> = [],
         onGraphChange: @escaping (PaneGraph) -> Void = { _ in },
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (PaneID, String) -> Void = { _, _ in },
@@ -54,6 +59,7 @@ struct PaneGridView: NSViewRepresentable {
         self.agentClient = agentClient
         self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
+        self.dirtySurfaces = dirtySurfaces
         self.onGraphChange = onGraphChange
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
@@ -74,6 +80,7 @@ struct PaneGridView: NSViewRepresentable {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -95,6 +102,7 @@ struct PaneGridView: NSViewRepresentable {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             onGraphChange: onGraphChange,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
@@ -151,6 +159,7 @@ final class BentoPaneContainerView: NSView {
         let agentClientID: ObjectIdentifier?
         let themeID: String
         let submitMode: CommandBarView.SubmitMode
+        let dirtySurfaces: Set<SurfaceID>
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -221,6 +230,7 @@ final class BentoPaneContainerView: NSView {
         agentClient: AgentClient?,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         onGraphChange: @escaping (PaneGraph) -> Void,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (PaneID, String) -> Void
@@ -248,7 +258,8 @@ final class BentoPaneContainerView: NSView {
             brokerEpoch: brokerEpoch,
             agentClientID: agentClient.map { ObjectIdentifier($0) },
             themeID: theme.id,
-            submitMode: submitMode
+            submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces
         )
         if lastAppliedSnapshot == snapshot {
             return
@@ -274,6 +285,7 @@ final class BentoPaneContainerView: NSView {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             coordinator: coordinator,
             onFocus: { [weak self] id in
                 self?.requestFocus(id)
@@ -426,6 +438,7 @@ private struct PaneTreeBuilder {
     let agentClient: AgentClient?
     let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
+    let dirtySurfaces: Set<SurfaceID>
     weak var coordinator: PaneGridView.Coordinator?
     let onFocus: @MainActor (PaneID) -> Void
     let onSplit: @MainActor (PaneID) -> Void
@@ -568,6 +581,7 @@ private struct PaneTreeBuilder {
                         agentClient: agentClient,
                         brokerEpoch: brokerEpoch,
                         submitMode: submitMode,
+                        dirtySurfaces: dirtySurfaces,
                         onOpenFile: onOpenFile,
                         onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
                     )

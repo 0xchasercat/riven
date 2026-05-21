@@ -47,6 +47,10 @@ struct WorkspaceGroupView: View {
     /// so the user's palette-toggle takes effect immediately on every
     /// live command bar.
     let submitMode: CommandBarView.SubmitMode
+    /// Set of surface ids that currently have unsaved editor changes.
+    /// Threaded down so the InnerTabStrip can render a "•" prefix
+    /// without having to reach for the controller via env.
+    let dirtySurfaces: Set<SurfaceID>
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -58,6 +62,7 @@ struct WorkspaceGroupView: View {
         agentClient: AgentClient,
         brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
+        dirtySurfaces: Set<SurfaceID> = [],
         onOpenFile: @escaping (URL) -> Void = { _ in },
         onCwdChanged: @escaping (String) -> Void = { _ in },
         onCloseEditor: @escaping () -> Void = { }
@@ -74,6 +79,7 @@ struct WorkspaceGroupView: View {
         self.agentClient = agentClient
         self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
+        self.dirtySurfaces = dirtySurfaces
         self.onOpenFile = onOpenFile
         self.onCwdChanged = onCwdChanged
     }
@@ -87,6 +93,7 @@ struct WorkspaceGroupView: View {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -113,6 +120,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let agentClient: AgentClient
     let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
+    let dirtySurfaces: Set<SurfaceID>
     let onOpenFile: (URL) -> Void
     let onCwdChanged: (String) -> Void
 
@@ -131,6 +139,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -147,6 +156,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             onOpenFile: onOpenFile,
             onCwdChanged: onCwdChanged
         )
@@ -217,6 +227,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -268,6 +279,7 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
+                dirtySurfaces: dirtySurfaces,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -282,6 +294,7 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
+                dirtySurfaces: dirtySurfaces,
                 onOpenFile: onOpenFile,
                 onCwdChanged: onCwdChanged
             )
@@ -300,6 +313,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -333,6 +347,7 @@ private final class WorkspaceContainerView: NSView {
             agentClient: agentClient,
             brokerEpoch: brokerEpoch,
             submitMode: submitMode,
+            dirtySurfaces: dirtySurfaces,
             fileMap: fileMap,
             onCwdChanged: onCwdChanged
         )
@@ -427,6 +442,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         onOpenFile: @escaping (URL) -> Void,
         onCwdChanged: @escaping (String) -> Void
     ) {
@@ -441,6 +457,7 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
+                dirtySurfaces: dirtySurfaces,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -475,6 +492,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> NSHostingController<AnyView> {
@@ -486,6 +504,7 @@ private final class WorkspaceContainerView: NSView {
                 agentClient: agentClient,
                 brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
+                dirtySurfaces: dirtySurfaces,
                 fileMap: fileMap,
                 onCwdChanged: onCwdChanged
             )
@@ -535,6 +554,7 @@ private final class WorkspaceContainerView: NSView {
         agentClient: AgentClient,
         brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
+        dirtySurfaces: Set<SurfaceID>,
         fileMap: PaneFileMap,
         onCwdChanged: @escaping (String) -> Void
     ) -> some View {
@@ -543,7 +563,8 @@ private final class WorkspaceContainerView: NSView {
             InnerTabStrip(
                 theme: theme,
                 tabs: workspace.tabs,
-                focusedID: workspace.focusedTabID
+                focusedID: workspace.focusedTabID,
+                dirtySurfaces: dirtySurfaces
             )
             Hairline(theme: theme)
             tabContent(
@@ -882,6 +903,8 @@ private struct EditorTabContent: View {
     let path: String?
     @ObservedObject var fileMap: PaneFileMap
 
+    @State private var isDirty: Bool = false
+
     /// Stable virtual paneID — `editor-tab-<tab>-<surface>`. Survives
     /// focus changes because both the tab id and the surface id
     /// survive. Coexists with real broker paneIDs (which are UUIDs)
@@ -891,17 +914,169 @@ private struct EditorTabContent: View {
     }
 
     var body: some View {
-        EditorPaneView(theme: theme, paneID: virtualPaneID, fileMap: fileMap)
-            .background(Color(hex: theme.chrome.panel.hex))
-            .task(id: "\(tabID.rawValue)|\(surfaceID.rawValue)|\(path ?? "")") {
-                if let path {
-                    fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
-                } else {
-                    // Scratch tab — make sure no stale URL is bound from
-                    // a prior file-backed editor reusing this paneID.
-                    fileMap.setFile(nil, for: virtualPaneID)
-                }
+        VStack(spacing: 0) {
+            EditorToolbar(
+                theme: theme,
+                surfaceID: surfaceID,
+                isDirty: isDirty,
+                path: path
+            )
+            Hairline(theme: theme)
+            EditorPaneView(
+                theme: theme,
+                paneID: virtualPaneID,
+                surfaceID: surfaceID,
+                fileMap: fileMap,
+                isDirty: $isDirty
+            )
+        }
+        .background(Color(hex: theme.chrome.panel.hex))
+        .task(id: "\(tabID.rawValue)|\(surfaceID.rawValue)|\(path ?? "")") {
+            if let path {
+                fileMap.setFile(URL(fileURLWithPath: path), for: virtualPaneID)
+            } else {
+                // Scratch tab — make sure no stale URL is bound from
+                // a prior file-backed editor reusing this paneID.
+                fileMap.setFile(nil, for: virtualPaneID)
             }
+        }
+        .onChange(of: isDirty) { _, newValue in
+            // Push the new dirty state to the controller (which
+            // mirrors into its `dirtyEditorSurfaces` set used by the
+            // inner tab strip's "•" prefix and the close-prompt).
+            // Notification-based so we don't have to thread the
+            // controller reference through every layer of the
+            // workspace view tree.
+            NotificationCenter.default.post(
+                name: .bentoEditorDirtyChanged,
+                object: EditorDirtyChange(surfaceID: surfaceID, isDirty: newValue)
+            )
+        }
+        .onDisappear {
+            // When the editor view unmounts (tab close, app teardown)
+            // clear our entry from the controller's dirty set so
+            // close-prompts don't fire on a phantom dirty buffer that
+            // no longer exists.
+            NotificationCenter.default.post(
+                name: .bentoEditorDirtyChanged,
+                object: EditorDirtyChange(surfaceID: surfaceID, isDirty: false)
+            )
+        }
+    }
+}
+
+/// Compact toolbar pinned above the editor pane. Surfaces:
+///   - dirty indicator (filename with leading "•" when modified)
+///   - Save button (Cmd+S equivalent, disabled when clean)
+///   - Undo button (Cmd+Z equivalent — actually fires via the
+///     standard Edit menu's responder chain so it Just Works)
+///
+/// Both buttons post `.bentoSaveSurface` / `.bentoUndoSurface` with
+/// the surfaceID. EditorPaneView's coordinator observes them and
+/// dispatches to its own save / undo paths.
+private struct EditorToolbar: View {
+    let theme: ThemeSpec
+    let surfaceID: SurfaceID
+    let isDirty: Bool
+    let path: String?
+
+    @State private var isSaveHovered = false
+    @State private var isUndoHovered = false
+
+    var body: some View {
+        HStack(spacing: BentoSpacing.s) {
+            // Filename + dirty dot. Dim color when clean; accent dot
+            // up front when modified so a quick glance tells you
+            // whether you need to save.
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: theme.chrome.accent.hex))
+                    .frame(width: 6, height: 6)
+                    .opacity(isDirty ? 1 : 0)
+                Text(filenameLabel)
+                    .font(BentoType.mono(BentoType.small, weight: isDirty ? .semibold : .regular))
+                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: BentoSpacing.s)
+            // Undo button — posts via NotificationCenter so the
+            // EditorPaneView coordinator can dispatch the undo
+            // through its NSTextView's undoManager.
+            ToolbarIconButton(
+                theme: theme,
+                glyph: "↶",
+                tooltip: "Undo (⌘Z)",
+                isHovered: $isUndoHovered
+            ) {
+                NotificationCenter.default.post(
+                    name: .bentoUndoSurface,
+                    object: surfaceID
+                )
+            }
+            // Save button — disabled when buffer is clean. Same
+            // path the close-prompt uses (`.bentoSaveSurface`) so
+            // there's exactly one save code path.
+            ToolbarIconButton(
+                theme: theme,
+                glyph: "⌘S",
+                tooltip: "Save (⌘S)",
+                isHovered: $isSaveHovered,
+                isEnabled: isDirty
+            ) {
+                NotificationCenter.default.post(
+                    name: .bentoSaveSurface,
+                    object: surfaceID
+                )
+            }
+        }
+        .padding(.horizontal, BentoSpacing.m)
+        .frame(height: 32)
+        .background(Color(hex: theme.chrome.panel.hex))
+    }
+
+    private var filenameLabel: String {
+        guard let path, !path.isEmpty else { return "Untitled" }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
+}
+
+/// Small text-glyph button used by the editor toolbar. Plain by
+/// default; hover and pressed states paint the standard `accentSoft`
+/// fill. `isEnabled = false` dims the glyph and skips the click
+/// callback — used for the Save button when the buffer is clean.
+private struct ToolbarIconButton: View {
+    let theme: ThemeSpec
+    let glyph: String
+    let tooltip: String
+    @Binding var isHovered: Bool
+    var isEnabled: Bool = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: { if isEnabled { action() } }) {
+            Text(glyph)
+                .font(BentoType.chrome(11, weight: .medium))
+                .foregroundStyle(Color(hex: foregroundHex))
+                .frame(minWidth: 30, minHeight: 22)
+                .padding(.horizontal, BentoSpacing.xs)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(Color(hex: theme.chrome.accentSoft.hex)
+                            .opacity(isHovered && isEnabled ? 1 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help(tooltip)
+        .disabled(!isEnabled)
+    }
+
+    private var foregroundHex: String {
+        if !isEnabled { return theme.chrome.tertiaryText.hex }
+        return isHovered ? theme.chrome.text.hex : theme.chrome.dimText.hex
     }
 }
 

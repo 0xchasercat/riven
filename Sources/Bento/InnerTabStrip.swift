@@ -16,6 +16,10 @@ struct InnerTabStrip: View {
     let theme: ThemeSpec
     let tabs: [WorkspaceInnerTab]
     let focusedID: TabID
+    /// SurfaceIDs whose editor buffers have unsaved changes. Passed
+    /// down from the controller so each chip can render a "•" prefix
+    /// when its tab contains any dirty editor surface.
+    let dirtySurfaces: Set<SurfaceID>
 
     var body: some View {
         HStack(spacing: 0) {
@@ -26,7 +30,8 @@ struct InnerTabStrip: View {
                             theme: theme,
                             tab: tab,
                             isActive: tab.id == focusedID,
-                            canClose: tabs.count > 1
+                            canClose: tabs.count > 1,
+                            isDirty: tab.surfaces.contains(where: { dirtySurfaces.contains($0.id) })
                         )
                         Hairline(theme: theme, axis: .vertical)
                     }
@@ -46,6 +51,7 @@ private struct InnerTabChip: View {
     let tab: WorkspaceInnerTab
     let isActive: Bool
     let canClose: Bool
+    let isDirty: Bool
 
     @State private var isHovered = false
     @State private var isEditing = false
@@ -73,6 +79,19 @@ private struct InnerTabChip: View {
                     .foregroundStyle(Color(hex: isActive
                         ? theme.chrome.accent.hex
                         : theme.chrome.tertiaryText.hex))
+                // Unsaved-changes dot. Tucks between the kind glyph
+                // and the label, in accent color, so it reads as a
+                // status marker rather than typography. Hidden (zero
+                // frame) when clean to keep the row width identical
+                // between dirty / clean states — chips don't shift
+                // horizontally just because someone typed in another
+                // tab.
+                if isDirty {
+                    Circle()
+                        .fill(Color(hex: theme.chrome.accent.hex))
+                        .frame(width: 6, height: 6)
+                        .accessibilityLabel("Unsaved changes")
+                }
                 if isEditing {
                     inlineEditor
                 } else {
