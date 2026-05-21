@@ -59,6 +59,75 @@ struct WorkspaceControllerTests {
         ])
     }
 
+    @Test("openProject falls back to ~ when the requested root is missing")
+    func openProjectFallsBackOnMissingRoot() async throws {
+        // Build a URL that points at a path we haven't created — the
+        // standard "user deleted the project directory between
+        // launches" scenario.
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bento-missing-\(UUID().uuidString)")
+        // Sanity: the path really doesn't exist.
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+
+        let controller = WorkspaceController(
+            trustStore: ProjectTrustStore(),
+            snapshotStore: WorkspaceSnapshotStore(
+                root: URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("bento-snap-\(UUID().uuidString)")
+            ),
+            scrollbackStore: .temporary()
+        )
+
+        let state = try await controller.openProject(missing)
+
+        // Landed on $HOME, not the missing dir.
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path
+        #expect(state.projectRoot == home)
+        // Banner copy is populated so the UI can surface it.
+        #expect(state.projectFallbackReason != nil)
+        if let reason = state.projectFallbackReason {
+            #expect(reason.contains("moved or deleted"))
+        }
+    }
+
+    @Test("openProject leaves projectFallbackReason nil when root exists")
+    func openProjectNoFallbackWhenRootExists() async throws {
+        let project = try temporaryProject()
+        let controller = WorkspaceController(
+            trustStore: ProjectTrustStore(),
+            snapshotStore: WorkspaceSnapshotStore(root: project.appendingPathComponent(".snapshots")),
+            scrollbackStore: .temporary()
+        )
+
+        let state = try await controller.openProject(project)
+
+        #expect(state.projectRoot == project.standardizedFileURL.path)
+        #expect(state.projectFallbackReason == nil)
+    }
+
+    @Test("openProject falls back when the path exists but is a file")
+    func openProjectFallsBackWhenRootIsFile() async throws {
+        // Create a file (not a directory) at the requested path —
+        // ProjectFileTree.scan would otherwise throw on this.
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bento-file-\(UUID().uuidString).txt")
+        try "not a directory".write(to: file, atomically: true, encoding: .utf8)
+
+        let controller = WorkspaceController(
+            trustStore: ProjectTrustStore(),
+            snapshotStore: WorkspaceSnapshotStore(
+                root: URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("bento-snap-\(UUID().uuidString)")
+            ),
+            scrollbackStore: .temporary()
+        )
+
+        let state = try await controller.openProject(file)
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path
+        #expect(state.projectRoot == home)
+        #expect(state.projectFallbackReason != nil)
+    }
+
     @Test("searching current project combines files and scrollback")
     func searchProject() async throws {
         let project = try temporaryProject()

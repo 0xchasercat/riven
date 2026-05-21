@@ -170,6 +170,24 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         return base
     }
 
+    /// H-1: prompt the user before quitting if any editor surface has
+    /// unsaved changes. Returns `.terminateCancel` only when the user
+    /// picks "Cancel" — both "Save All" and "Don't Save" proceed to
+    /// shutdown (Save All synchronously flushes each dirty buffer
+    /// before the terminate continues, via `.bentoSaveSurface` posts
+    /// the editor coordinators observe on the main thread).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // No controller yet (terminate fired before launch finished) —
+        // nothing to lose, let the OS shut us down.
+        guard let controller = rootController else { return .terminateNow }
+        switch controller.handleQuitDirtyCheck() {
+        case .quitNow, .savedAllAndQuit:
+            return .terminateNow
+        case .cancel:
+            return .terminateCancel
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let tabFocusMonitor {
             NSEvent.removeMonitor(tabFocusMonitor)
@@ -378,6 +396,23 @@ extension Notification.Name {
     /// dirty flag flips. Object is an `EditorDirtyChange` payload.
     /// RootView routes to `controller.setSurfaceDirty(_:, dirty:)`.
     static let bentoEditorDirtyChanged = Notification.Name("BentoEditorDirtyChanged")
+    /// H-2: posted by the editor's file-watcher when the open file is
+    /// deleted or renamed underneath us. Object is the SurfaceID. The
+    /// controller mirrors into `vanishedFileSurfaces` so toolbar +
+    /// inner-tab-strip can render the "(missing)" affordance and
+    /// disable Save.
+    static let bentoEditorFileVanished = Notification.Name("BentoEditorFileVanished")
+    /// H-2 companion: posted when the editor reopens / re-saves a
+    /// previously-vanished file. Object is the SurfaceID. The
+    /// controller drops the surface from `vanishedFileSurfaces`.
+    static let bentoEditorFileRestored = Notification.Name("BentoEditorFileRestored")
+    /// H-5: posted after `BentoRootController.attachAgentClient(_:)`
+    /// bumps `brokerEpoch` due to a watchdog respawn. The controller
+    /// itself observes this and re-applies focus to whichever pane /
+    /// surface was focused before the rebuild — the cached host
+    /// teardown that the epoch bump triggers can otherwise leave
+    /// first-responder somewhere SwiftUI picked arbitrarily.
+    static let bentoBrokerRespawned = Notification.Name("BentoBrokerRespawned")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow

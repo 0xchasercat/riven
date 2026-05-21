@@ -80,6 +80,12 @@ struct BentoRootView: View {
             onEditorDirtyChanged: { change in
                 controller.setSurfaceDirty(change.surfaceID, dirty: change.isDirty)
             },
+            onEditorFileVanished: { surfaceID in
+                controller.markSurfaceVanished(surfaceID)
+            },
+            onEditorFileRestored: { surfaceID in
+                controller.clearSurfaceVanished(surfaceID)
+            },
             onCommandSubmitted: { text in
                 controller.recordCommandSubmission(text)
             },
@@ -171,6 +177,19 @@ struct BentoRootView: View {
             .overlay(alignment: .bottom) {
                 Hairline(theme: theme)
             }
+            // H-3: shown when openProject fell back to ~ because the
+            // requested root was missing or unreadable. The user can
+            // dismiss with the × — the fallback cwd stays put either
+            // way; this banner is purely informational. Lives above
+            // PaneGridView so it sits in the workspace chrome rather
+            // than on top of one specific pane.
+            if let reason = controller.state.projectFallbackReason {
+                ProjectFallbackBanner(
+                    theme: theme,
+                    reason: reason,
+                    onDismiss: { controller.dismissProjectFallbackReason() }
+                )
+            }
             PaneGridView(
                 theme: theme,
                 paneGraph: controller.state.paneGraph,
@@ -180,6 +199,7 @@ struct BentoRootView: View {
                 brokerEpoch: controller.brokerEpoch,
                 submitMode: controller.submitsOnEnter ? .enterSubmits : .enterIsNewline,
                 dirtySurfaces: controller.dirtyEditorSurfaces,
+                vanishedSurfaces: controller.vanishedFileSurfaces,
                 onGraphChange: { controller.recordPaneGraph($0) },
                 onOpenFile: { controller.openFile($0) },
                 onCwdChanged: { paneID, cwd in
@@ -455,6 +475,52 @@ struct BentoRootView: View {
     }
 }
 
+/// One-line banner shown above the pane grid when `openProject` fell
+/// back to `~` because the requested root was missing. Uses the theme's
+/// `chrome.warning` slot at 0.2 opacity for the background so it reads
+/// as an advisory rather than an error. The × dismisses locally — the
+/// fallback cwd stays put either way.
+private struct ProjectFallbackBanner: View {
+    let theme: ThemeSpec
+    let reason: String
+    let onDismiss: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: BentoSpacing.s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(hex: theme.chrome.warning.hex))
+            Text(reason)
+                .font(BentoType.mono(BentoType.small))
+                .foregroundStyle(Color(hex: theme.chrome.text.hex))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: BentoSpacing.s)
+            Button(action: onDismiss) {
+                Text("×")
+                    .font(BentoType.chrome(13, weight: .medium))
+                    .foregroundStyle(Color(hex: isHovered
+                        ? theme.chrome.text.hex
+                        : theme.chrome.tertiaryText.hex))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .onHover { isHovered = $0 }
+            .help("Dismiss")
+        }
+        .padding(.horizontal, BentoSpacing.m)
+        .frame(height: 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: theme.chrome.warning.hex).opacity(0.2))
+        .overlay(alignment: .bottom) { Hairline(theme: theme) }
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+}
+
 /// Small chip-button in the status bar that opens an unsaved scratch
 /// editor tab. Useful for a quick "let me write something" surface
 /// without first creating a file on disk.
@@ -513,6 +579,8 @@ private struct NotificationWiring: ViewModifier {
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
+    let onEditorFileVanished: (SurfaceID) -> Void
+    let onEditorFileRestored: (SurfaceID) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -525,6 +593,8 @@ private struct NotificationWiring: ViewModifier {
                 onCycleSurfaceFocus: onCycleSurfaceFocus,
                 onSendCtrlByte: onSendCtrlByte,
                 onEditorDirtyChanged: onEditorDirtyChanged,
+                onEditorFileVanished: onEditorFileVanished,
+                onEditorFileRestored: onEditorFileRestored,
                 onCommandSubmitted: onCommandSubmitted,
                 onCommandHistoryRequest: onCommandHistoryRequest
             ))
@@ -560,6 +630,8 @@ private struct SurfaceWiring: ViewModifier {
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
+    let onEditorFileVanished: (SurfaceID) -> Void
+    let onEditorFileRestored: (SurfaceID) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -582,6 +654,12 @@ private struct SurfaceWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoEditorDirtyChanged)) { note in
                 if let change = note.object as? EditorDirtyChange { onEditorDirtyChanged(change) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorFileVanished)) { note in
+                if let id = note.object as? SurfaceID { onEditorFileVanished(id) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoEditorFileRestored)) { note in
+                if let id = note.object as? SurfaceID { onEditorFileRestored(id) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoCommandSubmitted)) { note in
                 if let text = note.object as? String { onCommandSubmitted(text) }

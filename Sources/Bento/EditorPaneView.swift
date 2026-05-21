@@ -274,6 +274,20 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         /// `removeObserver` is documented to be thread-safe.
         private nonisolated(unsafe) var saveObserver: Any?
         private nonisolated(unsafe) var undoObserver: Any?
+        /// H-2: per-file watcher set up in `loadFromDisk`. Uses
+        /// `DispatchSource.makeFileSystemObjectSource` to detect
+        /// `.delete` / `.rename` on the open fd. Torn down + rebuilt
+        /// on every file load. `nonisolated(unsafe)` for the same
+        /// reason as the observer handles above — the DispatchSource
+        /// handler hops to main before touching any state.
+        private nonisolated(unsafe) var fileWatcher: DispatchSourceFileSystemObject?
+        /// Cached fd backing `fileWatcher`. Closed when the watcher is
+        /// torn down (via `cancel` handler).
+        private nonisolated(unsafe) var watchedFD: Int32 = -1
+        /// True once we've posted `.bentoEditorFileVanished` for the
+        /// current buffer URL. Latches so a rapid burst of fsevents
+        /// doesn't fire the notification ten times.
+        private var hasNotifiedVanished = false
 
         init(
             isDirty: Binding<Bool>,
@@ -290,6 +304,10 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         deinit {
             if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) }
             if let undoObserver { NotificationCenter.default.removeObserver(undoObserver) }
+            // Drop the file watcher (and the fd it owns) without
+            // hopping to MainActor — DispatchSource.cancel is safe
+            // from any thread.
+            fileWatcher?.cancel()
         }
 
         private func attachSurfaceObserversIfNeeded() {
@@ -341,6 +359,18 @@ struct STTextEditorRepresentable: NSViewRepresentable {
             case .clearedToScratch:
                 loadFailureMessage = nil
                 applyTextToView("")
+                // No file to watch on a scratch buffer; drop any
+                // watcher hanging on from the previous URL so we
+                // don't leak an fd or fire vanish on a buffer
+                // nobody's tracking anymore.
+                teardownFileWatcher()
+                if hasNotifiedVanished, let surfaceID {
+                    NotificationCenter.default.post(
+                        name: .bentoEditorFileRestored,
+                        object: surfaceID
+                    )
+                    hasNotifiedVanished = false
+                }
             }
             publishDirty()
         }
@@ -352,16 +382,95 @@ struct STTextEditorRepresentable: NSViewRepresentable {
                     loadFailureMessage = "Could not decode file as UTF-8"
                     buffer.load(url: url, text: "")
                     applyTextToView("⚠︎ Could not decode \(url.lastPathComponent) as UTF-8")
+                    // Couldn't decode but the file IS on disk; still
+                    // worth watching so a delete-then-write-utf8 cycle
+                    // recovers cleanly.
+                    installFileWatcher(for: url)
                     return
                 }
                 loadFailureMessage = nil
                 buffer.load(url: url, text: string)
                 applyTextToView(string)
+                installFileWatcher(for: url)
             } catch {
                 loadFailureMessage = "Could not read file: \(error.localizedDescription)"
                 buffer.load(url: url, text: "")
                 applyTextToView("⚠︎ Could not read \(url.lastPathComponent): \(error.localizedDescription)")
+                // Read failed — no fd to watch. Tear down any stale
+                // watcher from a previous file.
+                teardownFileWatcher()
             }
+        }
+
+        /// H-2: subscribe to `.delete` + `.rename` events on `url`'s
+        /// fd. macOS keeps the fd valid even after the path is
+        /// unlinked (Unix semantics), so we observe the inode rather
+        /// than the path — which matches the user-visible event:
+        /// `rm foo.swift` while we're editing it, `mv foo.swift bar.swift`
+        /// underneath us, or a save-as-overwrite by another tool.
+        ///
+        /// Idempotent on the same URL — calling twice with the same
+        /// URL no-ops so a re-save (which loops through reconcile)
+        /// doesn't churn the watcher.
+        private func installFileWatcher(for url: URL) {
+            // Reset the latch on every (re)install. If a previous
+            // watcher had fired vanish but the user moved the file
+            // back, the next reconcile lands here with a fresh fd —
+            // post a restore so the controller clears its tracking.
+            if hasNotifiedVanished, let surfaceID {
+                NotificationCenter.default.post(
+                    name: .bentoEditorFileRestored,
+                    object: surfaceID
+                )
+            }
+            hasNotifiedVanished = false
+
+            teardownFileWatcher()
+            let fd = open(url.path, O_EVTONLY)
+            guard fd >= 0 else { return }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.delete, .rename],
+                queue: .main
+            )
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.notifyFileVanished()
+                }
+            }
+            // The cancel handler is the documented place to close the
+            // fd so we don't leak it when the watcher is torn down
+            // (either explicitly, or during deinit).
+            let capturedFD = fd
+            source.setCancelHandler {
+                close(capturedFD)
+            }
+            source.resume()
+            fileWatcher = source
+            watchedFD = fd
+        }
+
+        private func teardownFileWatcher() {
+            fileWatcher?.cancel()
+            fileWatcher = nil
+            watchedFD = -1
+        }
+
+        /// Post `.bentoEditorFileVanished` once per buffer URL. We
+        /// don't reload, redraw, or mutate the buffer here — the user
+        /// might still want to save their in-memory edits via Save As
+        /// once that's wired (TODO below). The notification is purely
+        /// informational; the controller mirrors it into
+        /// `vanishedFileSurfaces` so the toolbar can disable Save and
+        /// the tab strip can append "(missing)" to the label.
+        private func notifyFileVanished() {
+            guard !hasNotifiedVanished, let surfaceID else { return }
+            hasNotifiedVanished = true
+            NotificationCenter.default.post(
+                name: .bentoEditorFileVanished,
+                object: surfaceID
+            )
         }
 
         private func applyTextToView(_ text: String) {
@@ -391,6 +500,12 @@ struct STTextEditorRepresentable: NSViewRepresentable {
                 buffer.markSaved()
                 publishDirty()
                 onSaveResult(.success(()))
+                // H-2: a successful re-save against a previously-
+                // vanished file resurrects it. `.atomic` writes
+                // through a new inode, so re-install the watcher on
+                // the fresh fd; that also clears the vanish latch and
+                // posts `.bentoEditorFileRestored`.
+                installFileWatcher(for: url)
             } catch {
                 // Keep the buffer dirty so the user can retry. The view
                 // surfaces the failure via the banner overlay.
