@@ -437,9 +437,14 @@ You can rename or delete this tab — it's a regular file at
     }
 
     /// Run a unified search (files + scrollback) against the currently
-    /// open project. Used by the search overlay.
-    func search(_ query: String) async throws -> [UnifiedSearchResult] {
-        try await workspace.search(query)
+    /// open project. Used by the search overlay. `scope` selects between
+    /// "this project only" (default) and "all projects" (walks every
+    /// project root referenced by any scrollback sidecar).
+    func search(
+        _ query: String,
+        scope: SearchScope = .thisProject
+    ) async throws -> [UnifiedSearchResult] {
+        try await workspace.search(query, scope: scope)
     }
 
     /// Add a brand-new top-level **workspace** (a new screen-level bento
@@ -515,6 +520,38 @@ You can rename or delete this tab — it's a regular file at
             newPane: newPane
         )
         recordPaneGraph(graph)
+    }
+
+    /// S-6: open an inline scrollback-peek surface for `paneID`
+    /// centered on `focusLine`. Creates a new inner tab inside the
+    /// focused workspace; the peek view is read-only and loads bytes
+    /// from `ScrollbackStore` rather than spawning a fresh PTY.
+    func openScrollbackPeek(paneID: PaneID, focusLine: Int) {
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace else {
+            return
+        }
+        // De-dupe: if a peek tab for this (paneID, focusLine) already
+        // exists, just focus it. Cheap because peek tabs are rare.
+        if let existing = workspace.tabs.first(where: { tab in
+            if case let .scrollbackPeek(existingID, line) = tab.kind {
+                return existingID == paneID && line == focusLine
+            }
+            return false
+        }) {
+            pane.kind = .workspace(workspace.focusingTab(existing.id))
+            recordPaneGraph(state.paneGraph.replacingPane(pane))
+            return
+        }
+        let metadata = (try? scrollback.readMetadata(paneID)) ?? nil
+        let label = metadata?.paneLabel ?? "scrollback"
+        let tab = WorkspaceInnerTab(
+            displayName: "↪ \(label):\(focusLine)",
+            kind: .scrollbackPeek(paneID: paneID, focusLine: focusLine),
+            cwd: workspace.currentCwd
+        )
+        pane.kind = .workspace(workspace.appendingTab(tab))
+        recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
     /// Add a new **inner tab** to the currently focused workspace. Wired

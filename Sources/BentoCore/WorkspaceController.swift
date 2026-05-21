@@ -180,11 +180,15 @@ public actor WorkspaceController {
         return state
     }
 
-    public func search(_ query: String) throws -> [UnifiedSearchResult] {
+    public func search(
+        _ query: String,
+        scope: SearchScope = .thisProject
+    ) throws -> [UnifiedSearchResult] {
         guard let root = currentProjectRoot else {
             throw WorkspaceControllerError.noOpenProject
         }
-        return try UnifiedSearchIndex(projectRoot: root, scrollbackStore: scrollbackStore).search(query)
+        return try UnifiedSearchIndex(projectRoot: root, scrollbackStore: scrollbackStore)
+            .search(query, scope: scope)
     }
 
     /// Replaces the controller's tracked pane graph. The UI layer calls this whenever a pane

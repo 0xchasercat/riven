@@ -221,6 +221,8 @@ public struct WorkspaceGroup: Hashable, Codable, Sendable {
                 resolved = "shell"
             case .editor(let path):
                 resolved = path.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Untitled"
+            case .scrollbackPeek:
+                resolved = "scrollback"
             }
         } else {
             resolved = trimmed
@@ -652,12 +654,20 @@ public enum TabLayout: Hashable, Codable, Sendable {
 /// What a tab's surface is. A `.terminal` surface carries its own
 /// broker `PaneID` (the address of its PTY) and an optional shell
 /// command; an `.editor` surface carries an optional file path the
-/// editor is bound to (`nil` = an unsaved scratch buffer). Persisted
-/// in snapshots so each surface survives a restart with its kind
-/// intact.
+/// editor is bound to (`nil` = an unsaved scratch buffer); a
+/// `.scrollbackPeek` is a read-only inline view of a pane's
+/// scrollback log centered on `focusLine`, opened from the search
+/// overlay's "peek" action. Persisted in snapshots so each surface
+/// survives a restart with its kind intact.
 public enum WorkspaceInnerTabKind: Hashable, Codable, Sendable {
     case terminal(paneID: PaneID, command: String?)
     case editor(path: String?)
+    /// Read-only peek into the scrollback log of `paneID`, centered on
+    /// `focusLine`. Has no PTY of its own — it just renders bytes from
+    /// the on-disk log. Cannot be edited. The "Replay in new pane"
+    /// toolbar button opens a fresh terminal seeded from the log if
+    /// the user wants a live shell.
+    case scrollbackPeek(paneID: PaneID, focusLine: Int)
 }
 
 /// Stable identifier for inner tabs. Lives across renders so the broker

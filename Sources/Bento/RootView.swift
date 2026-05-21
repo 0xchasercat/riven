@@ -252,6 +252,7 @@ struct BentoRootView: View {
                 submitMode: controller.submitsOnEnter ? .enterSubmits : .enterIsNewline,
                 dirtySurfaces: controller.dirtyEditorSurfaces,
                 vanishedSurfaces: controller.vanishedFileSurfaces,
+                scrollback: controller.scrollback,
                 onGraphChange: { controller.recordPaneGraph($0) },
                 onOpenFile: { controller.openFile($0) },
                 onCwdChanged: { paneID, cwd in
@@ -424,10 +425,19 @@ struct BentoRootView: View {
             SearchOverlay(
                 theme: theme,
                 query: $searchQuery,
-                search: { try await controller.search($0) },
+                search: { query, scope in
+                    try await controller.search(query, scope: scope)
+                },
                 onOpenFile: { url in
                     activeOverlay = nil
                     controller.openFile(url)
+                },
+                onPeekScrollback: { match, _ in
+                    activeOverlay = nil
+                    controller.openScrollbackPeek(
+                        paneID: match.paneID,
+                        focusLine: match.lineNumber
+                    )
                 },
                 onClose: { activeOverlay = nil }
             )
