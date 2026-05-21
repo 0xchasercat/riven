@@ -341,14 +341,26 @@ struct BentoRootView: View {
 
     private func dispatch(_ action: CommandAction) {
         switch action {
-        case .splitRight, .splitDown:
-            // Splits are gone — treat split commands as "new tab" for
-            // backward palette compatibility.
-            controller.openNewTab()
+        case .splitRight:
+            // Splits came back with #23 — palette now routes through
+            // the same surface-tree path as Cmd+D + the [][] button.
+            // (Pre-#23 this fell back to `openNewTab` because the old
+            // pane-graph splits had been gutted; that stub leaked
+            // through and made the palette's split commands create a
+            // top-level tab instead of an actual within-tab split.)
+            controller.splitFocusedSurface(direction: .right)
+        case .splitDown:
+            controller.splitFocusedSurface(direction: .down)
         case .closePane:
             controller.closeTab(controller.state.paneGraph.focusedPaneID)
         case .cycleFocus:
-            controller.recordPaneGraph(controller.state.paneGraph.nextFocus())
+            // Cycle within-tab surface focus, matching Ctrl+Tab and
+            // the menu's "Cycle Surface Focus" item. Previously
+            // walked workspace-level panes via `graph.nextFocus()`,
+            // which in our one-workspace-per-screen model just
+            // shuffled tabs — not what the palette command
+            // ("cycle focus") implies.
+            controller.cycleFocusedTabSurface()
         case .cycleTheme:
             controller.cycleTheme()
             selectedThemeID = controller.state.selectedThemeID
