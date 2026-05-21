@@ -76,6 +76,11 @@ public struct ProjectFileTree: Equatable, Codable, Sendable, Identifiable {
         maxDepth: Int,
         maxChildren: Int
     ) throws -> ProjectFileTree {
+        // The root resourceValues call is allowed to throw — if the
+        // caller's root URL is unreachable that's a "scan didn't
+        // happen at all" failure they deserve to know about. Per-
+        // child failures (TCC-locked file, broken symlink, removed-
+        // mid-scan, …) are swallowed silently below.
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
         let isDirectory = values.isDirectory == true
         guard isDirectory else {
@@ -87,11 +92,27 @@ public struct ProjectFileTree: Equatable, Codable, Sendable, Identifiable {
         if depth >= maxDepth {
             children = []
         } else {
-            let entries = try FileManager.default.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            )
+            // contentsOfDirectory throws if the directory itself
+            // isn't readable; promote that to "no children" rather
+            // than failing the parent. A TCC-locked subdirectory
+            // visible from a readable parent should appear as an
+            // empty folder, not abort the entire sidebar render.
+            let entries: [URL]
+            do {
+                entries = try FileManager.default.contentsOfDirectory(
+                    at: url,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                )
+            } catch {
+                return ProjectFileTree(
+                    name: url.lastPathComponent,
+                    path: url.path,
+                    kind: .directory,
+                    children: [],
+                    truncatedChildren: 0
+                )
+            }
             let filtered = entries.filter { !ignoredNames.contains($0.lastPathComponent) }
             // Cap before recursing — a directory with 10k file siblings
             // would otherwise pay a `lstat(2)` per entry just to be sorted
@@ -106,8 +127,23 @@ public struct ProjectFileTree: Equatable, Codable, Sendable, Identifiable {
             }
             let capped = Array(sortedURLs.prefix(maxChildren))
             elided = max(0, sortedURLs.count - capped.count)
-            children = try capped
-                .map { try scanNode(url: $0, depth: depth + 1, maxDepth: maxDepth, maxChildren: maxChildren) }
+            // compactMap + `try?` so a single TCC-locked / broken-
+            // symlink / mid-scan-deletion child can't take down the
+            // whole sidebar. The previous `try .map` aborted on the
+            // first throw — one quarantined Chrome browser-state
+            // file in ~/ would render the sidebar as a single error
+            // message instead of showing the user's actual files.
+            // Per-entry failures are skipped silently; the visible
+            // tree is exactly the subset the OS lets us read.
+            children = capped
+                .compactMap { child -> ProjectFileTree? in
+                    try? scanNode(
+                        url: child,
+                        depth: depth + 1,
+                        maxDepth: maxDepth,
+                        maxChildren: maxChildren
+                    )
+                }
                 .sorted(by: sortNodes)
         }
 
