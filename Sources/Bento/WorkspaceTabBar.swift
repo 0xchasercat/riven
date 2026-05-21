@@ -120,7 +120,7 @@ private struct TabChip: View {
         ZStack(alignment: .leading) {
             // Background + accent indicator. Same shape whether editing
             // or not, so the chip dimensions don't jump when the user
-            // double-clicks to rename.
+            // clicks the pencil to rename.
             ZStack(alignment: .bottom) {
                 // Active tab gets a fully opaque elevated tint so it
                 // anchors against the vibrancy behind the tab bar; inactive
@@ -152,6 +152,26 @@ private struct TabChip: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                // Pencil-icon edit affordance. Hover-only so the chip
+                // stays clean in the resting state; clicking switches
+                // the label into the inline TextField. Previously
+                // rename was double-click on the chip, but the
+                // .onTapGesture(count: 2) made single-clicks on the
+                // close × wait for a double-tap timeout (~250ms),
+                // which read as the whole close button being sluggish.
+                // Pencil + a Button gesture sidesteps both problems.
+                if !isEditing && isHovered {
+                    Button(action: beginRename) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("Rename tab")
+                }
                 if canClose {
                     Button(action: onClose) {
                         Text("×")
@@ -172,22 +192,22 @@ private struct TabChip: View {
         }
         .frame(height: 52)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            // Double-click → rename. Pre-fills the draft with the
-            // currently-displayed label and focuses the field on the
-            // next runloop tick.
-            draft = label
-            isEditing = true
-            DispatchQueue.main.async { isFieldFocused = true }
-        }
+        // Single-tap → focus the tab. No `count: 2` gesture anywhere
+        // on the chip — that introduced a 250ms double-tap-detection
+        // delay on every single tap (including the close × Button),
+        // making the whole strip feel sluggish.
         .onTapGesture {
-            // Single-click → focus the tab. Suppressed while editing so
-            // the field can take clicks for caret placement.
             if !isEditing { onSelect() }
         }
         .onHover { isHovered = $0 }
         .animation(BentoMotion.hover, value: isHovered)
         .animation(BentoMotion.hover, value: isActive)
+    }
+
+    private func beginRename() {
+        draft = label
+        isEditing = true
+        DispatchQueue.main.async { isFieldFocused = true }
     }
 
     private var inlineEditor: some View {

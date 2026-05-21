@@ -103,6 +103,24 @@ private struct InnerTabChip: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                // Pencil-icon rename affordance (hover-only). Replaces
+                // the prior double-click-to-rename pattern, which
+                // delayed every single-tap on this chip — including
+                // the close × — by ~250ms while SwiftUI waited to
+                // see if a double-tap was forming. Discoverable AND
+                // responsive.
+                if !isEditing && isHovered {
+                    Button(action: beginRename) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("Rename tab")
+                }
                 if canClose {
                     Button {
                         NotificationCenter.default.post(
@@ -129,11 +147,6 @@ private struct InnerTabChip: View {
         }
         .frame(height: 36)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            draft = tab.displayName
-            isEditing = true
-            DispatchQueue.main.async { isFieldFocused = true }
-        }
         .onTapGesture {
             if !isEditing {
                 NotificationCenter.default.post(
@@ -145,6 +158,12 @@ private struct InnerTabChip: View {
         .onHover { isHovered = $0 }
         .animation(BentoMotion.hover, value: isHovered)
         .animation(BentoMotion.hover, value: isActive)
+    }
+
+    private func beginRename() {
+        draft = tab.displayName
+        isEditing = true
+        DispatchQueue.main.async { isFieldFocused = true }
     }
 
     /// `›_` reads as a tiny shell prompt; `✎` (pencil) reads as "editor".
