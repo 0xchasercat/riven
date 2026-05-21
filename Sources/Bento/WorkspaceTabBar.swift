@@ -63,11 +63,13 @@ struct WorkspaceTabBar: View {
             AddTabButton(theme: theme, action: onAdd)
         }
         .frame(height: 44)
-        // Low-alpha tint so the NSVisualEffectView wrapped around the
-        // tab bar + toolbar in `RootView.mainColumn` (H8) reads through.
-        // Without the tint the vibrancy is too washed-out to anchor the
-        // chrome; without the alpha, the vibrancy is hidden entirely.
-        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.6))
+        // Mostly-opaque tint sits on top of the .headerView vibrancy
+        // wrapped around the chrome strip in `RootView.mainColumn`
+        // (H8). At 0.92 the bar reads as a solid surface with just a
+        // hint of vibrancy bleeding through — without this, the dark
+        // Carbon theme + low-alpha tint combined into one washed-out
+        // grey strip that lost the tab/accent contrast entirely.
+        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.92))
     }
 
     /// Produce a short tab label. Workspaces prefer the user-set

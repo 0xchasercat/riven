@@ -118,8 +118,17 @@ struct BentoRootView: View {
                 toolbar
             }
             .background(
+                // `.headerView` is the macOS material designed for
+                // toolbar / titlebar surfaces — much less translucent
+                // than `.windowBackground`, which made the chrome
+                // read as one washed-out grey strip against the dark
+                // Bento themes. The chrome's own `chrome.elevated`
+                // tint sits on top at ~0.92 opacity (see
+                // WorkspaceTabBar) so the panel still feels like a
+                // proper surface, with just enough vibrancy under it
+                // to anchor against the titlebar.
                 VibrancyBackground(
-                    material: .windowBackground,
+                    material: .headerView,
                     blendingMode: .behindWindow
                 )
             )
@@ -215,10 +224,10 @@ struct BentoRootView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 32)
-        // Soft tint over the shared vibrancy underlay (see
-        // `mainColumn`'s ZStack). Matches WorkspaceTabBar's alpha so the
-        // two strips read as one panel.
-        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.6))
+        // Mostly-opaque tint over the shared vibrancy underlay so the
+        // toolbar and the tab bar read as one panel with proper
+        // contrast — see WorkspaceTabBar's matching 0.92.
+        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.92))
         .onAppear {
             // Seed the draft on first render so the field shows the
             // focused workspace's path, not an empty string.

@@ -721,6 +721,36 @@ private struct SurfaceLeafView: View {
     @State private var isHovered = false
 
     var body: some View {
+        // The focused surface is the common case (every single-surface
+        // tab hits this branch). Render it without a SwiftUI tap
+        // gesture so AppKit mouseDown reaches the BrokeredTerminalView
+        // / EditorPaneView underneath uninterrupted — that's what
+        // drives text-selection, click-to-focus-the-input
+        // (.bentoFocusCommandBar), and the per-cell hit-testing inside
+        // the terminal.
+        if isFocused {
+            focusedLayout
+        } else {
+            // Unfocused split surfaces use simultaneousGesture so a
+            // tap shifts focus without shadowing the underlying
+            // NSView's mouseDown — letting the user start typing
+            // immediately after the click lands.
+            focusedLayout
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        NotificationCenter.default.post(
+                            name: .bentoFocusSurface,
+                            object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
+                        )
+                    }
+                )
+        }
+    }
+
+    /// The shared layout for both focused + unfocused leaves. Click
+    /// routing is added on top by `body`.
+    @ViewBuilder
+    private var focusedLayout: some View {
         surfaceBody
             .overlay(focusBorder)
             .overlay(alignment: .topTrailing) {
@@ -742,19 +772,6 @@ private struct SurfaceLeafView: View {
                 }
             }
             .onHover { isHovered = $0 }
-            // Background catches clicks on empty terminal areas. The
-            // gesture takes precedence over the underlying NSView's
-            // mouseDown (which also fires `.bentoFocusCommandBar`),
-            // so a click in a non-focused split shifts focus before
-            // typing lands.
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isFocused else { return }
-                NotificationCenter.default.post(
-                    name: .bentoFocusSurface,
-                    object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
-                )
-            }
     }
 
     @ViewBuilder
