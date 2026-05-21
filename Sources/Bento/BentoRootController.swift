@@ -34,6 +34,16 @@ final class BentoRootController: ObservableObject {
     /// prefix, editor toolbar save-enabled state) read from this
     /// directly.
     @Published private(set) var dirtyEditorSurfaces: Set<SurfaceID> = []
+    /// Window-global command history. Each command bar submit
+    /// appends here, and the up/down arrows in any command bar walk
+    /// through the entries. Scoped to the controller (one history
+    /// per Bento window) rather than per-terminal because the user's
+    /// most common use is "I just ran that, let me edit it" — they
+    /// don't usually care which terminal it landed in.
+    /// Not `@Published` — mutating it would re-render every observer
+    /// for purely-internal state churn. Views read from it only via
+    /// the notification handlers, which take ad-hoc snapshots.
+    var commandHistory = CommandHistory()
 
     init() {
         let support = FileManager.default
@@ -416,6 +426,34 @@ final class BentoRootController: ObservableObject {
         dirtyEditorSurfaces.remove(surfaceID)
         pane.kind = .workspace(updated)
         recordPaneGraph(state.paneGraph.replacingPane(pane))
+    }
+
+    /// Append a just-submitted command to the global history.
+    /// CommandBar's onSubmit posts `.bentoCommandSubmitted` with the
+    /// submitted text; the wiring routes here. Dedupe + capacity
+    /// limits handled inside `CommandHistory.submit`.
+    func recordCommandSubmission(_ text: String) {
+        commandHistory.submit(text)
+    }
+
+    /// Walk one step back / forward through history for the up / down
+    /// arrow in the command bar. Returns the new text the bar should
+    /// display, or nil to leave the buffer untouched. `currentBuffer`
+    /// is the user's in-progress draft (stashed so a subsequent
+    /// down-arrow can restore it).
+    func recallPreviousCommand(currentBuffer: String) -> String? {
+        commandHistory.previous(currentBuffer: currentBuffer)
+    }
+
+    func recallNextCommand(currentBuffer: String) -> String? {
+        commandHistory.next(currentBuffer: currentBuffer)
+    }
+
+    /// Reset the history cursor — the next up-arrow starts from the
+    /// most recent submission. Called when the user edits the buffer
+    /// between navigations.
+    func resetCommandHistoryCursor() {
+        commandHistory.reset()
     }
 
     /// Mark / clear a surface's dirty state. EditorTabContent's

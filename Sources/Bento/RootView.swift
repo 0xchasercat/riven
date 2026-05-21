@@ -79,6 +79,21 @@ struct BentoRootView: View {
             },
             onEditorDirtyChanged: { change in
                 controller.setSurfaceDirty(change.surfaceID, dirty: change.isDirty)
+            },
+            onCommandSubmitted: { text in
+                controller.recordCommandSubmission(text)
+            },
+            onCommandHistoryRequest: { request in
+                switch request.direction {
+                case .previous:
+                    request.response.text = controller.recallPreviousCommand(
+                        currentBuffer: request.currentBuffer
+                    )
+                case .next:
+                    request.response.text = controller.recallNextCommand(
+                        currentBuffer: request.currentBuffer
+                    )
+                }
             }
         ))
         // Auto-open the trust prompt the first time we see a project
@@ -488,6 +503,8 @@ private struct NotificationWiring: ViewModifier {
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
+    let onCommandSubmitted: (String) -> Void
+    let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -497,7 +514,9 @@ private struct NotificationWiring: ViewModifier {
                 onCloseSurface: onCloseSurface,
                 onCycleSurfaceFocus: onCycleSurfaceFocus,
                 onSendCtrlByte: onSendCtrlByte,
-                onEditorDirtyChanged: onEditorDirtyChanged
+                onEditorDirtyChanged: onEditorDirtyChanged,
+                onCommandSubmitted: onCommandSubmitted,
+                onCommandHistoryRequest: onCommandHistoryRequest
             ))
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
@@ -531,6 +550,8 @@ private struct SurfaceWiring: ViewModifier {
     let onCycleSurfaceFocus: () -> Void
     let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
+    let onCommandSubmitted: (String) -> Void
+    let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -551,6 +572,12 @@ private struct SurfaceWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .bentoEditorDirtyChanged)) { note in
                 if let change = note.object as? EditorDirtyChange { onEditorDirtyChanged(change) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCommandSubmitted)) { note in
+                if let text = note.object as? String { onCommandSubmitted(text) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoCommandHistoryRequest)) { note in
+                if let request = note.object as? CommandHistoryRequest { onCommandHistoryRequest(request) }
             }
     }
 }

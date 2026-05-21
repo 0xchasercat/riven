@@ -378,6 +378,46 @@ extension Notification.Name {
     /// dirty flag flips. Object is an `EditorDirtyChange` payload.
     /// RootView routes to `controller.setSurfaceDirty(_:, dirty:)`.
     static let bentoEditorDirtyChanged = Notification.Name("BentoEditorDirtyChanged")
+    /// Posted by the sidebar header's expand-all / collapse-all
+    /// toggle. Object is `NSNumber(value: Bool)` — true = expand
+    /// all rows, false = collapse all. Every WorkspaceFileRow
+    /// listens and sets its isExpanded accordingly.
+    static let bentoSidebarSetAllExpanded = Notification.Name("BentoSidebarSetAllExpanded")
+    /// Posted by the command bar after a successful submit. Object
+    /// is the submitted text (NSString). RootView routes to
+    /// `controller.recordCommandSubmission(_:)`.
+    static let bentoCommandSubmitted = Notification.Name("BentoCommandSubmitted")
+    /// Posted by the command bar's up/down-arrow handler. Object is
+    /// a `CommandHistoryRequest` carrying the direction, the user's
+    /// current draft (so a later down-arrow can restore it), and a
+    /// mutable response box the controller writes the recalled text
+    /// into. NotificationCenter.post is synchronous, so by the time
+    /// the post call returns, `response.text` is filled (or nil if
+    /// there's no further history in that direction).
+    static let bentoCommandHistoryRequest = Notification.Name("BentoCommandHistoryRequest")
+}
+
+/// Direction the command bar wants to walk through history.
+enum CommandHistoryDirection {
+    case previous
+    case next
+}
+
+/// Mutable response carrier for `.bentoCommandHistoryRequest`. The
+/// reference semantics let the controller-side observer write the
+/// recalled text directly into the same object the requester is
+/// holding, sidestepping notification-as-RPC awkwardness.
+final class CommandHistoryResponse {
+    var text: String?
+    init() { self.text = nil }
+}
+
+/// Payload for `.bentoCommandHistoryRequest`. Combines the inputs
+/// (direction + current draft) and the output channel (response box).
+struct CommandHistoryRequest {
+    let direction: CommandHistoryDirection
+    let currentBuffer: String
+    let response: CommandHistoryResponse
 }
 
 /// Payload for `.bentoEditorDirtyChanged`. Equatable so the value can

@@ -1106,10 +1106,44 @@ private struct CommandBarBand: View {
     let onSubmit: (String) -> Void
 
     var body: some View {
-        CommandBarView(theme: theme, submitMode: submitMode, onSubmit: onSubmit)
-            .padding(.vertical, BentoSpacing.xxs)
-            .padding(.horizontal, BentoSpacing.xxs)
-            .background(Color(hex: theme.chrome.elevated.hex))
+        // Wrap onSubmit + onHistoryRequest with the shared
+        // notification-based wiring so the user's command history
+        // walks across all command bars in the window without
+        // threading the controller reference through 5 layers.
+        CommandBarView(
+            theme: theme,
+            submitMode: submitMode,
+            onSubmit: { text in
+                // Forward to the caller (which sends to the PTY) AND
+                // record in history. .post is synchronous so the
+                // controller's append finishes before the bar clears.
+                onSubmit(text)
+                NotificationCenter.default.post(
+                    name: .bentoCommandSubmitted,
+                    object: text
+                )
+            },
+            onHistoryRequest: { direction, currentBuffer in
+                // Synchronous request-response over NotificationCenter:
+                // build a mutable response box, post the request, the
+                // RootView observer writes into the box, we return
+                // its contents.
+                let response = CommandHistoryResponse()
+                let request = CommandHistoryRequest(
+                    direction: direction == .previous ? .previous : .next,
+                    currentBuffer: currentBuffer,
+                    response: response
+                )
+                NotificationCenter.default.post(
+                    name: .bentoCommandHistoryRequest,
+                    object: request
+                )
+                return response.text
+            }
+        )
+        .padding(.vertical, BentoSpacing.xxs)
+        .padding(.horizontal, BentoSpacing.xxs)
+        .background(Color(hex: theme.chrome.elevated.hex))
     }
 }
 
@@ -1259,6 +1293,10 @@ private struct WorkspaceSidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
+                // Expand-all / collapse-all toggle. Only meaningful in
+                // the expanded sidebar — there's no nested-tree to
+                // expand inside the collapsed rail.
+                SidebarExpandAllButton(theme: theme)
             } else {
                 Spacer(minLength: 0)
             }
@@ -1338,6 +1376,47 @@ private struct SidebarToggleButton: View {
         .focusable(false)
         .onHover { isHovered = $0 }
         .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+        .animation(BentoMotion.hover, value: isHovered)
+    }
+}
+
+/// Toggle button in the sidebar header that flips between
+/// expand-all and collapse-all. Tracks the current state locally so
+/// the icon flips between `chevron.down` (currently expanded → click
+/// to collapse all) and `chevron.right` (currently collapsed →
+/// click to expand all). Posts `.bentoSidebarSetAllExpanded` with
+/// the *new* state every WorkspaceFileRow listens for.
+private struct SidebarExpandAllButton: View {
+    let theme: ThemeSpec
+
+    @State private var isHovered = false
+    @State private var allExpanded = true
+
+    var body: some View {
+        Button {
+            allExpanded.toggle()
+            NotificationCenter.default.post(
+                name: .bentoSidebarSetAllExpanded,
+                object: NSNumber(value: allExpanded)
+            )
+        } label: {
+            Image(systemName: allExpanded ? "chevron.down.2" : "chevron.right.2")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(hex: isHovered
+                    ? theme.chrome.text.hex
+                    : theme.chrome.tertiaryText.hex))
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: BentoRadius.small, style: .continuous)
+                        .fill(Color(hex: theme.chrome.accentSoft.hex)
+                            .opacity(isHovered ? 1 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered = $0 }
+        .help(allExpanded ? "Collapse all" : "Expand all")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }
@@ -1453,6 +1532,15 @@ private struct WorkspaceFileRow: View {
                         onOpenFile: onOpenFile
                     )
                 }
+            }
+        }
+        // Listen for global expand-all / collapse-all toggle so the
+        // sidebar header's button can drive the whole tree at once.
+        // Only directory rows respond (file rows have no children to
+        // expand) but the no-op write here is cheap.
+        .onReceive(NotificationCenter.default.publisher(for: .bentoSidebarSetAllExpanded)) { note in
+            if let n = note.object as? NSNumber, node.kind == .directory {
+                isExpanded = n.boolValue
             }
         }
     }

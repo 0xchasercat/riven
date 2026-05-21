@@ -38,7 +38,13 @@ struct CommandBarView: View {
     private let theme: ThemeSpec
     private let submitMode: SubmitMode
     private let onSubmit: (String) -> Void
-    private let onHistoryRequest: (HistoryDirection) -> String?
+    /// Called when the user presses up / down arrow at a position
+    /// that should walk command history. Receives the direction AND
+    /// the user's current buffer (so a later .next can restore the
+    /// in-progress draft). Returns the new text to display, or nil
+    /// to leave the buffer untouched (typically: already at the
+    /// oldest / newest entry).
+    private let onHistoryRequest: (HistoryDirection, String) -> String?
 
     @State private var text: String = ""
     /// Measured intrinsic content height of the text view, in points.
@@ -56,7 +62,7 @@ struct CommandBarView: View {
         theme: ThemeSpec,
         submitMode: SubmitMode = .enterSubmits,
         onSubmit: @escaping (String) -> Void,
-        onHistoryRequest: @escaping (HistoryDirection) -> String? = { _ in nil }
+        onHistoryRequest: @escaping (HistoryDirection, String) -> String? = { _, _ in nil }
     ) {
         self.theme = theme
         self.submitMode = submitMode
@@ -169,8 +175,8 @@ struct CommandBarView: View {
         onSubmit(payload)
     }
 
-    private func handleHistoryRequest(_ direction: HistoryDirection) -> String? {
-        onHistoryRequest(direction)
+    private func handleHistoryRequest(_ direction: HistoryDirection, currentBuffer: String) -> String? {
+        onHistoryRequest(direction, currentBuffer)
     }
 
     private func handleCancel() {
@@ -244,7 +250,7 @@ private struct CommandBarTextView: NSViewRepresentable {
     @Binding var contentHeight: CGFloat
     @Binding var isFocused: Bool
     let onSubmit: (String) -> Void
-    let onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
+    let onHistoryRequest: (CommandBarView.HistoryDirection, String) -> String?
     let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -390,7 +396,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         private let contentHeightBinding: Binding<CGFloat>
         private let isFocusedBinding: Binding<Bool>
         private var onSubmit: (String) -> Void
-        private var onHistoryRequest: (CommandBarView.HistoryDirection) -> String?
+        private var onHistoryRequest: (CommandBarView.HistoryDirection, String) -> String?
         private var onCancel: () -> Void
 
         weak var textView: CommandInputTextView?
@@ -408,7 +414,7 @@ private struct CommandBarTextView: NSViewRepresentable {
             contentHeight: Binding<CGFloat>,
             isFocused: Binding<Bool>,
             onSubmit: @escaping (String) -> Void,
-            onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
+            onHistoryRequest: @escaping (CommandBarView.HistoryDirection, String) -> String?,
             onCancel: @escaping () -> Void
         ) {
             self.submitMode = submitMode
@@ -428,7 +434,7 @@ private struct CommandBarTextView: NSViewRepresentable {
         func update(
             submitMode: CommandBarView.SubmitMode,
             onSubmit: @escaping (String) -> Void,
-            onHistoryRequest: @escaping (CommandBarView.HistoryDirection) -> String?,
+            onHistoryRequest: @escaping (CommandBarView.HistoryDirection, String) -> String?,
             onCancel: @escaping () -> Void
         ) {
             self.submitMode = submitMode
@@ -588,7 +594,7 @@ private struct CommandBarTextView: NSViewRepresentable {
 
         private func applyHistory(_ direction: CommandBarView.HistoryDirection) -> Bool {
             guard let textView else { return false }
-            guard let entry = onHistoryRequest(direction) else {
+            guard let entry = onHistoryRequest(direction, textView.string) else {
                 // No further history in that direction — swallow the
                 // event so the cursor doesn't move within the buffer.
                 return true
