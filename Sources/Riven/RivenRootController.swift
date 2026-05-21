@@ -136,6 +136,82 @@ final class RivenRootController: ObservableObject {
                 UserDefaults.standard.set(true, forKey: Self.welcomeShownDefaultsKey)
             }
         }
+
+        // Synchronous observer for `.rivenCommandHistoryRequest`.
+        // The command-bar arrow gesture posts the notification and
+        // immediately reads `response.text` — SwiftUI's `.onReceive`
+        // wiring runs on the next render tick which is far too late
+        // for that synchronous read, so up/down arrow appears to do
+        // nothing. NotificationCenter's `post(name:object:)` is
+        // synchronous when there's a registered observer; installing
+        // ours directly here means the response box is populated
+        // before the post call returns.
+        historyObserver = NotificationCenter.default.addObserver(
+            forName: .rivenCommandHistoryRequest,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            // Pull the typed payload out on the calling thread —
+            // CommandHistoryRequest is a class wrapping a reference
+            // to a mutable response box, which Sendability across
+            // the actor hop can't reason about. Reading it here
+            // captures only the reference, which we then mutate on
+            // MainActor.
+            guard let request = note.object as? CommandHistoryRequest else { return }
+            let direction = request.direction
+            let currentBuffer = request.currentBuffer
+            let responseBox = request.response
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                switch direction {
+                case .previous:
+                    responseBox.text = self.recallPreviousCommand(currentBuffer: currentBuffer)
+                case .next:
+                    responseBox.text = self.recallNextCommand(currentBuffer: currentBuffer)
+                }
+            }
+        }
+
+        // Alt-screen state observer — same async-vs-sync problem the
+        // history observer above solves. The global key monitor in
+        // RivenApp asks `focusedTerminalIsInAltScreen` on every
+        // Ctrl+letter keystroke; that relies on
+        // `altScreenPaneIDs` being current. SwiftUI's .onReceive
+        // wiring runs on the next render tick, so a user who hits
+        // Ctrl+X right after nano boots can miss the routing
+        // window. Direct NotificationCenter observer keeps the set
+        // up-to-date synchronously with the BrokeredTerminalView's
+        // draw cycle.
+        altScreenObserver = NotificationCenter.default.addObserver(
+            forName: .rivenAltScreenChanged,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            // AltScreenChange is a value type (Sendable), but we
+            // copy out the fields before hopping the actor to keep
+            // strict-concurrency happy.
+            guard let change = note.object as? AltScreenChange else { return }
+            let paneID = change.paneID
+            let isInAltScreen = change.isInAltScreen
+            MainActor.assumeIsolated {
+                self?.setAltScreen(paneID: paneID, isInAltScreen: isInAltScreen)
+            }
+        }
+    }
+
+    /// Observer token retained for the lifetime of the controller.
+    /// nonisolated(unsafe) so the deinit (nonisolated) can remove
+    /// it without crossing actor boundaries.
+    private nonisolated(unsafe) var historyObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var altScreenObserver: NSObjectProtocol?
+
+    deinit {
+        if let historyObserver {
+            NotificationCenter.default.removeObserver(historyObserver)
+        }
+        if let altScreenObserver {
+            NotificationCenter.default.removeObserver(altScreenObserver)
+        }
     }
 
     /// UserDefaults key that gates the H-15 first-run scratch tab.

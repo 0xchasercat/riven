@@ -730,7 +730,14 @@ enum CommandHistoryDirection {
 /// reference semantics let the controller-side observer write the
 /// recalled text directly into the same object the requester is
 /// holding, sidestepping notification-as-RPC awkwardness.
-final class CommandHistoryResponse {
+/// Mutable response box used by the synchronous request-response
+/// gesture on `.rivenCommandHistoryRequest`. The notification poster
+/// hands us a reference, the observer fills `text` before
+/// `NotificationCenter.post` returns, and the poster reads it on
+/// the same call. `@unchecked Sendable` because the actual usage
+/// is single-writer single-reader on the main thread — there's no
+/// cross-thread mutation despite the class shape.
+final class CommandHistoryResponse: @unchecked Sendable {
     var text: String?
     init() { self.text = nil }
 }
