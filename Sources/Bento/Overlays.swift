@@ -6,6 +6,7 @@ enum Overlay {
     case palette
     case search
     case trust
+    case shortcuts
 }
 
 // MARK: - Shared overlay chrome
@@ -461,7 +462,14 @@ struct SearchOverlay: View {
         if query.isEmpty {
             emptyHint("Type to search project files and pane scrollback")
         } else if results.isEmpty {
-            emptyHint(isSearching ? "Searching…" : "No matches")
+            // H-9: surface the search scope in the empty-state copy.
+            // `query` is the only context this view has — the
+            // project root lives on the controller, so we keep the
+            // hint scope-agnostic ("in this project") rather than
+            // re-threading the cwd through this view.
+            emptyHint(isSearching
+                ? "Searching\u{2026}"
+                : "No matches in this project \u{2014} try a broader query")
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

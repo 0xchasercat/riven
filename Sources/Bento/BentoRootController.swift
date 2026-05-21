@@ -61,22 +61,43 @@ final class BentoRootController: ObservableObject {
     /// for purely-internal state churn. Views read from it only via
     /// the notification handlers, which take ad-hoc snapshots.
     var commandHistory = CommandHistory()
+    /// H-6: currently-visible toast banner (or nil for none).
+    /// Replaced wholesale on every `showBanner` call — there's no
+    /// queue. SwiftUI keys auto-dismiss off `state.id` so a fresh
+    /// banner restarts its own countdown rather than inheriting the
+    /// previous one's remaining time.
+    @Published private(set) var currentBanner: BentoBannerState?
 
     init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
             .appendingPathComponent("Bento", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        // H-15: probe Application Support for an existing snapshot /
+        // scrollback footprint BEFORE we create the directories. The
+        // absence of either dir means this is a first run; we'll
+        // append a welcome scratch tab once the project is open. The
+        // UserDefaults `welcomeShown` flag is the second gate so the
+        // welcome can't reappear if a user nukes ~/Library/Application
+        // Support/Bento by hand to reset state.
+        let fileMgr = FileManager.default
+        let snapshotsRoot = support.appendingPathComponent("snapshots", isDirectory: true)
+        let scrollbackRoot = support.appendingPathComponent("scrollback", isDirectory: true)
+        let snapshotsExisted = fileMgr.fileExists(atPath: snapshotsRoot.path)
+        let scrollbackExisted = fileMgr.fileExists(atPath: scrollbackRoot.path)
+        let welcomeAlreadyShown = UserDefaults.standard.bool(forKey: Self.welcomeShownDefaultsKey)
+        let isFirstRun = !snapshotsExisted && !scrollbackExisted && !welcomeAlreadyShown
+
+        try? fileMgr.createDirectory(at: support, withIntermediateDirectories: true)
 
         let trust = ProjectTrustStore()
-        let snapshots = WorkspaceSnapshotStore(root: support.appendingPathComponent("snapshots", isDirectory: true))
-        let scrollback = ScrollbackStore(root: support.appendingPathComponent("scrollback", isDirectory: true))
+        let snapshots = WorkspaceSnapshotStore(root: snapshotsRoot)
+        let scrollback = ScrollbackStore(root: scrollbackRoot)
         let workspace = WorkspaceController(trustStore: trust, snapshotStore: snapshots, scrollbackStore: scrollback)
         self.workspace = workspace
         self.scrollback = scrollback
 
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwd = URL(fileURLWithPath: fileMgr.currentDirectoryPath)
         let themeID = preference.selectedTheme.id
 
         // Render with a synchronous fallback so the first frame has something
@@ -92,8 +113,90 @@ final class BentoRootController: ObservableObject {
                 self.state = real
                 self.openFilePaths = real.openFiles
             }
+            // H-15: append the welcome scratch tab AFTER the project
+            // settles so the new tab lands inside the focused
+            // workspace rather than the empty fallback graph.
+            if isFirstRun {
+                self.openWelcomeScratchTab()
+                UserDefaults.standard.set(true, forKey: Self.welcomeShownDefaultsKey)
+            }
         }
     }
+
+    /// UserDefaults key that gates the H-15 first-run scratch tab.
+    /// One-shot: once `true`, the welcome never reappears for the
+    /// life of the user account.
+    static let welcomeShownDefaultsKey = "Bento.welcomeShown"
+
+    /// H-15: append a primer markdown tab on first launch.
+    ///
+    /// We write the welcome to a real file (`~/Library/Application
+    /// Support/Bento/welcome.md`) rather than seeding an in-memory
+    /// scratch buffer because:
+    ///   * EditorBuffer's `load` path needs a URL — the editor's
+    ///     coordinator loads contents from disk when it mounts, not
+    ///     from an injected string.
+    ///   * A real file means Cmd+S works, the user can rename it,
+    ///     and they can delete it once they're done. A pure scratch
+    ///     buffer would discard their notes if they accidentally
+    ///     closed the tab.
+    /// The file is only written if it doesn't already exist, so a
+    /// user who customized their welcome (or moved it elsewhere)
+    /// won't get their copy clobbered if the gate somehow re-fires.
+    func openWelcomeScratchTab() {
+        let support = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first!
+            .appendingPathComponent("Bento", isDirectory: true)
+        let welcomeURL = support.appendingPathComponent("welcome.md")
+        if !FileManager.default.fileExists(atPath: welcomeURL.path) {
+            let body = Self.welcomeMarkdown
+            try? body.data(using: .utf8)?.write(to: welcomeURL, options: .atomic)
+        }
+        openFile(welcomeURL)
+    }
+
+    /// Markdown shown in the H-15 welcome tab. Kept short (~250
+    /// words) and biased toward the muscle-memory shortcuts that
+    /// pay off the fastest. Lives as a static so it's easy to spot-
+    /// check in code review without hunting through a resource
+    /// bundle.
+    private static let welcomeMarkdown: String = """
+# Welcome to Bento
+
+Bento is a terminal + editor multiplexer that treats panes, tabs, and
+workspaces as one connected surface.
+
+## Try these first
+
+- `⌘T` — new tab in the current workspace
+- `⌘D` — split the focused surface to the right
+- `⌘⇧D` — split it downward
+- `⌘W` — close the focused tab
+- `⌘N` — new workspace (own sidebar, own root directory)
+- `⌘K` — clear the focused terminal
+- `⌘⇧F` — search files and scrollback together
+- `⌘⇧P` — open the command palette (every action is here)
+- `⌃Tab` — cycle focus across surfaces inside the current tab
+
+## A few non-obvious things
+
+- The **command bar** at the bottom is the default writing surface.
+  Click anywhere on a terminal pane and start typing — the bar
+  catches the keystroke. `↑` / `↓` walk command history.
+- `cd` in any terminal updates that workspace's sidebar via OSC 7.
+- Drag the sidebar divider to resize; tap `‹` to collapse it into a
+  56-pt icon rail. The rail keeps your favourite folders one click
+  away without giving up the horizontal real estate.
+- Open the command palette (`⌘⇧P`) and search "theme" to switch
+  between Bento, Carbon, Tokyo Night, and Paper. The pick persists
+  across launches.
+
+## What now?
+
+You can rename or delete this tab — it's a regular file at
+`~/Library/Application Support/Bento/welcome.md`. Happy hacking.
+"""
 
     /// Hand off the broker connection once `AgentLauncher` finishes its
     /// startup handshake. Until this fires, terminal panes render a
@@ -583,7 +686,20 @@ final class BentoRootController: ObservableObject {
     /// is the user's in-progress draft (stashed so a subsequent
     /// down-arrow can restore it).
     func recallPreviousCommand(currentBuffer: String) -> String? {
-        commandHistory.previous(currentBuffer: currentBuffer)
+        let result = commandHistory.previous(currentBuffer: currentBuffer)
+        // H-9: surface a one-shot info toast the first time a user
+        // hits up-arrow with no submitted history yet. Without this
+        // the arrow does nothing — a silent dead-end that reads as
+        // "this app is broken." Five-second auto-dismiss keeps it
+        // out of the user's way once they get the point.
+        if result == nil, commandHistory.entries.isEmpty {
+            showBanner(
+                "Your shell history will appear here",
+                kind: .info,
+                autoDismissAfter: 3
+            )
+        }
+        return result
     }
 
     func recallNextCommand(currentBuffer: String) -> String? {
@@ -918,6 +1034,36 @@ final class BentoRootController: ObservableObject {
     func dismissProjectFallbackReason() {
         guard state.projectFallbackReason != nil else { return }
         state.projectFallbackReason = nil
+    }
+
+    /// H-6: surface a toast-style banner above the focused workspace.
+    /// Replaces any banner currently on screen — no queue. Callers
+    /// override `autoDismissAfter` to nil for sticky warnings the
+    /// user has to acknowledge with the ×. Default 5s lines up with
+    /// the macOS notification-banner dwell.
+    ///
+    /// This is the canonical path for *non-destructive* feedback —
+    /// editor save failures, search-engine errors, project fallback
+    /// notices, "your shell history will appear here," etc. Anything
+    /// that blocks the user (close-dirty, quit-dirty) still uses
+    /// NSAlert.
+    func showBanner(
+        _ message: String,
+        kind: BannerKind,
+        autoDismissAfter: TimeInterval? = 5
+    ) {
+        currentBanner = BentoBannerState(
+            message: message,
+            kind: kind,
+            autoDismissAfter: autoDismissAfter
+        )
+    }
+
+    /// Drop the current banner. Wired to the × button on the banner
+    /// view AND fired by the SwiftUI auto-dismiss task once the
+    /// configured delay elapses.
+    func dismissBanner() {
+        currentBanner = nil
     }
 
     /// Cycle to the next theme. Wired through `CommandAction.cycleTheme`.

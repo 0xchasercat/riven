@@ -83,6 +83,7 @@ struct BentoRootView: View {
             onPalette: { activeOverlay = .palette; paletteQuery = "" },
             onSearch: { activeOverlay = .search; searchQuery = "" },
             onShowThemePicker: { showThemePicker() },
+            onShortcuts: { activeOverlay = .shortcuts },
             onNewTab: { controller.openNewInnerTab() },
             onNewWorkspace: { controller.openNewWorkspace() },
             onOpenProject: { presentOpenProjectPicker() },
@@ -144,6 +145,25 @@ struct BentoRootView: View {
         // .onChange above. Mirror the same gate here.
         .task(id: trustPromptTrigger) {
             maybeAutoShowTrust(for: trustPromptTrigger)
+        }
+        // H-6: surface project-fallback notices through the unified
+        // banner pipe instead of a bespoke strip. The controller
+        // sets `projectFallbackReason` when `openProject` falls back
+        // to `~`; we mirror it into the toast layer (sticky — nil
+        // auto-dismiss — so the user reads it before it vanishes)
+        // and clear the source field so we don't double-surface on
+        // a subsequent re-render.
+        .onChange(of: controller.state.projectFallbackReason) { _, reason in
+            if let reason {
+                controller.showBanner(reason, kind: .warning, autoDismissAfter: nil)
+                controller.dismissProjectFallbackReason()
+            }
+        }
+        .task(id: controller.state.projectFallbackReason) {
+            if let reason = controller.state.projectFallbackReason {
+                controller.showBanner(reason, kind: .warning, autoDismissAfter: nil)
+                controller.dismissProjectFallbackReason()
+            }
         }
     }
 
@@ -208,18 +228,19 @@ struct BentoRootView: View {
             .overlay(alignment: .bottom) {
                 Hairline(theme: theme)
             }
-            // H-3: shown when openProject fell back to ~ because the
-            // requested root was missing or unreadable. The user can
-            // dismiss with the × — the fallback cwd stays put either
-            // way; this banner is purely informational. Lives above
-            // PaneGridView so it sits in the workspace chrome rather
-            // than on top of one specific pane.
-            if let reason = controller.state.projectFallbackReason {
-                ProjectFallbackBanner(
+            // H-6: app-wide toast band. Single slot above the pane
+            // grid; calling `showBanner` replaces whatever was here.
+            // The H-3 project-fallback strip used to live here as a
+            // bespoke component — it now flows through this same
+            // pipe with `kind: .warning` and `autoDismissAfter: nil`
+            // (sticky until the user clicks ×).
+            if let banner = controller.currentBanner {
+                BentoBannerHost(
                     theme: theme,
-                    reason: reason,
-                    onDismiss: { controller.dismissProjectFallbackReason() }
+                    state: banner,
+                    onDismiss: { controller.dismissBanner() }
                 )
+                .animation(BentoMotion.standard, value: banner.id)
             }
             PaneGridView(
                 theme: theme,
@@ -420,6 +441,11 @@ struct BentoRootView: View {
                     activeOverlay = nil
                 },
                 onDismiss: { activeOverlay = nil }
+            )
+        case .shortcuts:
+            ShortcutsCheatsheetOverlay(
+                theme: theme,
+                onClose: { activeOverlay = nil }
             )
         }
     }
@@ -701,6 +727,7 @@ private struct NotificationWiring: ViewModifier {
     let onPalette: () -> Void
     let onSearch: () -> Void
     let onShowThemePicker: () -> Void
+    let onShortcuts: () -> Void
     let onNewTab: () -> Void
     let onNewWorkspace: () -> Void
     let onOpenProject: () -> Void
@@ -739,6 +766,7 @@ private struct NotificationWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowThemePicker)) { _ in onShowThemePicker() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoShowShortcutsCheatsheet)) { _ in onShortcuts() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in onNewWorkspace() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoOpenProject)) { _ in onOpenProject() }
