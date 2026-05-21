@@ -120,11 +120,21 @@ private struct InnerTabChip: View {
                 if isEditing {
                     inlineEditor
                 } else {
-                    Text(displayLabel)
+                    // H-8: pre-truncate the chip label so the strip
+                    // can't grow past the cap regardless of available
+                    // width. SwiftUI's `truncationMode(.middle)` only
+                    // kicks in once a container is constrained; chips
+                    // size to their content, so without this a
+                    // 60-char filename would push the `+` / `[][]`
+                    // buttons off-screen. We still set
+                    // `truncationMode(.middle)` as a belt-and-braces
+                    // fallback for narrow windows.
+                    Text(displayLabel.middleEllipsized())
                         .font(BentoType.chrome(12, weight: isActive ? .semibold : .medium))
                         .foregroundStyle(Color(hex: labelHex))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(displayLabel)
                 }
                 // Pencil-icon rename affordance (hover-only). Replaces
                 // the prior double-click-to-rename pattern, which
@@ -164,6 +174,7 @@ private struct InnerTabChip: View {
                     }
                     .buttonStyle(.plain)
                     .focusable(false)
+                    .help("Close tab \u{00B7} \u{2318}W")
                 }
             }
             .padding(.horizontal, BentoSpacing.m)

@@ -1368,15 +1368,27 @@ private struct WorkspaceSidebarView: View {
         }
     }
 
+    /// H-9: replace the bare `(empty)` with an actual empty state.
+    /// Small SF Symbol on top + a tertiary-tint paragraph below that
+    /// tells the user what to do next ("⌘T for a new shell"). The
+    /// icon makes the empty state read as intentional rather than
+    /// a render glitch, and the shortcut hint primes the muscle
+    /// memory we want users to build.
     private var emptyState: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Text("(empty)")
-                .font(BentoType.mono(BentoType.small))
+        VStack(spacing: BentoSpacing.s) {
+            Image(systemName: "folder.badge.questionmark")
+                .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-            Spacer(minLength: 0)
+                .accessibilityHidden(true)
+            Text("no files yet")
+                .font(BentoType.mono(BentoType.small, weight: .medium))
+                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+            Text("\u{2318}T for a new shell")
+                .font(BentoType.mono(BentoType.caption))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
         }
-        .padding(.vertical, BentoSpacing.l)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, BentoSpacing.xl)
     }
 
     /// 36 pt header. Position is invariant across states: toggle is

@@ -145,13 +145,19 @@ private struct TabChip: View {
                 if isEditing {
                     inlineEditor
                 } else {
-                    Text(label)
+                    // H-8: pre-truncate workspace tab labels too so a
+                    // workspace rooted at a long path doesn't run the
+                    // tab off the strip. Full label sits in the
+                    // tooltip so the user can still confirm which
+                    // workspace is which without expanding the chip.
+                    Text(label.middleEllipsized())
                         .font(BentoType.chrome(13, weight: isActive ? .semibold : .medium))
                         .foregroundStyle(Color(hex: isActive
                             ? theme.chrome.text.hex
                             : theme.chrome.dimText.hex))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(label)
                 }
                 // Pencil-icon edit affordance. Hover-only so the chip
                 // stays clean in the resting state; clicking switches
@@ -187,6 +193,7 @@ private struct TabChip: View {
                     }
                     .buttonStyle(.plain)
                     .focusable(false)
+                    .help("Close workspace \u{00B7} \u{2318}W")
                 }
             }
             .padding(.horizontal, BentoSpacing.l)
@@ -261,6 +268,7 @@ private struct AddTabButton: View {
         .buttonStyle(.plain)
         .focusable(false)
         .onHover { isHovered = $0 }
+        .help("New workspace \u{00B7} \u{2318}N")
         .animation(BentoMotion.hover, value: isHovered)
     }
 }

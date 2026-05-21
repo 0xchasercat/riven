@@ -302,7 +302,36 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         commandMenu.addItem(clearItem)
         commandItem.submenu = commandMenu
         main.addItem(commandItem)
+
+        // Help menu (H-16). macOS auto-merges system entries into the
+        // menu titled "Help", so we use that exact title and add our
+        // own two items at the top. The cheatsheet posts a
+        // notification BentoRootView observes; About is the standard
+        // AppKit panel populated from Info.plist (or sensible
+        // defaults when running unbundled).
+        let helpItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        let cheatsheetItem = NSMenuItem(
+            title: "Bento Keyboard Shortcuts",
+            action: #selector(showShortcutsCheatsheet),
+            keyEquivalent: "?"
+        )
+        // Cmd+? is conventionally shift-modified on US layouts (`?`
+        // already requires Shift) so AppKit picks up the right glyph
+        // without us explicitly setting `.shift`.
+        helpMenu.addItem(cheatsheetItem)
+        helpMenu.addItem(NSMenuItem(
+            title: "About Bento",
+            action: #selector(showAboutPanel),
+            keyEquivalent: ""
+        ))
+        helpItem.submenu = helpMenu
+        main.addItem(helpItem)
+
         NSApplication.shared.mainMenu = main
+        // Tell AppKit which menu is the user-visible "Help" so it
+        // can prepend the system search field at the top.
+        NSApplication.shared.helpMenu = helpMenu
     }
 
     @objc private func showCommandPalette() {
@@ -343,6 +372,18 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
 
     @objc private func cycleSurfaceFocus() {
         NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
+    }
+
+    @objc private func showShortcutsCheatsheet() {
+        NotificationCenter.default.post(name: .bentoShowShortcutsCheatsheet, object: nil)
+    }
+
+    @objc private func showAboutPanel() {
+        // Force-activate first so the panel appears in front rather
+        // than tucked behind the workspace window — `orderFront` alone
+        // doesn't bring the app forward when it's already key.
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
 }
 
@@ -430,6 +471,10 @@ extension Notification.Name {
     /// the post call returns, `response.text` is filled (or nil if
     /// there's no further history in that direction).
     static let bentoCommandHistoryRequest = Notification.Name("BentoCommandHistoryRequest")
+    /// H-16: posted by the Help menu's "Bento Keyboard Shortcuts"
+    /// item (⌘?). RootView listens and toggles the cheatsheet
+    /// overlay open.
+    static let bentoShowShortcutsCheatsheet = Notification.Name("BentoShowShortcutsCheatsheet")
 }
 
 /// Direction the command bar wants to walk through history.

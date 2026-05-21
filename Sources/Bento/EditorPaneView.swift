@@ -13,9 +13,10 @@ import SwiftUI
 /// its own URL — earlier alpha builds shared one binding across all
 /// panes, which made opening a file mirror it across the entire grid.
 ///
-/// Save failures surface as a small banner overlaid on top of the text
-/// view. The banner auto-dismisses after 6 seconds, on user dismiss, or
-/// when the next save succeeds.
+/// Save failures route through `BentoRootController.showBanner` so the
+/// chrome surfaces the error at the top of the focused workspace
+/// regardless of which editor pane it came from. The 6-second per-
+/// pane inline banner this view used to host was retired with H-6.
 struct EditorPaneView: View {
     let theme: ThemeSpec
     let paneID: PaneID
@@ -28,9 +29,11 @@ struct EditorPaneView: View {
     let surfaceID: SurfaceID?
     @ObservedObject var fileMap: PaneFileMap
     @Binding var isDirty: Bool
-
-    @State private var saveError: String?
-    @State private var saveErrorToken: Int = 0
+    /// H-6: Save failures used to surface in a per-pane inline strip
+    /// only this view could see. We now also forward them through
+    /// the app-wide BentoBanner the controller manages, so the
+    /// failure is visible regardless of which pane is focused.
+    @EnvironmentObject private var controller: BentoRootController
 
     init(
         theme: ThemeSpec,
@@ -54,102 +57,27 @@ struct EditorPaneView: View {
             surfaceID: surfaceID,
             onSaveResult: handleSaveResult
         )
-        .overlay(alignment: .top) {
-            if let saveError {
-                SaveErrorBanner(
-                    message: saveError,
-                    theme: theme,
-                    onDismiss: dismissSaveError
-                )
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .task(id: saveErrorToken) {
-                    // Auto-dismiss after 6 seconds. The token is bumped on
-                    // every new error so a fresh failure restarts the timer
-                    // rather than inheriting the previous one's countdown.
-                    try? await Task.sleep(nanoseconds: 6_000_000_000)
-                    if self.saveErrorToken == saveErrorToken {
-                        dismissSaveError()
-                    }
-                }
-            }
-        }
-        .animation(.easeInOut(duration: 0.18), value: saveError)
     }
 
     private func handleSaveResult(_ result: Result<Void, Error>) {
         switch result {
         case .success:
-            // Successful save clears any lingering banner.
-            if saveError != nil {
-                saveError = nil
-            }
+            // Successful save is its own feedback (dirty dot drops,
+            // disk timestamp updates). No banner needed.
+            break
         case .failure(let error):
-            saveError = "Could not save: \(error.localizedDescription)"
-            saveErrorToken &+= 1
+            // H-6: surface save failures through the unified banner.
+            // The error message is short so we keep the default 5s
+            // auto-dismiss — a user retrying a save will hit it again
+            // if the underlying problem persists.
+            let filename = fileMap.binding(for: paneID).wrappedValue
+                .map { URL(fileURLWithPath: $0.path).lastPathComponent }
+                ?? "untitled"
+            controller.showBanner(
+                "Couldn't save \(filename): \(error.localizedDescription)",
+                kind: .error
+            )
         }
-    }
-
-    private func dismissSaveError() {
-        saveError = nil
-    }
-}
-
-/// Small banner shown at the top of an editor pane when a save fails.
-/// Themed via `theme.chrome` so it matches the surrounding chrome and
-/// doesn't introduce a new top-level overlay system.
-private struct SaveErrorBanner: View {
-    let message: String
-    let theme: ThemeSpec
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Rectangle()
-                .fill(Color(hex: theme.chrome.activeBorder.hex))
-                .frame(width: 2)
-                .frame(maxHeight: .infinity)
-
-            Text(message)
-                .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundColor(Color(hex: theme.chrome.text.hex))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button(action: onDismiss) {
-                Text("Dismiss")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color(hex: theme.chrome.text.hex))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: BentoRadius.small)
-                            .stroke(Color(hex: theme.chrome.activeBorder.hex), lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .frame(height: 32)
-        .background(
-            RoundedRectangle(cornerRadius: theme.geometry.paneRadius)
-                .fill(Color(hex: theme.chrome.panel.hex))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: theme.geometry.paneRadius)
-                .stroke(Color(hex: theme.chrome.activeBorder.hex).opacity(0.6), lineWidth: 1)
-        )
-        // BentoElevation.card mirrors the card shadow used by other
-        // raised surfaces (overlay rows, palette rows) so the banner's
-        // depth matches the rest of the modal chrome.
-        .shadow(
-            color: BentoElevation.card.color,
-            radius: BentoElevation.card.radius,
-            x: BentoElevation.card.x,
-            y: BentoElevation.card.y
-        )
     }
 }
 
