@@ -685,7 +685,15 @@ struct OverlayBackdrop<Content: View>: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        // The backdrop tint uses the theme's `overlay` swatch (Paper
+        // ships a translucent ink so the cream chrome behind it stays
+        // visible; dark themes ship a deeper near-black). The 0.55
+        // multiplier on top is a global modal-scrim density we want
+        // independent of the theme, since the backdrop's primary job
+        // is to mute the workspace behind the modal regardless of
+        // light/dark mode.
+        let overlayRadius = theme.geometry.windowRadius
+        return ZStack(alignment: .top) {
             Color(hex: theme.chrome.overlay.hex)
                 .opacity(0.55)
                 .ignoresSafeArea()
@@ -693,14 +701,14 @@ struct OverlayBackdrop<Content: View>: View {
             content
                 .frame(width: width)
                 .background(
-                    RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous)
+                    RoundedRectangle(cornerRadius: overlayRadius, style: .continuous)
                         .fill(Color(hex: theme.chrome.elevated.hex))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous)
+                    RoundedRectangle(cornerRadius: overlayRadius, style: .continuous)
                         .strokeBorder(Color(hex: theme.chrome.border.hex), lineWidth: 1)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: BentoRadius.large, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: overlayRadius, style: .continuous))
                 .shadow(
                     color: BentoElevation.modal.color,
                     radius: BentoElevation.modal.radius,

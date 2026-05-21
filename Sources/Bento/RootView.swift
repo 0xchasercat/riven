@@ -152,19 +152,19 @@ struct BentoRootView: View {
                 toolbar
             }
             .background(
-                // `.headerView` is the macOS material designed for
-                // toolbar / titlebar surfaces — much less translucent
-                // than `.windowBackground`, which made the chrome
-                // read as one washed-out grey strip against the dark
-                // Bento themes. The chrome's own `chrome.elevated`
-                // tint sits on top at ~0.92 opacity (see
-                // WorkspaceTabBar) so the panel still feels like a
-                // proper surface, with just enough vibrancy under it
-                // to anchor against the titlebar.
-                VibrancyBackground(
-                    material: .headerView,
-                    blendingMode: .behindWindow
-                )
+                // Pick the vibrancy material from the active theme.
+                // Dark themes ship `.headerView` (toolbar/titlebar
+                // surface — much less translucent than
+                // `.windowBackground`, which made the chrome read as
+                // one washed-out grey strip against the dark Bento
+                // themes). Paper ships `.titlebar` so the cream
+                // chrome stays light and warm rather than picking up
+                // the system's window-background tint. The chrome's
+                // own elevated tint sits on top via
+                // `WorkspaceTabBar.background` so the panel still
+                // feels like a proper surface, with just enough
+                // vibrancy under it to anchor against the titlebar.
+                VibrancyBackground(theme: theme, blendingMode: .behindWindow)
             )
             // Single hairline at the bottom marks the seam between the
             // vibrant chrome and the opaque pane grid below.
@@ -261,10 +261,10 @@ struct BentoRootView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 32)
-        // Mostly-opaque tint over the shared vibrancy underlay so the
-        // toolbar and the tab bar read as one panel with proper
-        // contrast — see WorkspaceTabBar's matching 0.92.
-        .background(Color(hex: theme.chrome.elevated.hex).opacity(0.92))
+        // Solid `paneHeaderBg` tint over the shared vibrancy underlay
+        // so the toolbar and the tab bar read as one continuous
+        // header panel — see WorkspaceTabBar's matching background.
+        .background(Color(hex: theme.chrome.paneHeaderBg.hex))
         .onAppear {
             // Seed the draft on first render so the field shows the
             // focused workspace's path, not an empty string.
@@ -429,6 +429,11 @@ struct BentoRootView: View {
     }
 
     private var statusBar: some View {
+        // Status bar uses the dedicated `statusBg` / `statusText`
+        // tokens (one notch off the canvas background — Bento ships
+        // a near-black band; Paper a warm-cream one slightly darker
+        // than the editor canvas). Matches `mockup/workspace.jsx`'s
+        // `StatusBar` component.
         HStack(spacing: 14) {
             Text(URL(fileURLWithPath: controller.state.projectRoot).lastPathComponent)
             Text("\(controller.state.paneGraph.leaves().count) tab\(controller.state.paneGraph.leaves().count == 1 ? "" : "s")")
@@ -438,10 +443,15 @@ struct BentoRootView: View {
             Text("0 telemetry")
         }
         .font(.system(size: 10, design: .monospaced))
-        .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
+        .foregroundStyle(Color(hex: theme.chrome.statusText.hex))
         .padding(.horizontal, 12)
         .frame(height: 22)
-        .background(Color(hex: theme.chrome.background.hex))
+        .background(Color(hex: theme.chrome.statusBg.hex))
+        .overlay(alignment: .top) {
+            // Hairline seam between pane grid and status bar matches
+            // the mockup's `borderTop: 1px solid theme.border`.
+            Hairline(theme: theme)
+        }
     }
 }
 

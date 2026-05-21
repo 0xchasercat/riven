@@ -124,7 +124,7 @@ private struct SaveErrorBanner: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(
-                        RoundedRectangle(cornerRadius: 3)
+                        RoundedRectangle(cornerRadius: BentoRadius.small)
                             .stroke(Color(hex: theme.chrome.activeBorder.hex), lineWidth: 1)
                     )
             }
@@ -134,14 +134,22 @@ private struct SaveErrorBanner: View {
         .padding(.horizontal, 8)
         .frame(height: 32)
         .background(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: theme.geometry.paneRadius)
                 .fill(Color(hex: theme.chrome.panel.hex))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: theme.geometry.paneRadius)
                 .stroke(Color(hex: theme.chrome.activeBorder.hex).opacity(0.6), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
+        // BentoElevation.card mirrors the card shadow used by other
+        // raised surfaces (overlay rows, palette rows) so the banner's
+        // depth matches the rest of the modal chrome.
+        .shadow(
+            color: BentoElevation.card.color,
+            radius: BentoElevation.card.radius,
+            x: BentoElevation.card.x,
+            y: BentoElevation.card.y
+        )
     }
 }
 
@@ -199,6 +207,12 @@ struct STTextEditorRepresentable: NSViewRepresentable {
         textView.textContainer.lineFragmentPadding = EditorChrome.horizontalPadding
         textView.highlightSelectedLine = true
         textView.selectedLineHighlightColor = EditorChrome.currentLineColor(theme)
+        // (STTextView exposes its own selection highlight via its
+        // internal NSTextLayoutManager — there's no public
+        // `selectedTextAttributes` setter; the system selection
+        // colour ships from the appearance, which we pin via
+        // VibrancyBackground's `appearance` knob so Paper's selection
+        // reads as a warm tint rather than the dark-mode blue.)
         textView.showsLineNumbers = true
         EditorChrome.styleGutter(textView.gutterView, theme: theme)
         textView.textDelegate = context.coordinator

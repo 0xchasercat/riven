@@ -179,16 +179,67 @@ public struct Surface<Content: View>: View {
 /// `state = .followsWindowActiveState` automatically dims the vibrancy
 /// when the window loses key focus — matches what every native macOS app
 /// does and avoids manual active/inactive plumbing on our side.
+///
+/// The theme-aware initializer (`init(theme:blendingMode:)`) resolves
+/// `theme.material.vibrancyMaterial` (a string token kept in BentoCore so
+/// the model layer stays AppKit-free) into the corresponding
+/// `NSVisualEffectView.Material`. This is how Paper (`titlebar`) and the
+/// dark themes (`headerView`) get different chrome translucency from a
+/// single declaration in `ThemeSpec.builtIns`. The appearance is also
+/// pinned to the theme's `mode`, so Paper renders with the macOS light
+/// appearance even when the system is in dark mode (otherwise vibrancy
+/// would pick the wrong tint and the chrome would read as muddy gray).
 public struct VibrancyBackground: NSViewRepresentable {
     public let material: NSVisualEffectView.Material
     public let blendingMode: NSVisualEffectView.BlendingMode
+    /// Forced appearance for the vibrancy surface. `nil` means "inherit
+    /// from the window/system" (legacy behavior). When the theme-aware
+    /// initializer is used we pin this to match the theme's `mode` so
+    /// switching to Paper while the system is dark doesn't leak the
+    /// system-dark `titlebar` material under the cream chrome.
+    public let appearance: NSAppearance.Name?
 
     public init(
         material: NSVisualEffectView.Material = .windowBackground,
-        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow,
+        appearance: NSAppearance.Name? = nil
     ) {
         self.material = material
         self.blendingMode = blendingMode
+        self.appearance = appearance
+    }
+
+    /// Theme-aware convenience initializer. Maps the theme's
+    /// `vibrancyMaterial` string into the matching AppKit case and pins
+    /// the visual-effect view's appearance to the theme's light/dark
+    /// mode so the chrome doesn't take on the wrong system tint mid-
+    /// theme-switch.
+    ///
+    /// Supported string values: `windowBackground`, `headerView`,
+    /// `titlebar`, `underWindowBackground`, `underPageBackground`.
+    /// Anything else falls through to `.windowBackground` — the same
+    /// fallback documented on `ThemeMaterial.vibrancyMaterial`.
+    public init(
+        theme: ThemeSpec,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    ) {
+        self.material = Self.material(for: theme.material.vibrancyMaterial)
+        self.blendingMode = blendingMode
+        self.appearance = theme.material.mode == .light ? .aqua : .darkAqua
+    }
+
+    /// Map the theme's string token to the AppKit material. Kept private
+    /// + static so the lookup table lives next to the SwiftUI call sites
+    /// rather than inside BentoCore (which has to stay AppKit-free).
+    private static func material(for token: String) -> NSVisualEffectView.Material {
+        switch token {
+        case "windowBackground": return .windowBackground
+        case "headerView": return .headerView
+        case "titlebar": return .titlebar
+        case "underWindowBackground": return .underWindowBackground
+        case "underPageBackground": return .underPageBackground
+        default: return .windowBackground
+        }
     }
 
     public func makeNSView(context: Context) -> NSVisualEffectView {
@@ -197,12 +248,20 @@ public struct VibrancyBackground: NSViewRepresentable {
         view.blendingMode = blendingMode
         view.state = .followsWindowActiveState
         view.isEmphasized = false
+        if let appearance {
+            view.appearance = NSAppearance(named: appearance)
+        }
         return view
     }
 
     public func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
+        if let appearance {
+            nsView.appearance = NSAppearance(named: appearance)
+        } else {
+            nsView.appearance = nil
+        }
     }
 }
 
@@ -210,20 +269,35 @@ public struct VibrancyBackground: NSViewRepresentable {
 
 /// A 1-px (looks 0.5-pt on Retina) divider in the theme's hairline color.
 /// Use to separate sibling surfaces.
+///
+/// Pass `weight: nil` to inherit the theme's `geometry.dividerWeight`
+/// (used by inter-pane / split-strip dividers — the marquee Bento
+/// "compartment wall" look at 6 pt). Override with an explicit weight
+/// for ordinary chrome separators (header underline, tab strip seam,
+/// status-bar topline) that should stay at a true hairline regardless
+/// of theme.
 public struct Hairline: View {
     let theme: ThemeSpec
     let axis: Axis
+    let weight: CGFloat?
 
-    public init(theme: ThemeSpec, axis: Axis = .horizontal) {
+    public init(theme: ThemeSpec, axis: Axis = .horizontal, weight: CGFloat? = 1) {
         self.theme = theme
         self.axis = axis
+        self.weight = weight
     }
 
     public var body: some View {
-        Color(hex: theme.chrome.hairline.hex)
+        let w = weight ?? theme.geometry.dividerWeight
+        // Sibling split strips use `border` (deeper, reads as a
+        // compartment wall at 6 pt on Bento); pure hairlines fall back
+        // to the lighter `hairline` token. We pick by weight rather
+        // than by a separate parameter so call sites stay terse.
+        let colorHex = w >= 2 ? theme.chrome.border.hex : theme.chrome.hairline.hex
+        return Color(hex: colorHex)
             .frame(
-                width: axis == .vertical ? 1 : nil,
-                height: axis == .horizontal ? 1 : nil
+                width: axis == .vertical ? w : nil,
+                height: axis == .horizontal ? w : nil
             )
     }
 }

@@ -300,8 +300,13 @@ private struct CommandBarTextView: NSViewRepresentable {
         textView.font = monospacedFont
         textView.textColor = NSColor(hex: theme.chrome.text.hex)
         textView.insertionPointColor = NSColor(hex: theme.chrome.accent.hex)
+        // `selectionBg` carries a per-theme translucent accent (Paper
+        // ships an ink-on-cream wash; dark themes ship low-alpha
+        // accent tints). Cleaner than the prior accent-at-0.28 hack
+        // and matches the editor's selection fill so the two inputs
+        // read as siblings.
         textView.selectedTextAttributes = [
-            .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
+            .backgroundColor: NSColor(hex: theme.chrome.selectionBg.hex)
         ]
         textView.placeholderString = Self.placeholderText(for: submitMode)
         textView.placeholderFont = monospacedFont
@@ -350,8 +355,13 @@ private struct CommandBarTextView: NSViewRepresentable {
         textView.placeholderColor = NSColor(hex: theme.chrome.tertiaryText.hex)
         textView.placeholderFont = monospacedFont
         textView.placeholderString = Self.placeholderText(for: submitMode)
+        // `selectionBg` carries a per-theme translucent accent (Paper
+        // ships an ink-on-cream wash; dark themes ship low-alpha
+        // accent tints). Cleaner than the prior accent-at-0.28 hack
+        // and matches the editor's selection fill so the two inputs
+        // read as siblings.
         textView.selectedTextAttributes = [
-            .backgroundColor: NSColor(hex: theme.chrome.accent.hex).withAlphaComponent(0.28)
+            .backgroundColor: NSColor(hex: theme.chrome.selectionBg.hex)
         ]
 
         // Sync the AppKit buffer with the SwiftUI state when SwiftUI is
