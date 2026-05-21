@@ -929,7 +929,22 @@ private struct EditorTabContent: View {
                 fileMap: fileMap,
                 isDirty: $isDirty
             )
+            // Claim all remaining vertical space. Without this, the
+            // STTextView's intrinsic content height (which can grow
+            // with file length OR with an empty scratch buffer's
+            // initial layout pass) leaks up through SwiftUI's VStack
+            // sizing and pushes the toolbar / hairline / parent chrome
+            // beyond the viewport. Pinning maxHeight: .infinity tells
+            // SwiftUI "fill what's left after the 32pt toolbar + 1pt
+            // hairline" — the NSScrollView then clips long content
+            // internally instead of stretching the layout.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // VStack's own max-frame so its child .frame above resolves
+        // against the tab area's bounds (which gets .infinity from
+        // tabAreaView) instead of falling back to "natural sum of
+        // children" sizing.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(hex: theme.chrome.panel.hex))
         .task(id: "\(tabID.rawValue)|\(surfaceID.rawValue)|\(path ?? "")") {
             if let path {
