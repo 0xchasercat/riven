@@ -629,48 +629,87 @@ You can rename or delete this tab — it's a regular file at
 
     /// Replace the tracked pane graph after a UI-driven mutation (split,
     /// focus change, pane close).
+    ///
+    /// Perf-critical path. Every split / close / focus-shift / OSC 7
+    /// cwd update flows through here, and each one must feel instant.
+    /// Two pieces of off-main work are kicked off concurrently:
+    ///
+    ///   * `workspace.updatePaneGraph` — actor hop to the
+    ///     WorkspaceController to keep its snapshot-source-of-truth
+    ///     in sync. Was already off-main.
+    ///   * `syncScrollbackMetadataWithPaneGraph` — disk I/O loop
+    ///     across every terminal pane to patch their sidecars. USED
+    ///     to run synchronously on the main thread, so a workspace
+    ///     with N panes did 2N (read + maybe-write) JSON file ops
+    ///     per mutation. On a contended SSD that read as "splitting
+    ///     a pane takes half a second." Moved to `Task.detached`
+    ///     with a captured graph snapshot — the user sees the
+    ///     SwiftUI re-render the moment `state.paneGraph` is
+    ///     assigned; sidecar files catch up a few ms later off-
+    ///     thread.
     func recordPaneGraph(_ graph: PaneGraph) {
         Task { [workspace] in
             await workspace.updatePaneGraph(graph)
         }
         self.state.paneGraph = graph
-        // S-2: keep scrollback sidecars in sync with the live pane graph.
-        // Best-effort: if the broker hasn't seeded a sidecar for a brand-
-        // new pane yet, the helper is a no-op for it (touchMetadata-style
-        // semantics) and the next pane-graph mutation will retry.
-        syncScrollbackMetadataWithPaneGraph(graph)
+        // Capture the values the off-thread sync needs while we're
+        // still on the main actor; PaneGraph is a value type, so the
+        // closure gets its own copy.
+        let projectRoot = state.projectRoot
+        let store = scrollback
+        Task.detached(priority: .utility) {
+            Self.syncScrollbackMetadataOffThread(
+                graph: graph,
+                projectRoot: projectRoot,
+                scrollback: store
+            )
+        }
     }
 
-    /// Walk the live pane graph and patch every terminal pane's sidecar
-    /// to reflect the current project root + workspace label + inner-tab
-    /// label. Cheap to run on every `recordPaneGraph` — it only writes
-    /// when a field has actually changed.
-    private func syncScrollbackMetadataWithPaneGraph(_ graph: PaneGraph) {
-        let projectRoot = state.projectRoot
+    /// Walk the captured pane graph and patch every terminal pane's
+    /// sidecar to reflect the current project root + workspace label
+    /// + inner-tab label. Runs off-main on a utility-priority
+    /// detached Task; takes its dependencies as plain `Sendable`
+    /// values so it never has to hop back to the controller actor.
+    ///
+    /// Per-pane writes are gated on a change check (no-op when
+    /// nothing differs), so the steady-state cost is one cheap JSON
+    /// read per terminal pane — and even those happen off the UI
+    /// thread.
+    nonisolated private static func syncScrollbackMetadataOffThread(
+        graph: PaneGraph,
+        projectRoot: String,
+        scrollback: ScrollbackStore
+    ) {
         for pane in graph.panes.values {
             guard let ws = pane.workspace else { continue }
+            let workspaceName = ws.customName
+                ?? URL(fileURLWithPath: ws.currentCwd).lastPathComponent
             for tab in ws.tabs {
                 guard let paneID = tab.terminalPaneID else { continue }
-                enrichScrollbackMetadata(
+                Self.enrichScrollbackMetadataOffThread(
                     paneID: paneID,
                     projectRoot: projectRoot,
-                    workspaceName: ws.customName ?? URL(fileURLWithPath: ws.currentCwd).lastPathComponent,
-                    paneLabel: tab.displayName
+                    workspaceName: workspaceName,
+                    paneLabel: tab.displayName,
+                    scrollback: scrollback
                 )
             }
         }
     }
 
     /// Patch the metadata sidecar for `paneID` with whatever app-level
-    /// context we know. Each field is optional — pass `nil` to leave it
-    /// untouched. Skips the write when the sidecar doesn't exist yet
-    /// (the broker may still be spawning the PTY); subsequent calls will
-    /// retry.
-    private func enrichScrollbackMetadata(
+    /// context we know. Static / nonisolated so the off-thread sync
+    /// can call it without hopping back to the controller actor.
+    ///
+    /// Skips the write when the sidecar doesn't exist yet (the broker
+    /// may still be spawning the PTY); subsequent calls will retry.
+    nonisolated private static func enrichScrollbackMetadataOffThread(
         paneID: PaneID,
-        projectRoot: String? = nil,
-        workspaceName: String? = nil,
-        paneLabel: String? = nil
+        projectRoot: String?,
+        workspaceName: String?,
+        paneLabel: String?,
+        scrollback: ScrollbackStore
     ) {
         guard var meta = try? scrollback.readMetadata(paneID) else { return }
         var changed = false

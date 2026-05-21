@@ -923,18 +923,31 @@ private struct SurfaceLeafView: View {
         if isFocused {
             focusedLayout
         } else {
-            // Unfocused split surfaces use simultaneousGesture so a
-            // tap shifts focus without shadowing the underlying
-            // NSView's mouseDown — letting the user start typing
-            // immediately after the click lands.
+            // Unfocused split surfaces use a zero-distance DragGesture
+            // rather than TapGesture because TapGesture's `.onEnded`
+            // doesn't fire until macOS's tap-vs-drag-vs-double-tap
+            // recognizer's window closes (~200-300 ms). For a focus-
+            // shift that delay reads as the whole UI being sluggish.
+            // `DragGesture(minimumDistance: 0).onChanged` fires on
+            // mouseDown's very first event, no recognition window.
+            //
+            // No guard against multi-posting: the controller's
+            // `focusSurface` is idempotent (compares before mutating,
+            // no-ops when the workspace already says we're focused),
+            // and the moment that mutation lands SwiftUI re-renders
+            // this leaf into the `if isFocused` branch which has no
+            // gesture attached — the gesture is torn down within the
+            // same drag and stops firing. Net cost: a small handful
+            // of redundant no-op posts during the drag's tail.
             focusedLayout
                 .simultaneousGesture(
-                    TapGesture().onEnded {
-                        NotificationCenter.default.post(
-                            name: .rivenFocusSurface,
-                            object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
-                        )
-                    }
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            NotificationCenter.default.post(
+                                name: .rivenFocusSurface,
+                                object: SurfaceFocus(tabID: tabID, surfaceID: surface.id)
+                            )
+                        }
                 )
         }
     }
