@@ -208,6 +208,30 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        // Bento → Preferences → Theme… opens the picker overlay (T-5).
+        // Keep the Preferences entry as a submenu so future preferences
+        // (font size, scrollback, etc.) can land next to it without
+        // another menu rewrite.
+        let prefsItem = NSMenuItem(title: "Preferences", action: nil, keyEquivalent: "")
+        let prefsMenu = NSMenu(title: "Preferences")
+        let themePickerItem = NSMenuItem(
+            title: "Theme\u{2026}",
+            action: #selector(showThemePicker),
+            keyEquivalent: ""
+        )
+        prefsMenu.addItem(themePickerItem)
+        // T-6: a discoverable hop into the custom-themes folder. Seeds
+        // a starter `bento-default.json` on first reveal so the user
+        // has a concrete template to crib from.
+        let revealThemesItem = NSMenuItem(
+            title: "Reveal Themes Folder",
+            action: #selector(revealThemesFolder),
+            keyEquivalent: ""
+        )
+        prefsMenu.addItem(revealThemesItem)
+        prefsItem.submenu = prefsMenu
+        appMenu.addItem(prefsItem)
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Bento", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         main.addItem(appItem)
@@ -344,11 +368,29 @@ final class BentoApplication: NSObject, NSApplicationDelegate {
     @objc private func cycleSurfaceFocus() {
         NotificationCenter.default.post(name: .bentoCycleSurfaceFocus, object: nil)
     }
+
+    @objc private func showThemePicker() {
+        NotificationCenter.default.post(name: .bentoShowThemePicker, object: nil)
+    }
+
+    /// Open Finder at the user's themes directory so they can drop in
+    /// custom `*.json` theme files. Seeds a starter template the first
+    /// time so newcomers have something to crib from rather than an
+    /// empty folder.
+    @objc private func revealThemesFolder() {
+        let dir = CustomThemeLoader.defaultDirectory()
+        CustomThemeLoader.seedDefaultTemplate(directory: dir)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
 }
 
 extension Notification.Name {
     static let bentoShowCommandPalette = Notification.Name("BentoShowCommandPalette")
     static let bentoShowSearch = Notification.Name("BentoShowSearch")
+    /// Posted by the Preferences → Theme… menu item and the palette's
+    /// `Pick theme…` command. `BentoRootView` listens and shows the
+    /// `ThemePicker` overlay in dismissible mode (esc closes).
+    static let bentoShowThemePicker = Notification.Name("BentoShowThemePicker")
     static let bentoNewTab = Notification.Name("BentoNewTab")
     static let bentoNewWorkspace = Notification.Name("BentoNewWorkspace")
     static let bentoCloseTab = Notification.Name("BentoCloseTab")

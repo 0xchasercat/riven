@@ -8,6 +8,11 @@ struct BentoRootView: View {
     @State private var activeOverlay: Overlay?
     @State private var paletteQuery = ""
     @State private var searchQuery = ""
+    /// `true` when the user opened the picker via the menu / palette /
+    /// status-bar swatch (vs. the first-run flow where the picker is
+    /// modal and esc-dismiss is disabled).
+    @State private var themePickerDismissible: Bool = false
+    @State private var themePickerVisible: Bool = false
     /// Projects whose trust prompt we've already auto-shown in *this
     /// session*. Keyed by `projectRoot` so opening a different project
     /// (or restarting the app) still triggers exactly one auto-show.
@@ -37,11 +42,36 @@ struct BentoRootView: View {
                 // the traffic-light buttons stay clickable in the
                 // reserved corner.
                 .ignoresSafeArea(.container, edges: .top)
+            // Two entry points share the same overlay:
+            //   • first-run (no explicit selection yet) — modal,
+            //     blocks until the user picks a theme.
+            //   • Preferences → Theme… menu, the palette's "Pick
+            //     theme…" command, and the status-bar swatch's
+            //     "more" entry all flip `themePickerVisible` and
+            //     `themePickerDismissible = true` so esc / Done /
+            //     backdrop click each dismiss without forcing a
+            //     choice.
             if !controller.preference.hasExplicitSelection {
-                ThemePicker(theme: theme, onSelect: { id in
-                    try? controller.preference.selectTheme(id: id)
-                    selectedThemeID = id
-                })
+                ThemePicker(
+                    theme: theme,
+                    onSelect: { id in
+                        controller.selectTheme(id: id)
+                        selectedThemeID = id
+                    },
+                    dismissible: false
+                )
+            } else if themePickerVisible {
+                ThemePicker(
+                    theme: theme,
+                    onSelect: { id in
+                        controller.selectTheme(id: id)
+                        selectedThemeID = id
+                    },
+                    dismissible: themePickerDismissible,
+                    onClose: {
+                        themePickerVisible = false
+                    }
+                )
             }
             if let activeOverlay {
                 overlay(activeOverlay)
@@ -52,6 +82,7 @@ struct BentoRootView: View {
         .modifier(NotificationWiring(
             onPalette: { activeOverlay = .palette; paletteQuery = "" },
             onSearch: { activeOverlay = .search; searchQuery = "" },
+            onShowThemePicker: { showThemePicker() },
             onNewTab: { controller.openNewInnerTab() },
             onNewWorkspace: { controller.openNewWorkspace() },
             onOpenProject: { presentOpenProjectPicker() },
@@ -208,6 +239,21 @@ struct BentoRootView: View {
             )
             statusBar
         }
+    }
+
+    /// Open the dismissible theme picker. Called by the
+    /// `.bentoShowThemePicker` notification (menu + palette + swatch
+    /// "more" affordance). First-run picker is handled inline in the
+    /// view body and uses `dismissible: false` — this entry is for
+    /// users who already have an explicit selection but want to change
+    /// it without restarting.
+    private func showThemePicker() {
+        themePickerDismissible = true
+        themePickerVisible = true
+        // If another overlay is open, close it first — the picker is
+        // its own modal layer and stacking two overlays would dim
+        // twice.
+        activeOverlay = nil
     }
 
     private func maybeAutoShowTrust(for trigger: TrustPromptTrigger) {
@@ -403,6 +449,13 @@ struct BentoRootView: View {
         case .cycleTheme:
             controller.cycleTheme()
             selectedThemeID = controller.state.selectedThemeID
+        case .pickTheme:
+            // Reuse the same overlay the first-run flow uses — keeps
+            // the swatch grid in exactly one place. The dispatcher
+            // chose `pickTheme` over inline-toggling so the picker
+            // works regardless of which entry point fired (menu,
+            // palette, swatch row).
+            showThemePicker()
         case .showSearch:
             activeOverlay = .search
             searchQuery = ""
@@ -460,6 +513,20 @@ struct BentoRootView: View {
             Text("theme: \(theme.name)")
             Spacer()
             ScratchEditorButton(theme: theme) { controller.openScratchEditor() }
+            // T-5: live theme swatch. One dot per builtin tinted with
+            // that theme's `chrome.accent`; clicking persists +
+            // re-renders chrome immediately. The currently-active
+            // theme gets a hairline border so users can tell which
+            // one's live without reading the "theme: X" label.
+            ThemeSwatchRow(
+                theme: theme,
+                activeID: controller.state.selectedThemeID,
+                onSelect: { id in
+                    controller.selectTheme(id: id)
+                    selectedThemeID = id
+                },
+                onMore: { showThemePicker() }
+            )
             Text("0 telemetry")
         }
         .font(.system(size: 10, design: .monospaced))
@@ -472,6 +539,76 @@ struct BentoRootView: View {
             // the mockup's `borderTop: 1px solid theme.border`.
             Hairline(theme: theme)
         }
+    }
+}
+
+/// Compact theme switcher in the status bar. Renders one circular
+/// swatch per builtin (colored with that theme's `chrome.accent`)
+/// followed by a small `…` chip that opens the full picker for users
+/// who want to see the previews or who have user-authored custom
+/// themes installed.
+private struct ThemeSwatchRow: View {
+    let theme: ThemeSpec
+    let activeID: String
+    let onSelect: (String) -> Void
+    let onMore: () -> Void
+
+    @State private var hoveredID: String?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(ThemeSpec.builtIns, id: \.id) { option in
+                Button {
+                    onSelect(option.id)
+                } label: {
+                    swatch(for: option)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Switch to \(option.name)")
+                .onHover { hovering in
+                    hoveredID = hovering ? option.id : (hoveredID == option.id ? nil : hoveredID)
+                }
+            }
+            Button(action: onMore) {
+                Text("…")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Open theme picker")
+        }
+    }
+
+    private func swatch(for option: ThemeSpec) -> some View {
+        let isActive = option.id == activeID
+        let isHovered = hoveredID == option.id
+        // Active swatch is slightly bigger + carries a hairline ring;
+        // hover swatch animates the same ring at the accent color so
+        // the affordance is obvious without a label.
+        let outerSize: CGFloat = isActive ? 12 : 10
+        return ZStack {
+            Circle()
+                .fill(Color(hex: option.chrome.accent.hex))
+                .frame(width: outerSize, height: outerSize)
+            Circle()
+                .strokeBorder(
+                    isActive
+                        ? Color(hex: theme.chrome.text.hex)
+                        : (isHovered
+                            ? Color(hex: theme.chrome.text.hex).opacity(0.5)
+                            : Color.clear),
+                    lineWidth: isActive ? 1 : 0.75
+                )
+                .frame(width: outerSize + 4, height: outerSize + 4)
+        }
+        .frame(width: 16, height: 16)
+        .contentShape(Rectangle())
+        .animation(BentoMotion.hover, value: isActive)
+        .animation(BentoMotion.hover, value: isHovered)
     }
 }
 
@@ -563,6 +700,7 @@ private struct ScratchEditorButton: View {
 private struct NotificationWiring: ViewModifier {
     let onPalette: () -> Void
     let onSearch: () -> Void
+    let onShowThemePicker: () -> Void
     let onNewTab: () -> Void
     let onNewWorkspace: () -> Void
     let onOpenProject: () -> Void
@@ -600,6 +738,7 @@ private struct NotificationWiring: ViewModifier {
             ))
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowCommandPalette)) { _ in onPalette() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoShowSearch)) { _ in onSearch() }
+            .onReceive(NotificationCenter.default.publisher(for: .bentoShowThemePicker)) { _ in onShowThemePicker() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewTab)) { _ in onNewTab() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoNewWorkspace)) { _ in onNewWorkspace() }
             .onReceive(NotificationCenter.default.publisher(for: .bentoOpenProject)) { _ in onOpenProject() }

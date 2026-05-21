@@ -28,6 +28,9 @@ public enum CommandAction: Equatable, Sendable {
     case openProjectPicker
     /// Rotate to the next built-in theme in `ThemeSpec.builtIns`.
     case cycleTheme
+    /// Open the theme picker overlay so the user can choose a theme
+    /// from a swatch grid. Dispatcher posts `.bentoShowThemePicker`.
+    case pickTheme
     /// Reveal the search overlay.
     case showSearch
     /// Reveal the trust prompt for the currently open project.
@@ -62,6 +65,10 @@ public extension CommandAction {
             return .openProjectPicker
         case .toggleSubmitOnEnter:
             return .toggleSubmitOnEnter
+        case .pickTheme:
+            return .pickTheme
+        case .cycleTheme:
+            return .cycleTheme
         case .flipPane, .zoomPane, .restoreSession:
             return nil
         }

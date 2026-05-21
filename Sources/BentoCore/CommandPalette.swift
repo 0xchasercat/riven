@@ -14,6 +14,14 @@ public enum CommandAction: String, Codable, Sendable {
     /// Toggle the command-bar's submission key between Enter and
     /// Cmd+Enter. The preference is persisted in ThemePreferenceStore.
     case toggleSubmitOnEnter
+    /// Open the theme picker overlay so the user can pick a theme
+    /// from a swatch grid. Persists the choice and re-renders all
+    /// chrome live (no restart).
+    case pickTheme
+    /// Cycle to the next built-in theme in order. Handy for users
+    /// who like to flip themes from the keyboard without opening the
+    /// picker. Persists the new selection.
+    case cycleTheme
 }
 
 public struct Command: Equatable, Codable, Sendable, Identifiable {
@@ -37,7 +45,9 @@ public struct Command: Equatable, Codable, Sendable, Identifiable {
         Command(id: .openFile, group: "Project", title: "Open file…"),
         Command(id: .trustProject, group: "Project", title: "Trust this project"),
         Command(id: .search, group: "Search", title: "Search files and scrollback", shortcut: "cmd+shift+f"),
-        Command(id: .toggleSubmitOnEnter, group: "Input", title: "Toggle Enter behavior in command bar")
+        Command(id: .toggleSubmitOnEnter, group: "Input", title: "Toggle Enter behavior in command bar"),
+        Command(id: .pickTheme, group: "Theme", title: "Pick theme…"),
+        Command(id: .cycleTheme, group: "Theme", title: "Cycle to next theme")
         // Removed: .flipPane (pre-#23 concept — terminal↔editor flip
         // doesn't apply now that surfaces have explicit kinds and a
         // split tree), .zoomPane (no in-tab zoom feature today),

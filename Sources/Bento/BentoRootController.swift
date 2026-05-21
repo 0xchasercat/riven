@@ -920,13 +920,29 @@ final class BentoRootController: ObservableObject {
         state.projectFallbackReason = nil
     }
 
-    /// Cycle to the next built-in theme. Wired through `CommandAction.cycleTheme`.
+    /// Cycle to the next theme. Wired through `CommandAction.cycleTheme`.
+    /// Walks `ThemeSpec.all()` so user-authored customs (T-6) are part
+    /// of the rotation, not just the four builtins.
     func cycleTheme() {
-        let all = ThemeSpec.builtIns
+        let all = ThemeSpec.all()
+        guard !all.isEmpty else { return }
         let current = preference.selectedTheme.id
         let nextIdx = (all.firstIndex(where: { $0.id == current }).map { $0 + 1 } ?? 0) % all.count
-        try? preference.selectTheme(id: all[nextIdx].id)
-        self.state.selectedThemeID = all[nextIdx].id
+        selectTheme(id: all[nextIdx].id)
+    }
+
+    /// Persist `id` as the active theme and republish `state` so every
+    /// SwiftUI surface re-renders with the new chrome on the next
+    /// runloop tick. Tolerates unknown ids by no-op'ing — the
+    /// `ThemePreferenceStore` throws on bad input and we silently
+    /// swallow rather than crash the menu/palette/swatch flow on a
+    /// stale custom-theme id.
+    func selectTheme(id: String) {
+        guard ThemeSpec.theme(id: id) != nil else { return }
+        try? preference.selectTheme(id: id)
+        if self.state.selectedThemeID != id {
+            self.state.selectedThemeID = id
+        }
     }
 
     private static func fallbackState(cwd: URL, themeID: String) -> WorkspaceState {
