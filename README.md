@@ -26,7 +26,19 @@ A native macOS workspace for power users. Terminal panes, an integrated editor, 
 
 External dependencies: [Yams](https://github.com/jpsim/Yams) for session YAML, [STTextView](https://github.com/krzyzanowskim/STTextView) for the editor, vendored Universal2 [ripgrep](https://github.com/BurntSushi/ripgrep) for file search.
 
-## Build
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xchasercat/riven/main/install.sh | bash
+```
+
+Pins to the latest tagged release, drops `Riven.app` into `/Applications`, strips the download-quarantine xattr (the script-equivalent of macOS's right-click → Open consent), and ad-hoc re-signs on the user's machine so Gatekeeper accepts the launch. Pin a specific version with `RIVEN_VERSION=v0.1.0`. Skip the post-install launch with `RIVEN_OPEN=0`.
+
+Until the Apple Developer ID cert lands, the published DMG is ad-hoc signed; the installer dance above is the cleanest path. After Developer ID + notarisation are wired up, the same install script keeps working — the quarantine-strip + re-sign steps become no-ops on an already-trusted binary.
+
+Manual install path: grab the latest `Riven-X.Y.Z.dmg` from the [Releases page](https://github.com/0xchasercat/riven/releases), open it, drag `Riven.app` to `/Applications`. Right-click → Open the first time to dismiss Gatekeeper.
+
+## Build from source
 
 Requires macOS 15+, Xcode 16+ toolchain (Swift 6.2), and [zig](https://ziglang.org) 0.15.x for the one-time Ghostty build.
 
