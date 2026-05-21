@@ -516,30 +516,27 @@ private struct PaneTreeBuilder {
 
     private func makeLeaf(id: PaneID) -> NSView {
         let pane = graph.pane(id)
-        let isFocused = (id == graph.focusedPaneID)
-
         let host = hostingController(for: id, pane: pane)
-
-        let shell = PaneShellNSView(
-            paneID: id,
-            isFocused: isFocused,
-            theme: theme,
-            onFocus: onFocus,
-            onSplit: onSplit,
-            onClose: onClose
-        )
-        shell.installContent(host.view)
-        shell.title = pane?.name ?? "pane"
-        shell.badge = badge(for: pane)
-        return shell
-    }
-
-    private func badge(for pane: PaneDescriptor?) -> String {
-        // Backend-engine badges ("workspace" / "libghostty" / "STTextView")
-        // were internal jargon that competed with the pane title for
-        // attention. The pane chrome shows the title; the engine is an
-        // implementation detail the user doesn't need surfaced here.
-        return ""
+        // Pre-#23 each leaf was wrapped in a PaneShellNSView with a
+        // 32pt header strip (title + badge + `+` split + `×` close
+        // buttons + focus indicator). In the one-workspace-per-screen
+        // model that chrome is duplicative:
+        //   - workspace name lives in WorkspaceTabBar
+        //   - `+` (new tab) + `[][]` (split) + `×` (close tab) live
+        //     in the InnerTabStrip
+        //   - per-surface `×` (close split) lives in SurfaceLeafView's
+        //     top-right overlay
+        // Two layers of the same buttons on different rows was
+        // confusing (user report). Return the host's view directly
+        // and drop the shell entirely.
+        //
+        // Closure params (onFocus / onSplit / onClose) are kept on
+        // the builder for compile-time symmetry but are now unused at
+        // the leaf level. They could be removed in a follow-up; this
+        // leaves the signature intact in case a future feature
+        // wants per-leaf chrome back.
+        _ = (onFocus, onSplit, onClose)
+        return host.view
     }
 
     private func hostingController(for id: PaneID, pane: PaneDescriptor?) -> NSHostingController<AnyView> {
