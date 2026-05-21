@@ -408,25 +408,15 @@ private final class WorkspaceContainerView: NSView {
         outer.addArrangedSubview(sidebarPane)
         outer.addArrangedSubview(tabPane)
         outerSplit = outer
-        // Holding priorities: the sidebar is the sticky pane (higher
-        // priority = resists shrinking), the tab area absorbs all
-        // window-resize delta. Without this, AppKit's default
-        // behavior is ambiguous and on some layout passes the
-        // sidebar collapses to ~zero — leaving the user staring at
-        // an invisible pane with no visible expand chevron.
-        outer.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
-        outer.setHoldingPriority(.defaultLow, forSubviewAt: 1)
-
-        // Hard floor on the sidebar pane width. Even with the holding
-        // priorities right, a stored-snapshot `setPosition(0)` from
-        // an earlier session can leave the sidebar at zero — once
-        // it's hidden the user can't drag it back without knowing
-        // the divider's at the window's left edge. This constraint
-        // guarantees the collapsed icon rail (48 pt) is the absolute
-        // minimum so the expand chevron is always reachable.
-        let sidebarMinWidth = sidebarPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 48)
-        sidebarMinWidth.priority = .required
-        sidebarMinWidth.isActive = true
+        // NOTE: an earlier attempt set `setHoldingPriority(.defaultHigh)`
+        // on the sidebar + a `widthAnchor >= 48` constraint. Both
+        // backfired — the high holding priority asked NSSplitView to
+        // honor the sidebar's intrinsic content size, which for a
+        // hosting-controller pane is whatever SwiftUI reports (often
+        // smaller than our setPosition target), and the live divider
+        // came out at the content's natural width rather than the
+        // intended 240. Keep the defaults; rely on `intendedSidebarPosition`
+        // + `setPosition` to drive the layout.
 
         // Collapsed sidebar = a narrow icon rail (56 pt — wide enough
         // for a 32-pt tile centered in the column with 12 pt gutters).
@@ -463,11 +453,17 @@ private final class WorkspaceContainerView: NSView {
               outer.bounds.width > 0 else {
             return
         }
-        // Allow the collapsed rail to clamp down to 48 pt minimum
-        // (enough for the 32-pt icon tile centered in the rail).
-        // Expanded clamps up against `outer.width - 240` so the
-        // tab area can never go below a comfortable terminal width.
-        let target = max(48, min(intended, outer.bounds.width - 240))
+        // Floor at 48 pt so the collapsed rail stays clickable;
+        // ceiling at `outer.width - 48` so we don't push the
+        // divider off the right edge. We deliberately do NOT
+        // reserve a "comfortable terminal width" for the tab area
+        // — the previous 240 pt reservation crushed the sidebar to
+        // ~160 pt on any window narrower than ~500 pt, which is a
+        // perfectly reasonable window size on a 13" laptop. The
+        // user can drag the divider if they want more terminal
+        // room; NSSplitView handles holding priority + reflow on
+        // window resize for the common case.
+        let target = max(48, min(intended, outer.bounds.width - 48))
         outer.setPosition(target, ofDividerAt: 0)
         pendingSidebarPosition = nil
         // Only call the intent satisfied if the divider actually
