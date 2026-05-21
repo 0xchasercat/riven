@@ -467,16 +467,62 @@ public final class BrokeredTerminalView: NSView {
         copySelection()
     }
 
-    /// Greys out the Edit menu's Copy item when no selection is
-    /// active. NSView doesn't override `validateMenuItem`, so we
-    /// adopt `NSMenuItemValidation` to participate in the
-    /// responder-chain validation pass that runs every time the
-    /// Edit menu opens.
+    /// Cmd+A — select the entire visible terminal grid. Sets the
+    /// selection to (0, 0) → (rows-1, lastCol). Triggers a repaint
+    /// so the selection overlay shows up immediately. `override`
+    /// because NSResponder ships its own (no-op for plain NSView)
+    /// `selectAll` that AppKit calls via responder-chain dispatch.
+    @objc public override func selectAll(_ sender: Any?) {
+        guard rows > 0, cols > 0 else { return }
+        // Reach for the live frame's row widths so the last column
+        // matches whatever libghostty thinks the grid is right now
+        // (could differ from `cols` mid-resize).
+        let rowCount = Int(rows)
+        let colCount = Int(cols)
+        selection = TerminalSelection(
+            anchor: CellCoord(row: 0, col: 0),
+            head: CellCoord(row: rowCount - 1, col: max(0, colCount - 1))
+        )
+        needsDisplay = true
+    }
+
+    /// Cmd+V — paste pasteboard text into the PTY's stdin. Native
+    /// macOS apps expose paste via the Edit menu; terminals do the
+    /// same thing by forwarding the bytes as if the user typed
+    /// them. We strip carriage returns + newlines into a single
+    /// `\n` form because pasted multi-line content from browsers /
+    /// editors uses CRLF on Windows-flavored sources, which most
+    /// shells then interpret as two newlines.
+    @objc public func paste(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.isEmpty else { return }
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        sendBytes(Array(normalized.utf8))
+    }
+
+    /// Cut on a read-only buffer doesn't make sense; map to copy as
+    /// a courtesy so users with muscle-memory Cmd+X get something
+    /// reasonable instead of a beep.
+    @objc public func cut(_ sender: Any?) {
+        copySelection()
+    }
+
+    /// Greys out / enables Edit-menu items based on the live
+    /// selection + pasteboard state. NSView doesn't override
+    /// `validateMenuItem`, so we expose it directly; the responder-
+    /// chain validation pass calls this every time the menu opens.
     @objc public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(BrokeredTerminalView.copy(_:)) {
+        switch menuItem.action {
+        case #selector(BrokeredTerminalView.copy(_:)),
+             #selector(BrokeredTerminalView.cut(_:)):
             return selection != nil
+        case #selector(BrokeredTerminalView.paste(_:)):
+            return NSPasteboard.general.string(forType: .string)?.isEmpty == false
+        case #selector(BrokeredTerminalView.selectAll(_:)):
+            return rows > 0 && cols > 0
+        default:
+            return true
         }
-        return true
     }
 
     /// Pulls the cell text under the active selection from the most

@@ -45,6 +45,12 @@ struct CommandBarView: View {
     /// to leave the buffer untouched (typically: already at the
     /// oldest / newest entry).
     private let onHistoryRequest: (HistoryDirection, String) -> String?
+    /// Returns the most recent command from history whose text
+    /// starts with the given prefix, or nil. Drives the zsh-
+    /// autosuggestions-style ghost text. Default no-suggestion
+    /// closure keeps the bar usable in tests / preview without
+    /// wiring history in.
+    private let onSuggest: (String) -> String?
 
     @State private var text: String = ""
     /// Measured intrinsic content height of the text view, in points.
@@ -62,12 +68,14 @@ struct CommandBarView: View {
         theme: ThemeSpec,
         submitMode: SubmitMode = .enterSubmits,
         onSubmit: @escaping (String) -> Void,
-        onHistoryRequest: @escaping (HistoryDirection, String) -> String? = { _, _ in nil }
+        onHistoryRequest: @escaping (HistoryDirection, String) -> String? = { _, _ in nil },
+        onSuggest: @escaping (String) -> String? = { _ in nil }
     ) {
         self.theme = theme
         self.submitMode = submitMode
         self.onSubmit = onSubmit
         self.onHistoryRequest = onHistoryRequest
+        self.onSuggest = onSuggest
     }
 
     var body: some View {
@@ -93,6 +101,7 @@ struct CommandBarView: View {
                 isFocused: $isFocused,
                 onSubmit: handleSubmit,
                 onHistoryRequest: handleHistoryRequest,
+                onSuggest: onSuggest,
                 onCancel: handleCancel
             )
             .frame(height: inputHeight)
@@ -251,6 +260,7 @@ private struct CommandBarTextView: NSViewRepresentable {
     @Binding var isFocused: Bool
     let onSubmit: (String) -> Void
     let onHistoryRequest: (CommandBarView.HistoryDirection, String) -> String?
+    let onSuggest: (String) -> String?
     let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -259,8 +269,10 @@ private struct CommandBarTextView: NSViewRepresentable {
             text: $text,
             contentHeight: $contentHeight,
             isFocused: $isFocused,
+            theme: theme,
             onSubmit: onSubmit,
             onHistoryRequest: onHistoryRequest,
+            onSuggest: onSuggest,
             onCancel: onCancel
         )
     }
@@ -344,8 +356,10 @@ private struct CommandBarTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.update(
             submitMode: submitMode,
+            theme: theme,
             onSubmit: onSubmit,
             onHistoryRequest: onHistoryRequest,
+            onSuggest: onSuggest,
             onCancel: onCancel
         )
         guard let textView = scrollView.documentView as? CommandInputTextView else { return }
@@ -405,8 +419,10 @@ private struct CommandBarTextView: NSViewRepresentable {
         private let textBinding: Binding<String>
         private let contentHeightBinding: Binding<CGFloat>
         private let isFocusedBinding: Binding<Bool>
+        private var theme: ThemeSpec
         private var onSubmit: (String) -> Void
         private var onHistoryRequest: (CommandBarView.HistoryDirection, String) -> String?
+        private var onSuggest: (String) -> String?
         private var onCancel: () -> Void
 
         weak var textView: CommandInputTextView?
@@ -417,22 +433,38 @@ private struct CommandBarTextView: NSViewRepresentable {
         /// history entry. Without this, walking history would
         /// immediately reset the cursor after the first up-arrow.
         var isApplyingHistory: Bool = false
+        /// Recursion guard for ghost-text refresh. textDidChange
+        /// triggers a storage mutation (insert / remove ghost
+        /// runs) which fires textDidChange again — without this
+        /// we'd loop forever.
+        private var isAdjustingGhostText: Bool = false
+
+        /// Marker attribute that flags a range of the text storage
+        /// as ghost suggestion text. The bar's buffer-read paths
+        /// (submit, history, focus check) strip these ranges
+        /// before doing anything, so the SwiftUI binding only ever
+        /// sees the user's typed prefix.
+        static let ghostKey = NSAttributedString.Key("riven.ghostText")
 
         init(
             submitMode: CommandBarView.SubmitMode,
             text: Binding<String>,
             contentHeight: Binding<CGFloat>,
             isFocused: Binding<Bool>,
+            theme: ThemeSpec,
             onSubmit: @escaping (String) -> Void,
             onHistoryRequest: @escaping (CommandBarView.HistoryDirection, String) -> String?,
+            onSuggest: @escaping (String) -> String?,
             onCancel: @escaping () -> Void
         ) {
             self.submitMode = submitMode
             self.textBinding = text
             self.contentHeightBinding = contentHeight
             self.isFocusedBinding = isFocused
+            self.theme = theme
             self.onSubmit = onSubmit
             self.onHistoryRequest = onHistoryRequest
+            self.onSuggest = onSuggest
             self.onCancel = onCancel
         }
 
@@ -443,13 +475,17 @@ private struct CommandBarTextView: NSViewRepresentable {
 
         func update(
             submitMode: CommandBarView.SubmitMode,
+            theme: ThemeSpec,
             onSubmit: @escaping (String) -> Void,
             onHistoryRequest: @escaping (CommandBarView.HistoryDirection, String) -> String?,
+            onSuggest: @escaping (String) -> String?,
             onCancel: @escaping () -> Void
         ) {
             self.submitMode = submitMode
+            self.theme = theme
             self.onSubmit = onSubmit
             self.onHistoryRequest = onHistoryRequest
+            self.onSuggest = onSuggest
             self.onCancel = onCancel
         }
 
@@ -457,16 +493,149 @@ private struct CommandBarTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            let value = textView.string
-            // Push to SwiftUI on the next runloop tick; mutating bindings
+            // Guard against the recursive call triggered by our own
+            // ghost-text storage mutation a few lines below.
+            if isAdjustingGhostText {
+                recomputeContentHeight()
+                return
+            }
+
+            // Strip any in-storage ghost text + recompute a new one
+            // based on the (now clean) typed prefix.
+            isAdjustingGhostText = true
+            stripGhostText()
+            let typed = textView.string
+            if !isApplyingHistory {
+                refreshGhostText(typed: typed)
+            }
+            isAdjustingGhostText = false
+
+            // Push the user's typed text (without the ghost suffix)
+            // to SwiftUI on the next runloop tick; mutating bindings
             // mid-delegate can confuse SwiftUI's update cycle.
             let binding = textBinding
             DispatchQueue.main.async {
-                if binding.wrappedValue != value {
-                    binding.wrappedValue = value
+                if binding.wrappedValue != typed {
+                    binding.wrappedValue = typed
                 }
             }
             recomputeContentHeight()
+        }
+
+        // MARK: Ghost text
+
+        /// Remove any storage ranges flagged with `ghostKey` so the
+        /// visible text is exactly what the user has typed. Safe to
+        /// call when there's no ghost text — it's a no-op.
+        fileprivate func stripGhostText() {
+            guard let textView,
+                  let storage = textView.textStorage else { return }
+            // Walk ranges back-to-front so removing earlier ones
+            // doesn't shift the indices of the later ones.
+            var rangesToDelete: [NSRange] = []
+            storage.enumerateAttribute(
+                Coordinator.ghostKey,
+                in: NSRange(location: 0, length: storage.length),
+                options: []
+            ) { value, range, _ in
+                if value != nil { rangesToDelete.append(range) }
+            }
+            guard !rangesToDelete.isEmpty else { return }
+            storage.beginEditing()
+            for range in rangesToDelete.reversed() {
+                storage.deleteCharacters(in: range)
+            }
+            storage.endEditing()
+        }
+
+        /// Ask the orchestrator for a suggestion matching `typed`,
+        /// and insert the unmatched suffix at the end of the
+        /// storage with a dim color + the ghost marker attribute.
+        /// The insertion cursor stays where it was (typically the
+        /// end of `typed`) so the user keeps typing into clean
+        /// territory, with the suggestion floating dimmed beside
+        /// the caret.
+        fileprivate func refreshGhostText(typed: String) {
+            guard let textView,
+                  let storage = textView.textStorage,
+                  !typed.isEmpty else { return }
+            // Only suggest when the cursor is at the end of the
+            // typed text with no selection — mid-buffer editing is
+            // a hard UX problem and zsh-autosuggestions doesn't
+            // handle it either.
+            let selection = textView.selectedRange()
+            let typedLen = (typed as NSString).length
+            guard selection.length == 0, selection.location == typedLen else { return }
+            guard let suggestion = onSuggest(typed),
+                  suggestion.hasPrefix(typed),
+                  suggestion.count > typed.count else { return }
+            let suffix = String(suggestion.dropFirst(typed.count))
+            let ghost = NSAttributedString(
+                string: suffix,
+                attributes: [
+                    .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                    .foregroundColor: NSColor(hex: theme.chrome.tertiaryText.hex),
+                    Coordinator.ghostKey: true,
+                ]
+            )
+            storage.beginEditing()
+            storage.append(ghost)
+            storage.endEditing()
+            // The insertion point shouldn't have moved (textStorage.append
+            // tacks bytes onto the end without disturbing the cursor),
+            // but be defensive: reset it to the typed-end boundary so
+            // the user types into clean territory, not into the ghost.
+            textView.setSelectedRange(NSRange(location: typedLen, length: 0))
+        }
+
+        /// True when there's a ghost-text suffix in storage and the
+        /// cursor is parked at the typed/ghost boundary — i.e. the
+        /// user can accept by pressing Right Arrow.
+        fileprivate func hasAcceptableGhost() -> Bool {
+            guard let textView,
+                  let storage = textView.textStorage else { return false }
+            let typed = textView.string
+            let typedNS = typed as NSString
+            // Ghost text is always at the end of storage. If the
+            // string length matches typed length, there's no ghost.
+            if storage.length == typedNS.length { return false }
+            // Cursor must be at the typed end (no selection).
+            let sel = textView.selectedRange()
+            return sel.length == 0 && sel.location == typedNS.length
+        }
+
+        /// Accept the current ghost text: strip the `ghostKey`
+        /// attribute from the trailing range (turning it into real
+        /// text), re-tint that range as standard text, move the
+        /// caret to the end, and push the new full text to the
+        /// SwiftUI binding. Returns true if anything was accepted.
+        fileprivate func acceptGhostText() -> Bool {
+            guard let textView,
+                  let storage = textView.textStorage else { return false }
+            let typed = textView.string
+            let typedLen = (typed as NSString).length
+            guard storage.length > typedLen else { return false }
+            isAdjustingGhostText = true
+            let ghostRange = NSRange(location: typedLen, length: storage.length - typedLen)
+            storage.beginEditing()
+            storage.removeAttribute(Coordinator.ghostKey, range: ghostRange)
+            storage.addAttribute(
+                .foregroundColor,
+                value: NSColor(hex: theme.chrome.text.hex),
+                range: ghostRange
+            )
+            storage.endEditing()
+            isAdjustingGhostText = false
+            textView.setSelectedRange(NSRange(location: storage.length, length: 0))
+            let full = textView.string
+            let binding = textBinding
+            DispatchQueue.main.async {
+                if binding.wrappedValue != full {
+                    binding.wrappedValue = full
+                }
+            }
+            recomputeContentHeight()
+            return true
         }
 
         // MARK: Focus reporting
@@ -541,6 +710,18 @@ private struct CommandBarTextView: NSViewRepresentable {
                 }
                 return false
 
+            case 124: // right arrow
+                // Accept the ghost-text autosuggestion when the
+                // caret is parked at the typed/ghost boundary.
+                // Bare Right Arrow only — modifier combos fall
+                // through to native NSTextView word/line nav.
+                guard !isShift, !isCommand, !isOption, !isControl else { return false }
+                if hasAcceptableGhost() {
+                    _ = acceptGhostText()
+                    return true
+                }
+                return false
+
             default:
                 return false
             }
@@ -550,6 +731,13 @@ private struct CommandBarTextView: NSViewRepresentable {
 
         private func submitCurrentBuffer() {
             guard let textView else { return }
+            // Strip ghost text before reading so submitting "git st"
+            // with a "atus" ghost doesn't send "git status" — only
+            // the user's explicit acceptance (Right Arrow) is
+            // allowed to promote ghost into real input.
+            isAdjustingGhostText = true
+            stripGhostText()
+            isAdjustingGhostText = false
             let value = textView.string
             // Empty submissions are dropped by the history layer, but we
             // still call onSubmit so the orchestrator can decide what to

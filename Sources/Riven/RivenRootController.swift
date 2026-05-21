@@ -213,6 +213,37 @@ final class RivenRootController: ObservableObject {
                 self?.setAltScreen(paneID: paneID, isInAltScreen: isInAltScreen)
             }
         }
+
+        // Synchronous observer for autosuggestion lookups. Same
+        // architecture as the history request above — the bar
+        // posts a request carrying a mutable response box, we
+        // fill `response.text` before the post returns. Async
+        // SwiftUI `.onReceive` wiring won't work because the bar
+        // reads back the result immediately for ghost-text
+        // rendering.
+        suggestObserver = NotificationCenter.default.addObserver(
+            forName: .rivenCommandSuggestRequest,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let request = note.object as? CommandSuggestRequest else { return }
+            let prefix = request.prefix
+            let responseBox = request.response
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                responseBox.text = self.suggestionForCommandBar(prefix: prefix)
+            }
+        }
+    }
+
+    /// Returns the most-recent submitted command starting with
+    /// `prefix`, or nil. Pure pass-through to the in-memory
+    /// `CommandHistory` — kept here as a controller-level method
+    /// (rather than wiring the bar straight to `commandHistory`)
+    /// so the bar doesn't have to know about the underlying
+    /// history-store shape.
+    func suggestionForCommandBar(prefix: String) -> String? {
+        commandHistory.suggestion(for: prefix)
     }
 
     /// Observer token retained for the lifetime of the controller.
@@ -220,6 +251,7 @@ final class RivenRootController: ObservableObject {
     /// it without crossing actor boundaries.
     private nonisolated(unsafe) var historyObserver: NSObjectProtocol?
     private nonisolated(unsafe) var altScreenObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var suggestObserver: NSObjectProtocol?
 
     deinit {
         if let historyObserver {
@@ -227,6 +259,9 @@ final class RivenRootController: ObservableObject {
         }
         if let altScreenObserver {
             NotificationCenter.default.removeObserver(altScreenObserver)
+        }
+        if let suggestObserver {
+            NotificationCenter.default.removeObserver(suggestObserver)
         }
     }
 

@@ -1393,6 +1393,20 @@ private struct CommandBarBand: View {
                     object: request
                 )
                 return response.text
+            },
+            onSuggest: { typed in
+                // Same synchronous request/response pattern. The
+                // controller's `suggestObserver` (installed in
+                // `RivenRootController.init`) fills `response.text`
+                // before `post` returns. Returning nil ⇒ no ghost
+                // text is rendered for this prefix.
+                let response = CommandSuggestResponse()
+                let request = CommandSuggestRequest(prefix: typed, response: response)
+                NotificationCenter.default.post(
+                    name: .rivenCommandSuggestRequest,
+                    object: request
+                )
+                return response.text
             }
         )
         .padding(.vertical, RivenSpacing.xxs)

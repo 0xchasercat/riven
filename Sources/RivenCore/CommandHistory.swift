@@ -127,4 +127,26 @@ public struct CommandHistory: Sendable, Equatable {
 
     /// `true` when the cursor is parked in a history entry (vs. live).
     public var isNavigating: Bool { cursor != nil }
+
+    /// Most-recent entry whose text starts with `prefix`. Used by the
+    /// command bar's zsh-autosuggestions-style ghost-text feature:
+    /// as the user types, this returns the most recent matching
+    /// command so the bar can render the rest of it dimmed. Right-
+    /// arrow at end-of-buffer accepts.
+    ///
+    /// `prefix` must be non-empty (suggesting from an empty buffer
+    /// would just show the most recent command, which is what the
+    /// up arrow already does explicitly). The match itself must be
+    /// strictly longer than the prefix — a "suggestion" that's just
+    /// the prefix the user already typed is meaningless. Case-
+    /// sensitive: shell history is case-significant.
+    public func suggestion(for prefix: String) -> String? {
+        guard !prefix.isEmpty else { return nil }
+        for entry in entries.reversed() {
+            if entry.hasPrefix(prefix), entry.count > prefix.count {
+                return entry
+            }
+        }
+        return nil
+    }
 }

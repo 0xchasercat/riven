@@ -688,6 +688,11 @@ extension Notification.Name {
     /// responder so keystrokes flow back into the TUI without the
     /// user having to click into the pane.
     static let rivenRestoreTerminalFocus = Notification.Name("RivenRestoreTerminalFocus")
+    /// Posted by the command bar on every textDidChange to ask the
+    /// controller for an autosuggestion. Object is a
+    /// `CommandSuggestRequest`; the observer fills `response.text`
+    /// synchronously before the post returns.
+    static let rivenCommandSuggestRequest = Notification.Name("RivenCommandSuggestRequest")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow
@@ -740,6 +745,21 @@ enum CommandHistoryDirection {
 final class CommandHistoryResponse: @unchecked Sendable {
     var text: String?
     init() { self.text = nil }
+}
+
+/// Payload for `.rivenCommandSuggestRequest`. The bar emits one of
+/// these every time the user's typed text changes; the controller's
+/// synchronous observer fills `response.text` with the most-recent
+/// matching history entry (or leaves it nil if nothing matches).
+/// The bar then renders the suffix as ghost text.
+final class CommandSuggestResponse: @unchecked Sendable {
+    var text: String?
+    init() { self.text = nil }
+}
+
+struct CommandSuggestRequest {
+    let prefix: String
+    let response: CommandSuggestResponse
 }
 
 /// Payload for `.rivenCommandHistoryRequest`. Combines the inputs
