@@ -718,6 +718,7 @@ public final class BrokeredTerminalView: NSView {
     private func feedOutput(_ data: Data) {
         guard let session else { return }
         try? bridge.feed(data, to: session)
+        detectCommandState(in: data)
         needsDisplay = true
         guard !pendingDisplay else { return }
         pendingDisplay = true
@@ -732,6 +733,119 @@ public final class BrokeredTerminalView: NSView {
     /// runloop tick that fires it. Suppresses redundant scheduling
     /// during a burst.
     private var pendingDisplay: Bool = false
+
+    // MARK: - OSC 133 command-state tracking
+
+    // ESC ] 1 3 3 ; C  — shell integration's "command started running"
+    // mark (emitted from preexec). ESC ] 1 3 3 ; D — "command finished,
+    // back at the prompt" (emitted from precmd). We scan the raw output
+    // stream for these because Riven's command bar is the default input
+    // surface, which is wrong while a command is actively running: an
+    // inline interactive program (claude --resume's session picker,
+    // fzf, gh prompts, npm init, ssh password, a REPL) reads keystrokes
+    // in raw mode WITHOUT switching to the alt screen, so the alt-screen
+    // latch never fires and the user's arrows/Enter went to the command
+    // bar instead of the program. Tracking command-running state lets us
+    // behave like a normal terminal — keystrokes go to the PTY while a
+    // command runs — and hand input back to the command bar at the prompt.
+    private static let osc133CmdStart: [UInt8] = [0x1b, 0x5d, 0x31, 0x33, 0x33, 0x3b, 0x43]
+    private static let osc133CmdEnd: [UInt8]   = [0x1b, 0x5d, 0x31, 0x33, 0x33, 0x3b, 0x44]
+    private(set) var isCommandRunning: Bool = false
+    /// Set when WE grabbed first-responder because a command started,
+    /// so we only hand focus back to the command bar for grabs we made
+    /// (not when the user deliberately clicked into the terminal).
+    private var grabbedForCommand: Bool = false
+    /// Carryover of the last few output bytes so an OSC 133 marker
+    /// split across two broker chunks is still detected. Length is
+    /// markerLength-1 (6) — enough to bridge any single split.
+    private var oscScanTail: [UInt8] = []
+
+    private func detectCommandState(in data: Data) {
+        var buf = oscScanTail
+        buf.append(contentsOf: data)
+        let lastStart = Self.lastIndex(of: Self.osc133CmdStart, in: buf)
+        let lastEnd = Self.lastIndex(of: Self.osc133CmdEnd, in: buf)
+        if lastStart != nil || lastEnd != nil {
+            // The most recent of the two marks wins — that's the
+            // current state.
+            let running: Bool
+            switch (lastStart, lastEnd) {
+            case let (.some(s), .some(e)): running = s > e
+            case (.some, nil): running = true
+            default: running = false
+            }
+            setCommandRunning(running)
+        }
+        // Retain a 6-byte tail to bridge a marker split across chunks.
+        let keep = Self.osc133CmdStart.count - 1
+        oscScanTail = buf.count > keep ? Array(buf.suffix(keep)) : buf
+    }
+
+    /// Last start index of `pattern` within `haystack`, or nil. Simple
+    /// reverse scan short-circuited on the leading ESC byte — cheap
+    /// even for large output chunks (OSC marks only land at command
+    /// boundaries, never mid-burst).
+    private static func lastIndex(of pattern: [UInt8], in haystack: [UInt8]) -> Int? {
+        guard haystack.count >= pattern.count else { return nil }
+        let first = pattern[0]
+        var i = haystack.count - pattern.count
+        while i >= 0 {
+            if haystack[i] == first {
+                var match = true
+                for j in 1..<pattern.count where haystack[i + j] != pattern[j] {
+                    match = false
+                    break
+                }
+                if match { return i }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// Deferred focus-grab for a running command. Cancelled if the
+    /// command finishes before it fires (fast non-interactive
+    /// commands), so we don't flicker the command bar's focus for an
+    /// `ls`.
+    private var commandFocusGrabTask: Task<Void, Never>?
+
+    private func setCommandRunning(_ running: Bool) {
+        guard running != isCommandRunning else { return }
+        isCommandRunning = running
+        if running {
+            // Defer the grab ~150 ms. A fast non-interactive command
+            // (ls, git status) emits C then D within tens of ms, and
+            // grabbing + returning focus that fast would flicker the
+            // command-bar focus ring for no reason. Only commands
+            // still running after the delay — i.e. plausibly
+            // interactive ones (claude --resume, fzf, a REPL, ssh) —
+            // actually pull focus to the terminal. Imperceptible
+            // latency for the interactive case (the picker takes
+            // longer than 150 ms to render + the user to react).
+            commandFocusGrabTask?.cancel()
+            commandFocusGrabTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled, let self, self.isCommandRunning,
+                      let win = self.window else { return }
+                if win.firstResponder is CommandInputTextView {
+                    win.makeFirstResponder(self)
+                    self.grabbedForCommand = true
+                }
+            }
+        } else {
+            // Command finished — back at the shell prompt. Cancel any
+            // pending grab; if we DID grab focus for this command,
+            // still hold it, and aren't in an alt-screen TUI, return
+            // input to the command bar (Riven's default at a prompt).
+            commandFocusGrabTask?.cancel()
+            if grabbedForCommand,
+               window?.firstResponder === self,
+               !isInAltScreen {
+                NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
+            }
+            grabbedForCommand = false
+        }
+    }
 
     /// Pull the shell's OSC 7 cwd from the Ghostty bridge and, if it
     /// genuinely changed since the last report, fire `onCwdChanged`.
