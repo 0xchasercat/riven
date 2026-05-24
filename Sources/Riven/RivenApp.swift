@@ -243,6 +243,17 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 self?.restoreTerminalFocusIfAltScreen()
             }
         }
+
+        // One-shot Full Disk Access onboarding. A terminal genuinely
+        // needs broad filesystem read access; without FDA the user
+        // gets a per-folder TCC prompt on every cd into a protected
+        // directory. Deferred a beat so the main window is on screen
+        // before the alert (an alert with no window behind it reads
+        // as a crash dialog). Skipped silently if FDA is already
+        // granted or the user dismissed it with "Don't ask again."
+        DispatchQueue.main.async {
+            FullDiskAccess.promptIfNeeded()
+        }
     }
 
     /// On window-becomes-key, if the focused inner tab's terminal
@@ -383,6 +394,13 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         )
         shellItem.tag = 4221
         prefsMenu.addItem(shellItem)
+        prefsMenu.addItem(
+            NSMenuItem(
+                title: "Grant Full Disk Access\u{2026}",
+                action: #selector(grantFullDiskAccess),
+                keyEquivalent: ""
+            )
+        )
         prefsItem.submenu = prefsMenu
         appMenu.addItem(prefsItem)
         appMenu.addItem(NSMenuItem.separator())
@@ -518,6 +536,22 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
 
     @objc private func showSearch() {
         NotificationCenter.default.post(name: .rivenShowSearch, object: nil)
+    }
+
+    @objc private func grantFullDiskAccess() {
+        // Menu-triggered: always show (no suppression), even if the
+        // launch-time prompt was dismissed. If FDA is already
+        // granted, say so rather than deep-linking pointlessly.
+        if FullDiskAccess.isGranted {
+            let alert = NSAlert()
+            alert.messageText = "Full Disk Access already granted"
+            alert.informativeText = "Riven can read everywhere you navigate. No action needed."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        } else {
+            FullDiskAccess.present(isReprompt: true)
+        }
     }
 
     @objc private func newTab() {

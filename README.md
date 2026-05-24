@@ -82,7 +82,7 @@ Until then the script produces ad-hoc-signed builds — users will see "develope
 
 On first launch Riven asks for permission to read each user folder it touches (Documents, Desktop, Downloads, network volumes, removable drives). Click **Allow** when the system prompt appears. If you missed the prompt, grant access manually in **System Settings → Privacy & Security → Files and Folders → Riven**.
 
-For projects outside the standard user folders (mounted volumes, `/opt`, `/Users/Shared`, etc.) macOS requires **Full Disk Access** instead. Add Riven via **System Settings → Privacy & Security → Full Disk Access**.
+**Recommended: grant Full Disk Access once.** A terminal navigates anywhere on disk, so the per-folder prompts get old fast. Riven shows a one-time onboarding prompt on first launch (or trigger it anytime via **Riven → Preferences → Grant Full Disk Access…**) that deep-links to **System Settings → Privacy & Security → Full Disk Access**. Switch on Riven there and relaunch — every per-folder interruption stops. (Full Disk Access can't be granted by a programmatic prompt; macOS requires the manual toggle. Riven detects when it's missing and guides you there.)
 
 A fresh launch from Finder boots Riven into `$HOME`. If you'd rather it open a specific project, drag the project folder onto the Riven dock icon or launch from the command line: `open -a Riven /path/to/project`.
 
