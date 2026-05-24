@@ -747,32 +747,39 @@ You can rename or delete this tab — it's a regular file at
         openNewWorkspace(at: NSHomeDirectory())
     }
 
-    /// Send a `cd <path>` into the focused workspace's focused
-    /// terminal. The shell processes it and emits OSC 7 on the next
-    /// prompt, which propagates back as `workspace.currentCwd` →
-    /// the sidebar + toolbar both follow automatically.
+    /// Set the focused workspace's directory from the toolbar's
+    /// editable path field. Does BOTH halves of "go here":
     ///
-    /// This is the toolbar's editable-path-field commit path. We
-    /// deliberately do NOT mutate the workspace model directly — the
-    /// shell is the source of truth for "where am I", and the
-    /// workspace just mirrors what the shell is doing. This matches
-    /// the "workspaces are spaces, not directory locks" mental model.
+    ///   1. Update `workspace.currentCwd` directly → the file viewer
+    ///      re-scans + the toolbar breadcrumb update IMMEDIATELY, no
+    ///      shell round-trip required.
+    ///   2. Send `cd '<path>'` to the focused terminal → the shell
+    ///      follows so subsequent commands run from the new pwd.
+    ///
+    /// Earlier this only did (2) and relied on the shell emitting
+    /// OSC 7 to drive the sidebar. That's fragile — it does nothing
+    /// if the integration isn't installed, the shell is mid-TUI, or
+    /// the cd lands in a subshell — so "set workspace directory"
+    /// appeared to move the shell but not the file viewer, which
+    /// defeats the point. We validate the path exists client-side
+    /// before either half, so setting currentCwd directly is safe
+    /// (and the eventual OSC 7, if it arrives, is an idempotent
+    /// no-op against the value we already set).
     ///
     /// Path normalization:
     ///   - leading `~` expands to `$HOME`
     ///   - relative paths resolve against the workspace's current pwd
     ///   - the resolved path must exist as a directory; otherwise the
     ///     call is a no-op and returns `false` so the toolbar can
-    ///     flag the bad input. The `cd` itself isn't sent unless the
-    ///     path validates client-side.
+    ///     flag the bad input.
     ///
     /// No-op (returns false) when the focused surface isn't a
     /// terminal (e.g. an editor tab is focused) — there's no PTY to
     /// `cd` in that case.
     @discardableResult
     func changeFocusedShellPwd(_ raw: String) -> Bool {
-        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace,
+        guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              var workspace = pane.workspace,
               let paneID = workspace.focusedTab.terminalPaneID,
               let client = agentClient else { return false }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -791,8 +798,19 @@ You can rename or delete this tab — it's a regular file at
               isDirectory.boolValue else {
             return false
         }
-        // Single-quote so paths with spaces / special chars get
-        // through the shell intact.
+
+        // (1) Move the workspace model NOW so the file viewer follows
+        // without waiting on the shell. Skip the graph re-publish if
+        // the cwd is already there (no-op).
+        if workspace.currentCwd != resolved {
+            workspace.currentCwd = resolved
+            pane.kind = .workspace(workspace)
+            recordPaneGraph(state.paneGraph.replacingPane(pane))
+            try? scrollback.updateMetadataCwd(paneID: paneID, cwd: resolved)
+        }
+
+        // (2) Send the cd so the shell tracks the new pwd. Single-
+        // quote so paths with spaces / special chars survive.
         let payload = "cd '\(resolved)'\n"
         let data = Data(payload.utf8)
         Task { try? await client.writeInput(paneID: paneID, data: data) }
