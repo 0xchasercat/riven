@@ -168,6 +168,11 @@ sign_with_identity() {
   local identity="$1"
   local hardened_flag=""
   local entitlements_flag=""
+  # Secure timestamp policy. Notarisation REQUIRES every signature
+  # to carry a secure timestamp from Apple's TSA (timestamp.apple.com)
+  # — `--timestamp` requests it. Ad-hoc signatures can't bind to the
+  # TSA (no cert), so ad-hoc keeps `--timestamp=none`.
+  local timestamp_flag="--timestamp=none"
   if [ "$identity" != "-" ]; then
     # Hardened runtime is required for notarisation. Ad-hoc
     # signing doesn't accept it.
@@ -178,27 +183,36 @@ sign_with_identity() {
     # Applied to the two executables, NOT the resource bundle or
     # the outer .app wrapper.
     entitlements_flag="--entitlements $REPO_ROOT/scripts/release/Riven.entitlements"
+    timestamp_flag="--timestamp"
   fi
-  # The SwiftPM-generated resource bundle (`Riven_RivenCore.bundle`)
-  # is a folder of resource files with no Info.plist — `codesign`
-  # rejects it as "unrecognized bundle" when treated as a code
-  # bundle. The outer .app's signature already seals it (the seal
-  # covers every file under Contents/Resources). Sign only the
-  # executables + the .app itself.
+
+  # Sign INSIDE-OUT: deepest nested code first, outer .app last.
   #
-  # Both executables carry the Hardened-Runtime entitlement
-  # exceptions: RivenAgent because it's the process that fork/
-  # exec's shells (it's the responsible parent for everything the
-  # user runs), Riven because it hosts the UI + statically-linked
-  # libghostty.
-  codesign --force --sign "$identity" $hardened_flag $entitlements_flag \
-    --timestamp=none \
+  # The vendored ripgrep binary lives inside the SwiftPM resource
+  # bundle as a bare Mach-O. Notarisation rejected the first
+  # attempt because `rg` was unsigned / no hardened runtime / no
+  # timestamp — the outer .app seal covers its bytes but doesn't
+  # give it its OWN signature, and the notary checks every Mach-O
+  # individually. Sign it explicitly: Developer ID + hardened
+  # runtime + secure timestamp. No entitlements — it's a plain CLI
+  # tool with no special runtime needs.
+  local rg_path="$APP_BUNDLE/Contents/Resources/Riven_RivenCore.bundle/rg"
+  if [ -f "$rg_path" ]; then
+    codesign --force --sign "$identity" $hardened_flag $timestamp_flag "$rg_path"
+  fi
+
+  # The resource bundle WRAPPER itself isn't signed (it has no
+  # Info.plist, so codesign rejects it as an unrecognized bundle);
+  # the outer .app seal covers it. Only the executables get the
+  # Hardened-Runtime entitlement exceptions: RivenAgent because
+  # it's the process that fork/exec's shells (responsible parent
+  # for everything the user runs), Riven because it hosts the UI +
+  # statically-linked libghostty.
+  codesign --force --sign "$identity" $hardened_flag $entitlements_flag $timestamp_flag \
     "$APP_BUNDLE/Contents/MacOS/RivenAgent"
-  codesign --force --sign "$identity" $hardened_flag $entitlements_flag \
-    --timestamp=none \
+  codesign --force --sign "$identity" $hardened_flag $entitlements_flag $timestamp_flag \
     "$APP_BUNDLE/Contents/MacOS/Riven"
-  codesign --force --sign "$identity" $hardened_flag \
-    --timestamp=none \
+  codesign --force --sign "$identity" $hardened_flag $timestamp_flag \
     "$APP_BUNDLE"
 }
 
@@ -243,9 +257,9 @@ else
 fi
 
 # Sign the DMG itself when we have a real cert (notarisation
-# requires a signed DMG).
+# requires a signed DMG with a secure timestamp).
 if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
-  codesign --force --sign "$APPLE_DEVELOPER_ID" --timestamp=none "$DMG_PATH"
+  codesign --force --sign "$APPLE_DEVELOPER_ID" --timestamp "$DMG_PATH"
 fi
 
 # ─── Notarisation ──────────────────────────────────────────────────

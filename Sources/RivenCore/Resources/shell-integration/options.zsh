@@ -34,11 +34,21 @@ mkdir -p "${_riven_compdump:h}"
 # Load completion subsystem with the cache. `-C` skips security
 # checks (the dump's mtime drives the decision) — fast path. We
 # re-check perms only once a day.
+#
+# Guard against a double compinit. If the user's framework
+# (oh-my-zsh, prezto, a system /etc/zshrc, a hand-rolled .zshrc)
+# already ran compinit before sourcing Riven's integration, zsh
+# warns "compinit being called again after completion module" and
+# the second run is wasted work. compinit defines the `compdef`
+# function as a side effect, so its presence is the canonical
+# "already initialized" signal — skip our call when it's there.
 autoload -Uz compinit
-if [[ -n $_riven_compdump(#qN.mh+24) ]]; then
-  compinit -d "$_riven_compdump"
-else
-  compinit -C -d "$_riven_compdump"
+if (( ! $+functions[compdef] )); then
+  if [[ -n $_riven_compdump(#qN.mh+24) ]]; then
+    compinit -d "$_riven_compdump"
+  else
+    compinit -C -d "$_riven_compdump"
+  fi
 fi
 unset _riven_compdump
 
