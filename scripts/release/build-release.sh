@@ -167,10 +167,17 @@ printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 sign_with_identity() {
   local identity="$1"
   local hardened_flag=""
+  local entitlements_flag=""
   if [ "$identity" != "-" ]; then
     # Hardened runtime is required for notarisation. Ad-hoc
     # signing doesn't accept it.
     hardened_flag="--options=runtime"
+    # Entitlement exceptions only take effect under a real
+    # Developer ID + hardened runtime (ad-hoc signing embeds them
+    # but the OS won't honour the Hardened-Runtime exceptions).
+    # Applied to the two executables, NOT the resource bundle or
+    # the outer .app wrapper.
+    entitlements_flag="--entitlements $REPO_ROOT/scripts/release/Riven.entitlements"
   fi
   # The SwiftPM-generated resource bundle (`Riven_RivenCore.bundle`)
   # is a folder of resource files with no Info.plist — `codesign`
@@ -178,10 +185,16 @@ sign_with_identity() {
   # bundle. The outer .app's signature already seals it (the seal
   # covers every file under Contents/Resources). Sign only the
   # executables + the .app itself.
-  codesign --force --sign "$identity" $hardened_flag \
+  #
+  # Both executables carry the Hardened-Runtime entitlement
+  # exceptions: RivenAgent because it's the process that fork/
+  # exec's shells (it's the responsible parent for everything the
+  # user runs), Riven because it hosts the UI + statically-linked
+  # libghostty.
+  codesign --force --sign "$identity" $hardened_flag $entitlements_flag \
     --timestamp=none \
     "$APP_BUNDLE/Contents/MacOS/RivenAgent"
-  codesign --force --sign "$identity" $hardened_flag \
+  codesign --force --sign "$identity" $hardened_flag $entitlements_flag \
     --timestamp=none \
     "$APP_BUNDLE/Contents/MacOS/Riven"
   codesign --force --sign "$identity" $hardened_flag \

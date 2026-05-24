@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements for Riven + RivenAgent.
+
+  Riven is an UNSANDBOXED terminal emulator. Deliberately no
+  `com.apple.security.app-sandbox` key: sandboxing would trap the
+  app in its container and block Full Disk Access entirely (even
+  if the user granted it), and a terminal that can't read the
+  user's files isn't a terminal.
+
+  The exceptions below LOOSEN the Hardened Runtime for Riven's own
+  two binaries (Riven, RivenAgent). They do NOT govern child
+  processes — a shell or tool spawned by RivenAgent gets its own
+  code-signing context at exec. We ship the conventional terminal-
+  emulator set (matches iTerm2) defensively: nothing in our own
+  code strictly requires them today (we statically link libghostty
+  and don't JIT), but they prevent edge-case breakage when the
+  terminal is the "responsible process" for tools that do.
+
+  Deliberately OMITTED:
+    com.apple.security.cs.disable-executable-page-protection
+      — disables W^X enforcement process-wide. The nuclear option;
+        even iTerm2 doesn't ship it. Nothing we do needs it. Add it
+        only if a specific tool demonstrably requires it.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Allow JIT-compiled code. Harmless for us; useful if an
+         embedded interpreter ever runs in-process. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow pages that are both writable + executable. Required
+         by JIT engines + some interpreters that might run under
+         Riven's responsibility chain. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Don't strip DYLD_* environment variables. Dev workflows
+         routinely set DYLD_LIBRARY_PATH / DYLD_INSERT_LIBRARIES;
+         this keeps them intact through Riven's process boundary. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Allow loading libraries not signed by our Team ID. We
+         statically link libghostty so this isn't needed for our
+         own image, but it's standard for a terminal that may load
+         or be attributed to third-party code. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
