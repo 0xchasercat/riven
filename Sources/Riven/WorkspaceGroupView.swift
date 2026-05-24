@@ -1744,6 +1744,22 @@ final class SidebarTreeModel: ObservableObject {
 
     private(set) var rootPath: String = ""
 
+    /// One filesystem watcher per loaded directory. When a watched
+    /// directory's contents change (a file created / deleted /
+    /// renamed by the terminal, a build, or any other app), we
+    /// re-scan it so the file viewer reflects reality without the
+    /// user having to switch workspaces. Keyed by path; the matching
+    /// open fd is closed in each source's cancel handler.
+    private var watchers: [String: DispatchSourceFileSystemObject] = [:]
+    /// Debounce for the re-scan — a build can fire dozens of
+    /// directory-change events in a burst; coalesce into one refresh.
+    private var refreshTask: Task<Void, Never>?
+
+    deinit {
+        for src in watchers.values { src.cancel() }
+        refreshTask?.cancel()
+    }
+
     /// Point the model at a directory. Resets all per-tree state when
     /// the root actually changes (a `cd` or workspace switch), then
     /// shallow-scans the new root's immediate children.
@@ -1755,6 +1771,7 @@ final class SidebarTreeModel: ObservableObject {
             loadingPaths = []
             rootError = nil
             rootLoaded = false
+            stopAllWatchers()
         }
         await load(path, isRoot: true)
     }
@@ -1848,6 +1865,7 @@ final class SidebarTreeModel: ObservableObject {
         loadingPaths.remove(path)
         if let scanned {
             loaded[path] = scanned
+            startWatching(path)
             if isRoot {
                 rootError = nil
                 rootLoaded = true
@@ -1855,6 +1873,75 @@ final class SidebarTreeModel: ObservableObject {
         } else if isRoot {
             rootError = "Couldn't read \(URL(fileURLWithPath: path).lastPathComponent)"
             rootLoaded = true
+        }
+    }
+
+    // MARK: - Filesystem watching
+
+    /// Watch `path` for content changes. `.write` on a directory fd
+    /// fires when an entry is added / removed; `.delete` / `.rename`
+    /// fire when the directory itself goes away. Events run on the
+    /// main queue (we're @MainActor) and funnel into a debounced
+    /// re-scan.
+    private func startWatching(_ path: String) {
+        guard watchers[path] == nil else { return }
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.scheduleRefresh() }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        watchers[path] = source
+    }
+
+    private func stopWatching(_ path: String) {
+        watchers[path]?.cancel()
+        watchers[path] = nil
+    }
+
+    private func stopAllWatchers() {
+        for src in watchers.values { src.cancel() }
+        watchers.removeAll()
+    }
+
+    /// Coalesce a burst of FS events into a single re-scan ~200 ms
+    /// after the last one (a `git checkout` or `npm install` can
+    /// churn a directory dozens of times in a heartbeat).
+    private func scheduleRefresh() {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.refreshLoaded()
+        }
+    }
+
+    /// Re-scan every currently-loaded directory + update in place.
+    /// Expansion state is preserved (it's keyed by path, independent
+    /// of the scan), so new files appear + deleted files vanish
+    /// without collapsing the user's open folders. A directory that
+    /// disappeared is dropped along with its watcher.
+    private func refreshLoaded() async {
+        for path in Array(loaded.keys) {
+            let scanned = await Task.detached(priority: .utility) {
+                try? ProjectFileTree.scan(root: URL(fileURLWithPath: path), maxDepth: 1)
+            }.value
+            if let scanned {
+                loaded[path] = scanned
+            } else {
+                // Directory vanished (deleted / renamed). Drop it +
+                // its now-dangling watcher; the parent's re-scan will
+                // remove the stale child row.
+                loaded[path] = nil
+                expandedPaths.remove(path)
+                stopWatching(path)
+            }
         }
     }
 }
