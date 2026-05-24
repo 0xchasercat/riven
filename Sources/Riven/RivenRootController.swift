@@ -1448,8 +1448,18 @@ You can rename or delete this tab — it's a regular file at
     }
 
     private static func fallbackState(cwd: URL, themeID: String) -> WorkspaceState {
-        let tree = (try? ProjectFileTree.scan(root: cwd, maxDepth: 3))
-            ?? ProjectFileTree(name: cwd.lastPathComponent, path: cwd.path, kind: .directory)
+        // Empty tree STUB only — do NOT scan here. This runs
+        // synchronously inside `RivenRootController.init`, which is
+        // @MainActor, so a real `ProjectFileTree.scan` would block
+        // the main thread on a depth-3 filesystem walk during launch
+        // — for a home directory (the cwd when launched from Finder)
+        // that's a multi-second hang before the window even draws.
+        // The real tree arrives off-thread two ways: the sidebar's
+        // cached async `loadTree`, and the controller's `openProject`
+        // Task (WorkspaceController is an actor, scan runs on its
+        // executor). Both populate `fileTree` shortly after launch
+        // without blocking the first frame.
+        let tree = ProjectFileTree(name: cwd.lastPathComponent, path: cwd.path, kind: .directory)
         let pane = PaneDescriptor(
             id: PaneID("workspace-root"),
             name: "workspace",

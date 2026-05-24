@@ -1538,15 +1538,20 @@ private struct WorkspaceSidebarView: View {
     let isCollapsed: Bool
     let onOpenFile: (URL) -> Void
 
-    @State private var tree: ProjectFileTree?
-    @State private var loadError: String?
+    @StateObject private var model = SidebarTreeModel()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Hairline(theme: theme)
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                // LazyVStack (not VStack) so only the rows scrolled
+                // into view materialize. Combined with the model's
+                // shallow-scan + lazy-load, the sidebar renders a
+                // handful of views regardless of how deep / wide the
+                // directory is — Finder semantics rather than "walk
+                // and build the whole tree up front."
+                LazyVStack(alignment: .leading, spacing: RivenSpacing.xxs) {
                     contentBody
                 }
                 // Collapsed: zero horizontal padding — the icon tiles
@@ -1555,60 +1560,71 @@ private struct WorkspaceSidebarView: View {
                 .padding(.horizontal, isCollapsed ? 0 : RivenSpacing.s)
                 .padding(.vertical, RivenSpacing.s)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .animation(RivenMotion.pane, value: tree)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(hex: theme.chrome.panel.hex))
         .task(id: currentCwd) {
-            await loadTree(for: currentCwd)
+            await model.setRoot(currentCwd)
+        }
+        // ONE observer for the whole sidebar (was one per row before —
+        // thousands of NotificationCenter subscriptions for a big
+        // tree). Expand-all only reveals already-loaded directories;
+        // deeper levels load lazily as the user drills.
+        .onReceive(NotificationCenter.default.publisher(for: .rivenSidebarSetAllExpanded)) { note in
+            guard let n = note.object as? NSNumber else { return }
+            if n.boolValue { model.expandAllLoaded() } else { model.collapseAll() }
         }
     }
 
     @ViewBuilder
     private var contentBody: some View {
-        if let tree {
-            if tree.children.isEmpty {
-                emptyState
-            } else if isCollapsed {
-                // Collapsed: a vertical icon rail. Each top-level entry
-                // is a 32-pt tile centered in the 56-pt column — no
-                // labels, no chevrons, no indents. Click a directory
-                // tile to expand the sidebar AND drill in; click a file
-                // tile to open it.
-                ForEach(tree.children) { node in
-                    CollapsedIconTile(
-                        node: node,
-                        theme: theme,
-                        activePath: activePath,
-                        onOpenFile: onOpenFile
-                    )
-                }
-            } else {
-                ForEach(tree.children) { node in
-                    WorkspaceFileRow(
-                        node: node,
-                        theme: theme,
-                        depth: 0,
-                        activePath: activePath,
-                        onOpenFile: onOpenFile
-                    )
-                }
+        if isCollapsed {
+            // Collapsed: a vertical icon rail. Top-level entries only
+            // — no nesting in the rail. Click a directory tile to
+            // expand the sidebar AND drill in; click a file to open.
+            ForEach(model.topLevelChildren) { node in
+                CollapsedIconTile(
+                    node: node,
+                    theme: theme,
+                    activePath: activePath,
+                    onOpenFile: onOpenFile
+                )
             }
-        } else if let loadError {
-            // Loading error: only show in the expanded state — the
-            // 56 pt icon rail has no room for prose.
-            if !isCollapsed {
-                Text(loadError)
-                    .font(RivenType.mono(RivenType.small))
-                    .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
-                    .padding(.top, RivenSpacing.xs)
-            }
-        } else if !isCollapsed {
+        } else if let rootError = model.rootError {
+            Text(rootError)
+                .font(RivenType.mono(RivenType.small))
+                .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
+                .padding(.top, RivenSpacing.xs)
+        } else if model.isEmpty {
+            emptyState
+        } else if !model.rootLoaded {
             Text("Loading…")
                 .font(RivenType.mono(RivenType.small))
                 .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
                 .padding(.top, RivenSpacing.xs)
+        } else {
+            // The visible tree, pre-flattened by the model into a
+            // linear list of (node, depth) respecting which
+            // directories are expanded. Each row renders ONLY itself
+            // — no recursion — so LazyVStack can virtualize them.
+            ForEach(model.flatRows) { row in
+                switch row.content {
+                case let .node(node):
+                    WorkspaceFileRow(
+                        node: node,
+                        theme: theme,
+                        depth: row.depth,
+                        isExpanded: model.expandedPaths.contains(node.path),
+                        isLoading: model.loadingPaths.contains(node.path),
+                        activePath: activePath,
+                        onToggle: { model.toggle(node.path) },
+                        onOpenFile: onOpenFile
+                    )
+                case let .truncation(parent):
+                    TruncatedMarkerRow(node: parent, theme: theme, depth: row.depth)
+                }
+            }
         }
     }
 
@@ -1678,64 +1694,167 @@ private struct WorkspaceSidebarView: View {
         return path
     }
 
-    private func loadTree(for cwd: String) async {
-        // ProjectFileTree.scan is synchronous file I/O; hop off the main
-        // actor for the scan, then publish back. Catching is important —
-        // a missing or unreadable cwd shouldn't take the workspace down.
-        // Two-phase load with stale-while-revalidate semantics:
-        //
-        //   1. Synchronous cache lookup — render the previously-
-        //      scanned tree immediately so the sidebar updates with
-        //      zero I/O latency on every `cd`. The home-directory
-        //      case (depth-3 walk of ~/ with thousands of entries)
-        //      used to take several hundred ms per navigation;
-        //      cached it's instant.
-        //
-        //   2. Background refresh — always runs after surfacing the
-        //      cache hit. Picks up filesystem changes since the
-        //      last scan (new files, `git checkout` swaps, etc.).
-        //      The view updates again when the fresh scan lands.
-        //
-        // On a cache miss the foreground path is what we had
-        // before: hop off the main actor for the scan, then
-        // publish back.
-        let url = URL(fileURLWithPath: cwd)
-        let cache = ProjectFileTreeCache.shared
+}
 
-        let hadCacheHit: Bool
-        if let cached = await cache.snapshot(for: cwd) {
-            await MainActor.run {
-                self.tree = cached
-                self.loadError = nil
-            }
-            hadCacheHit = true
-        } else {
-            hadCacheHit = false
+// MARK: - Sidebar tree model (shallow scan + lazy load)
+
+/// Backing store for the workspace sidebar's file tree. Models the
+/// directory as Finder does: read ONE level at a time, load a
+/// directory's children only when the user expands it.
+///
+/// The previous design eagerly scanned `cwd` to depth 3 and rendered
+/// every node with `isExpanded = true` — for a home directory that's
+/// thousands of nodes walked + thousands of SwiftUI rows + thousands
+/// of per-row NotificationCenter subscriptions built synchronously on
+/// every sidebar mount. That was the multi-second hang on launch + new
+/// tab. This model loads `cwd`'s immediate children (depth-1 scan,
+/// always fast no matter how big the directory) and grafts deeper
+/// levels in on demand.
+@MainActor
+final class SidebarTreeModel: ObservableObject {
+    /// The directory each loaded path maps to (its shallow scan,
+    /// carrying immediate `children` + `truncatedChildren`). A path
+    /// present here has been scanned; absent means "not loaded yet."
+    @Published private(set) var loaded: [String: ProjectFileTree] = [:]
+    /// Directories the user has expanded. A directory must be both
+    /// expanded AND loaded for its children to appear.
+    @Published var expandedPaths: Set<String> = []
+    /// Directories with an in-flight scan — drives a row spinner.
+    @Published private(set) var loadingPaths: Set<String> = []
+    /// Set when the root scan itself fails (permission denied, etc.).
+    @Published private(set) var rootError: String?
+    /// Flips true once the root's first scan completes (success or
+    /// empty) so the view can distinguish "still loading" from "loaded
+    /// + genuinely empty."
+    @Published private(set) var rootLoaded: Bool = false
+
+    private(set) var rootPath: String = ""
+
+    /// Point the model at a directory. Resets all per-tree state when
+    /// the root actually changes (a `cd` or workspace switch), then
+    /// shallow-scans the new root's immediate children.
+    func setRoot(_ path: String) async {
+        if path != rootPath {
+            rootPath = path
+            loaded = [:]
+            expandedPaths = []
+            loadingPaths = []
+            rootError = nil
+            rootLoaded = false
         }
+        await load(path, isRoot: true)
+    }
 
-        // Background revalidate. Errors during refresh on a cache
-        // hit are silent — the user is already seeing valid
-        // content, surfacing a transient error would be noise. On
-        // cache miss they populate `loadError` so the empty
-        // sidebar explains itself.
-        do {
-            let scanned = try await Task.detached(priority: .userInitiated) {
-                try ProjectFileTree.scan(root: url, maxDepth: 3)
-            }.value
-            await cache.store(scanned, for: cwd)
-            await MainActor.run {
-                self.tree = scanned
-                self.loadError = nil
-            }
-        } catch {
-            if !hadCacheHit {
-                await MainActor.run {
-                    self.tree = nil
-                    self.loadError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
-                }
+    /// Toggle a directory's expansion. On first expand, kicks off a
+    /// shallow scan of that directory's children (cached after).
+    func toggle(_ path: String) {
+        if expandedPaths.contains(path) {
+            expandedPaths.remove(path)
+        } else {
+            expandedPaths.insert(path)
+            if loaded[path] == nil {
+                Task { await load(path, isRoot: false) }
             }
         }
     }
+
+    func collapseAll() {
+        expandedPaths = []
+    }
+
+    /// Expand every directory we've ALREADY scanned. Deliberately does
+    /// not recursively load the whole tree — that would reintroduce
+    /// the eager-walk cost we're avoiding. Newly-revealed directories
+    /// load lazily as the user keeps drilling.
+    func expandAllLoaded() {
+        var dirs: Set<String> = []
+        for node in loaded.values {
+            for child in node.children where child.kind == .directory {
+                dirs.insert(child.path)
+            }
+        }
+        expandedPaths.formUnion(dirs)
+    }
+
+    /// Immediate children of the root, for the collapsed icon rail.
+    var topLevelChildren: [ProjectFileTree] {
+        loaded[rootPath]?.children ?? []
+    }
+
+    var isEmpty: Bool {
+        rootLoaded && (loaded[rootPath]?.children.isEmpty ?? true)
+    }
+
+    /// The visible tree flattened to a linear list for LazyVStack.
+    /// Walks only expanded + loaded directories, so the cost scales
+    /// with what's actually on screen, not with the filesystem.
+    var flatRows: [FlatSidebarRow] {
+        var out: [FlatSidebarRow] = []
+        func walk(_ parentPath: String, depth: Int) {
+            guard let parent = loaded[parentPath] else { return }
+            for child in parent.children {
+                out.append(FlatSidebarRow(content: .node(child), depth: depth, id: child.path))
+                guard child.kind == .directory, expandedPaths.contains(child.path) else { continue }
+                walk(child.path, depth: depth + 1)
+                if let loadedChild = loaded[child.path], loadedChild.truncatedChildren > 0 {
+                    out.append(
+                        FlatSidebarRow(
+                            content: .truncation(parent: loadedChild),
+                            depth: depth + 1,
+                            id: child.path + "\u{0}trunc"
+                        )
+                    )
+                }
+            }
+        }
+        walk(rootPath, depth: 0)
+        if let root = loaded[rootPath], root.truncatedChildren > 0 {
+            out.append(
+                FlatSidebarRow(
+                    content: .truncation(parent: root),
+                    depth: 0,
+                    id: rootPath + "\u{0}trunc"
+                )
+            )
+        }
+        return out
+    }
+
+    private func load(_ path: String, isRoot: Bool) async {
+        guard loaded[path] == nil else { return }
+        loadingPaths.insert(path)
+        // Shallow scan: depth-1 only. Returns the directory with its
+        // immediate children (directory children are stubs with empty
+        // `children` until the user expands them). This is O(entries
+        // in this one directory) — instant even for a home dir with
+        // thousands of entries, because we never recurse.
+        let scanned = await Task.detached(priority: .userInitiated) {
+            try? ProjectFileTree.scan(root: URL(fileURLWithPath: path), maxDepth: 1)
+        }.value
+        loadingPaths.remove(path)
+        if let scanned {
+            loaded[path] = scanned
+            if isRoot {
+                rootError = nil
+                rootLoaded = true
+            }
+        } else if isRoot {
+            rootError = "Couldn't read \(URL(fileURLWithPath: path).lastPathComponent)"
+            rootLoaded = true
+        }
+    }
+}
+
+/// One row in the flattened sidebar list — either a real file/dir
+/// node or a "…N more" truncation marker for a capped directory.
+struct FlatSidebarRow: Identifiable {
+    enum Content {
+        case node(ProjectFileTree)
+        case truncation(parent: ProjectFileTree)
+    }
+    let content: Content
+    let depth: Int
+    let id: String
 }
 
 // MARK: - Sidebar toggle button
@@ -1908,51 +2027,28 @@ private struct WorkspaceFileRow: View {
     let node: ProjectFileTree
     let theme: ThemeSpec
     let depth: Int
+    /// Expansion state lives in the SidebarTreeModel now (one Set for
+    /// the whole tree), not per-row @State. Passed in so the row can
+    /// render the right disclosure glyph; toggled via `onToggle`.
+    let isExpanded: Bool
+    /// True while this directory's children are being scanned — shows
+    /// a subtle in-progress glyph instead of the chevron.
+    let isLoading: Bool
     let activePath: String?
+    let onToggle: () -> Void
     let onOpenFile: (URL) -> Void
 
-    @State private var isExpanded: Bool = true
     @State private var isHovering: Bool = false
 
     private var isActive: Bool {
         node.kind == .file && activePath == node.path
     }
 
+    // Non-recursive: renders ONLY this row. Hierarchy + which children
+    // are visible is handled by SidebarTreeModel.flatRows feeding a
+    // LazyVStack. No per-row .onReceive (one observer lives on the
+    // sidebar container), no child ForEach.
     var body: some View {
-        VStack(alignment: .leading, spacing: RivenSpacing.xxs) {
-            row
-            if isExpanded, !node.children.isEmpty {
-                ForEach(node.children) { child in
-                    WorkspaceFileRow(
-                        node: child,
-                        theme: theme,
-                        depth: depth + 1,
-                        activePath: activePath,
-                        onOpenFile: onOpenFile
-                    )
-                }
-                // H-12: surface the elision count from the scan
-                // (`maxChildrenPerDirectory` cap) so the user knows
-                // there's hidden content. Clicking the row opens the
-                // directory in Finder — the sidebar isn't going to
-                // render 10k entries, but Finder will.
-                if isExpanded, node.truncatedChildren > 0 {
-                    truncatedMarker
-                }
-            }
-        }
-        // Listen for global expand-all / collapse-all toggle so the
-        // sidebar header's button can drive the whole tree at once.
-        // Only directory rows respond (file rows have no children to
-        // expand) but the no-op write here is cheap.
-        .onReceive(NotificationCenter.default.publisher(for: .rivenSidebarSetAllExpanded)) { note in
-            if let n = note.object as? NSNumber, node.kind == .directory {
-                isExpanded = n.boolValue
-            }
-        }
-    }
-
-    private var row: some View {
         HStack(spacing: RivenSpacing.xs) {
             disclosure
             Text(node.name)
@@ -1978,7 +2074,7 @@ private struct WorkspaceFileRow: View {
         .onTapGesture {
             switch node.kind {
             case .directory:
-                withAnimation(RivenMotion.standard) { isExpanded.toggle() }
+                onToggle()
             case .file:
                 onOpenFile(URL(fileURLWithPath: node.path))
             }
@@ -1994,8 +2090,11 @@ private struct WorkspaceFileRow: View {
 
     private var disclosureGlyph: String {
         switch node.kind {
-        case .directory: return isExpanded ? "v" : ">"
-        case .file: return " "
+        case .directory:
+            if isLoading { return "·" }
+            return isExpanded ? "v" : ">"
+        case .file:
+            return " "
         }
     }
 
@@ -2020,12 +2119,18 @@ private struct WorkspaceFileRow: View {
         }
         return Color.clear
     }
+}
 
-    /// "...N more" sentinel row appended below a directory's visible
-    /// children when the scan elided entries to keep the sidebar
-    /// bounded. Click reveals the directory in Finder.
-    @ViewBuilder
-    private var truncatedMarker: some View {
+/// "…N more" sentinel row for a directory whose children were elided
+/// by the scan's per-directory cap. Click reveals the directory in
+/// Finder. Standalone (was nested in WorkspaceFileRow) so the model's
+/// flat-row list can emit it as its own entry.
+private struct TruncatedMarkerRow: View {
+    let node: ProjectFileTree
+    let theme: ThemeSpec
+    let depth: Int
+
+    var body: some View {
         HStack(spacing: RivenSpacing.xs) {
             Text(" ")
                 .font(RivenType.mono(RivenType.caption))
@@ -2035,7 +2140,7 @@ private struct WorkspaceFileRow: View {
                 .foregroundStyle(Color(hex: theme.chrome.tertiaryText.hex))
                 .italic()
         }
-        .padding(.leading, RivenSpacing.s + CGFloat(depth + 1) * RivenSpacing.m)
+        .padding(.leading, RivenSpacing.s + CGFloat(depth) * RivenSpacing.m)
         .padding(.trailing, RivenSpacing.xs)
         .frame(height: 18)
         .frame(maxWidth: .infinity, alignment: .leading)
