@@ -1618,7 +1618,21 @@ private struct WorkspaceSidebarView: View {
                         isExpanded: model.expandedPaths.contains(node.path),
                         isLoading: model.loadingPaths.contains(node.path),
                         activePath: activePath,
-                        onToggle: { model.toggle(node.path) },
+                        onToggle: {
+                            model.toggle(node.path)
+                            // Clicking a sidebar row makes the sidebar's
+                            // hosting view first-responder; nothing hands
+                            // it back, so the command bar / terminal goes
+                            // deaf to input until a new tab rebuilds the
+                            // responder chain. A directory toggle keeps
+                            // the user in "terminal mode" (they're
+                            // browsing, not editing), so bounce focus
+                            // back to the command bar — the same gesture
+                            // a terminal click uses.
+                            NotificationCenter.default.post(
+                                name: .rivenFocusCommandBar, object: nil
+                            )
+                        },
                         onOpenFile: onOpenFile
                     )
                 case let .truncation(parent):
