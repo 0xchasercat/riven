@@ -664,7 +664,36 @@ You can rename or delete this tab — it's a regular file at
                 scrollback: store
             )
         }
+        // Persist the snapshot on state change (debounced), not only
+        // at quit. The terminate-time save is fragile: it doesn't run
+        // on a crash / force-quit / kill, and even a clean quit caps
+        // it at a 2 s timeout — so a session restored from the LAST
+        // clean quit could be stale ("randomly opens older sessions").
+        // Saving here keeps the on-disk snapshot continuously current.
+        scheduleSnapshotSave()
     }
+
+    /// Debounced background snapshot write. Coalesces a burst of state
+    /// changes (rapid splits, a flurry of cd's) into one save ~800 ms
+    /// after the last change. The save hops to the WorkspaceController
+    /// actor + writes JSON off the main thread, so it never blocks the
+    /// UI. The terminate-time `persistSnapshot` remains as a final
+    /// flush, but the session no longer depends on a clean quit to be
+    /// current.
+    private func scheduleSnapshotSave() {
+        snapshotSaveTask?.cancel()
+        let workspace = self.workspace
+        snapshotSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            // `updatePaneGraph` was queued on the actor before this
+            // 800 ms sleep elapsed, so `persistSnapshot` reads the
+            // up-to-date graph.
+            try? await workspace.persistSnapshot()
+        }
+    }
+
+    private var snapshotSaveTask: Task<Void, Never>?
 
     /// Walk the captured pane graph and patch every terminal pane's
     /// sidecar to reflect the current project root + workspace label
