@@ -18,7 +18,10 @@
 # Adds the `z <pattern>` command for frecency-based jumping. Tracks
 # every cd in `~/.z` (plain text, one entry per line). Pure shell,
 # zero subprocess overhead per prompt.
-if [[ -r "$RIVEN_INTEGRATION_DIR/plugins/z.sh" ]]; then
+# Skipped when the user already has `z` or zoxide (riven.zsh sets
+# `_riven_skip_z`). Shadowing either with our bundled z.sh would
+# fight over the `z` command + the cd hook.
+if (( ! ${_riven_skip_z:-0} )) && [[ -r "$RIVEN_INTEGRATION_DIR/plugins/z.sh" ]]; then
   _Z_DATA="${_Z_DATA:-$HOME/.z}"
   source "$RIVEN_INTEGRATION_DIR/plugins/z.sh"
 fi
@@ -30,7 +33,10 @@ fi
 #
 # Style: ANSI 8 = "bright black" which Riven's themes map to a true
 # dim color rather than a half-white-on-black artifact.
-if [[ -r "$RIVEN_INTEGRATION_DIR/plugins/zsh-autosuggestions.zsh" ]]; then
+# Skipped when the shell already runs zsh-autosuggestions
+# (riven.zsh sets `_riven_skip_autosuggest`). Two autosuggest
+# engines wrap the same ZLE widgets and fight over the ghost text.
+if (( ! ${_riven_skip_autosuggest:-0} )) && [[ -r "$RIVEN_INTEGRATION_DIR/plugins/zsh-autosuggestions.zsh" ]]; then
   ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=8'
   ZSH_AUTOSUGGEST_STRATEGY=(history completion)
   ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=80   # don't suggest for huge buffers
@@ -42,7 +48,10 @@ fi
 # we ran earlier (the widget names are static so it doesn't matter
 # in which order the source + bindkey calls happen — `bindkey` just
 # names a widget that gets resolved at keypress time).
-if [[ -r "$RIVEN_INTEGRATION_DIR/plugins/zsh-history-substring-search.zsh" ]]; then
+# Skipped when the shell already has history-substring-search
+# (riven.zsh sets `_riven_skip_histsearch`). Double-sourcing
+# re-defines the widgets the user's Up/Down are already bound to.
+if (( ! ${_riven_skip_histsearch:-0} )) && [[ -r "$RIVEN_INTEGRATION_DIR/plugins/zsh-history-substring-search.zsh" ]]; then
   source "$RIVEN_INTEGRATION_DIR/plugins/zsh-history-substring-search.zsh"
   # Highlight the matched substring in the buffer using the theme's
   # accent. ANSI 3 (yellow) -> Amber accent / tokyo violet / etc.
@@ -54,6 +63,11 @@ fi
 # MUST be loaded last (it wraps every other widget). Its theme
 # subsystem is configurable but the default "default" theme reads
 # fine on every Riven palette so we don't override.
-if [[ -r "$RIVEN_INTEGRATION_DIR/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" ]]; then
+# Skipped when the shell already runs a highlighter — either
+# zsh-syntax-highlighting or fast-syntax-highlighting (riven.zsh
+# sets `_riven_skip_highlight`). Two highlighters both wrapping
+# every ZLE widget is the classic "my prompt flickers / lags"
+# conflict.
+if (( ! ${_riven_skip_highlight:-0} )) && [[ -r "$RIVEN_INTEGRATION_DIR/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" ]]; then
   source "$RIVEN_INTEGRATION_DIR/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
 fi

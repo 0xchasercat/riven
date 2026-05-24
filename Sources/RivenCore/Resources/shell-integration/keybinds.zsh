@@ -15,33 +15,34 @@
 
 [[ -o interactive ]] || return 0
 
-# Use emacs keymap baseline. Vim users can `bindkey -v` in their
-# .zshrc after sourcing Riven — we don't override their personal
-# config.
-bindkey -e
+# Use emacs keymap baseline — but ONLY on a bare shell. In coexist
+# mode (riven.zsh detected a framework / curated setup) we leave the
+# keymap alone: the user may run vi mode, and forcing `bindkey -e`
+# from our last-sourced file would silently clobber it.
+if (( ! ${_riven_coexist:-0} )); then
+  bindkey -e
+fi
 
-# Bind history-substring-search to Up / Down arrows. The plugin is
-# loaded later (plugins.zsh) but its widgets are declared at load
-# time, so this binding works as long as plugins.zsh runs after
-# keybinds.zsh — which it does, per the order in riven.zsh.
-bindkey '^[[A' history-substring-search-up
-bindkey '^[[B' history-substring-search-down
-# Same on the alternate cursor-key sequence terminals send in
-# application mode.
-bindkey '^[OA' history-substring-search-up
-bindkey '^[OB' history-substring-search-down
-
-# Ctrl-R: same substring search, but inline (Emacs muscle memory).
-# zsh-history-substring-search exposes `history-incremental-search-backward`
-# under that binding by default; we keep zsh's built-in for now and
-# revisit if users ask for fzf-style replacement.
+# Bind history-substring-search to Up / Down arrows — only if WE
+# loaded that plugin. When the user already has it
+# (`_riven_skip_histsearch`) their own bindings own the arrows.
+if (( ! ${_riven_skip_histsearch:-0} )); then
+  bindkey '^[[A' history-substring-search-up
+  bindkey '^[[B' history-substring-search-down
+  # Same on the alternate cursor-key sequence terminals send in
+  # application mode.
+  bindkey '^[OA' history-substring-search-up
+  bindkey '^[OB' history-substring-search-down
+fi
 
 # ─── zsh-autosuggestions accept binding ──────────────────────────
 # Right-arrow accepts the ghost-text suggestion (the default).
 # Bind Ctrl-E too — Emacs end-of-line is a natural twin gesture for
-# "yes, finish the line for me." Without this, users have to reach
-# for the arrow to take a suggestion.
-bindkey '^E' autosuggest-accept
+# "yes, finish the line for me." Only when WE own autosuggestions;
+# otherwise the user's plugin already wired its own accept key.
+if (( ! ${_riven_skip_autosuggest:-0} )); then
+  bindkey '^E' autosuggest-accept
+fi
 
 # ─── Common pain points ──────────────────────────────────────────
 # Option-Left / Option-Right walks by word in macOS terminals.
