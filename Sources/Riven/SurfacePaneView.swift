@@ -98,9 +98,12 @@ final class SurfacePaneView: NSView {
         }
         ghostty_surface_set_content_scale(surface, scale, scale)
         pushSize()
-        ghostty_surface_set_focus(surface, true)
+        // Start UNfocused: the command bar is Riven's default writing
+        // surface. The user transfers keyboard focus to the terminal
+        // with a deliberate double-click (see mouseDown), and the solid/
+        // hollow cursor reflects which surface owns input.
+        ghostty_surface_set_focus(surface, false)
         if let paneID { GhosttyApp.shared.register(self, for: paneID) }
-        window?.makeFirstResponder(self)
     }
 
     /// Called from the app's RENDER action → drive the Metal draw.
@@ -234,7 +237,16 @@ final class SurfacePaneView: NSView {
     // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        // Keyboard focus transfers to the terminal only on a DELIBERATE
+        // double-click. Single clicks just drive selection / mouse
+        // reporting, so the command bar stays the default writing
+        // surface and an accidental click can't hijack input. This is
+        // what makes interactive sessions usable: double-click into
+        // vim / htop / claude to type directly, then a single click on
+        // the command bar (or any surface outside) hands focus back.
+        if event.clickCount == 2 {
+            window?.makeFirstResponder(self)
+        }
         sendMouseButton(event, state: GHOSTTY_MOUSE_PRESS)
     }
 

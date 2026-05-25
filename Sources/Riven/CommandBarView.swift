@@ -913,11 +913,11 @@ final class CommandInputTextView: NSTextView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        // Riven's focus model bounces any terminal-pane click to the
-        // command bar. Listen for `.rivenFocusCommandBar` while attached
-        // to a window — when fired, grab first-responder unless the
-        // event source was ourselves (avoid recursive loops if a future
-        // path ever posts from inside the bar).
+        // The command bar is Riven's default writing surface. Listen for
+        // `.rivenFocusCommandBar` while attached to a window — when fired
+        // (e.g. the global Tab-snap), grab first-responder. The
+        // grabFocusIfAppropriate guard keeps us from stealing focus the
+        // user deliberately gave a terminal surface via double-click.
         if let focusObserver {
             NotificationCenter.default.removeObserver(focusObserver)
             self.focusObserver = nil
@@ -960,6 +960,15 @@ final class CommandInputTextView: NSTextView {
             // Either us already, the toolbar path field's editor, or
             // the editor pane — in all three cases the right behavior
             // is "don't change focus".
+            return
+        }
+        // Don't yank focus away from a terminal surface the user
+        // deliberately double-clicked into — that's their interactive
+        // session (vim/htop/claude). They hand focus back by clicking
+        // the command bar, which makes us first-responder directly.
+        // Without this guard, every SwiftUI re-render that remounts this
+        // text view would steal keyboard focus mid-session.
+        if window.firstResponder is SurfacePaneView {
             return
         }
         window.makeFirstResponder(self)
