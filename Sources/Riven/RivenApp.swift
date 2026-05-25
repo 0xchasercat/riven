@@ -737,6 +737,11 @@ extension Notification.Name {
     /// `CommandSuggestRequest`; the observer fills `response.text`
     /// synchronously before the post returns.
     static let rivenCommandSuggestRequest = Notification.Name("RivenCommandSuggestRequest")
+    /// A terminal pane rang the bell (BEL / 0x07). Object is the PaneID.
+    static let rivenBell = Notification.Name("RivenBell")
+    /// A terminal pane's OSC 0/2 title changed. Object is a
+    /// `TerminalTitleChange` (paneID + title, nil = cleared).
+    static let rivenTerminalTitleChanged = Notification.Name("RivenTerminalTitleChanged")
     /// Posted by the sidebar header's expand-all / collapse-all
     /// toggle. Object is `NSNumber(value: Bool)` — true = expand
     /// all rows, false = collapse all. Every WorkspaceFileRow
@@ -767,6 +772,14 @@ extension Notification.Name {
 struct AltScreenChange: Equatable, Sendable {
     let paneID: PaneID
     let isInAltScreen: Bool
+}
+
+/// Payload for `.rivenTerminalTitleChanged`. `title` nil means the
+/// program cleared its title — the tab label falls back to its
+/// cwd-derived default.
+struct TerminalTitleChange: Equatable, Sendable {
+    let paneID: PaneID
+    let title: String?
 }
 
 /// Direction the command bar wants to walk through history.

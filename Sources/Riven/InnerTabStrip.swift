@@ -82,6 +82,14 @@ private struct InnerTabChip: View {
     @State private var isEditing = false
     @State private var draft: String = ""
     @FocusState private var isFieldFocused: Bool
+    /// OSC 0/2 title the running program set for this tab's terminal
+    /// (ssh host, vim filename, …). Overrides the cwd-derived label.
+    /// Tracked locally via `.rivenTerminalTitleChanged` filtered to
+    /// this tab's paneID — no controller threading needed.
+    @State private var programTitle: String?
+    /// A bell rang for this tab's terminal since it was last focused.
+    /// Shows a small bell dot; cleared when the tab becomes active.
+    @State private var hasBell = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -116,6 +124,16 @@ private struct InnerTabChip: View {
                         .fill(Color(hex: theme.chrome.accent.hex))
                         .frame(width: 6, height: 6)
                         .accessibilityLabel("Unsaved changes")
+                }
+                // Bell dot: a program rang BEL in this tab while it
+                // wasn't focused. Warning-toned so it reads distinct
+                // from the accent dirty dot. Clears when the tab is
+                // focused.
+                if hasBell && !isActive {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Color(hex: theme.chrome.warning.hex))
+                        .accessibilityLabel("Bell")
                 }
                 if isEditing {
                     inlineEditor
@@ -197,6 +215,24 @@ private struct InnerTabChip: View {
         .onHover { isHovered = $0 }
         .animation(RivenMotion.hover, value: isHovered)
         .animation(RivenMotion.hover, value: isActive)
+        // OSC 0/2 title → label override. Filter to this tab's
+        // terminal paneID; nil title clears back to the default.
+        .onReceive(NotificationCenter.default.publisher(for: .rivenTerminalTitleChanged)) { note in
+            guard let change = note.object as? TerminalTitleChange,
+                  change.paneID == tab.terminalPaneID else { return }
+            programTitle = change.title
+        }
+        // BEL → bell dot (only when this tab isn't the active one;
+        // a bell on the tab you're looking at needs no marker).
+        .onReceive(NotificationCenter.default.publisher(for: .rivenBell)) { note in
+            guard let paneID = note.object as? PaneID,
+                  paneID == tab.terminalPaneID else { return }
+            if !isActive { hasBell = true }
+        }
+        // Clear the bell dot once the tab is focused.
+        .onChange(of: isActive) { _, nowActive in
+            if nowActive { hasBell = false }
+        }
     }
 
     private func beginRename() {
@@ -216,10 +252,12 @@ private struct InnerTabChip: View {
         }
     }
 
-    /// Tab label with the H-2 "(missing)" suffix appended when the
-    /// underlying editor file was deleted / renamed under us.
+    /// Tab label. A program-set OSC 0/2 title wins over the cwd-
+    /// derived name (so a tab shows the ssh host / vim file / etc.);
+    /// the H-2 "(missing)" suffix still applies to the editor case.
     private var displayLabel: String {
-        isVanished ? "\(tab.displayName) (missing)" : tab.displayName
+        let base = programTitle ?? tab.displayName
+        return isVanished ? "\(base) (missing)" : base
     }
 
     /// Active = the standard text colour; vanished = the warning

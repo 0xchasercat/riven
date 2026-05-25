@@ -1,12 +1,32 @@
 import Foundation
 import GhosttyVt
 
+/// Retains the bell closure + bridges the C callback. Stored on the
+/// session handle so its lifetime matches the terminal's. The
+/// `@convention(c)` trampoline below recovers it from the userdata
+/// pointer libghostty hands back.
+final class GhosttyBellBox: @unchecked Sendable {
+    let onBell: @Sendable () -> Void
+    init(onBell: @escaping @Sendable () -> Void) { self.onBell = onBell }
+}
+
+/// Top-level C function pointer libghostty calls on a real BEL.
+/// `userdata` is the `GhosttyBellBox` pointer set via OPT_USERDATA.
+private let ghosttyBellTrampoline: @convention(c) (GhosttyTerminal?, UnsafeMutableRawPointer?) -> Void = { _, userdata in
+    guard let userdata else { return }
+    let box = Unmanaged<GhosttyBellBox>.fromOpaque(userdata).takeUnretainedValue()
+    box.onBell()
+}
+
 public final class GhosttySessionHandle: @unchecked Sendable {
     public let paneID: PaneID
     fileprivate var terminal: GhosttyTerminal?
     /// Lazily-created render state, owned by this handle. Created on first
     /// `snapshotFrame` call, freed on `close`/`deinit`.
     fileprivate var renderState: GhosttyRenderState?
+    /// Retains the bell handler box for the terminal's lifetime (its
+    /// pointer is handed to libghostty as userdata).
+    fileprivate var bellBox: GhosttyBellBox?
 
     fileprivate init(paneID: PaneID, terminal: GhosttyTerminal) {
         self.paneID = paneID
@@ -234,6 +254,47 @@ public struct GhosttyBridge: Sendable {
         }
         let buffer = UnsafeBufferPointer(start: ptr, count: Int(out.len))
         return String(bytes: buffer, encoding: .utf8)
+    }
+
+    /// The terminal title as set by OSC 0 / OSC 2 (e.g. ssh sets the
+    /// host, vim sets the filename). Returns nil when no title has
+    /// been set. Borrowed-string semantics identical to
+    /// `readCurrentCwd` — we copy into a Swift String immediately so
+    /// the borrow doesn't outlive the next vt_write.
+    public func readTitle(_ handle: GhosttySessionHandle) -> String? {
+        guard let terminal = handle.terminal else { return nil }
+        var out = GhosttyString(ptr: nil, len: 0)
+        let result = ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_TITLE, &out)
+        guard result == GHOSTTY_SUCCESS, let ptr = out.ptr, out.len > 0 else {
+            return nil
+        }
+        let buffer = UnsafeBufferPointer(start: ptr, count: Int(out.len))
+        return String(bytes: buffer, encoding: .utf8)
+    }
+
+    /// Install a bell handler on the session. The closure fires
+    /// (synchronously, during `feed`) whenever the program writes a
+    /// BEL (0x07) that libghostty recognizes as a real bell — NOT an
+    /// OSC-terminator BEL, which libghostty's parser correctly
+    /// distinguishes (a raw stream scan for 0x07 could not). The
+    /// handler is retained by the session handle for its lifetime;
+    /// userdata points at that retained box.
+    public func setBellHandler(_ handle: GhosttySessionHandle, _ onBell: @escaping @Sendable () -> Void) {
+        guard let terminal = handle.terminal else { return }
+        let box = GhosttyBellBox(onBell: onBell)
+        handle.bellBox = box
+        // OPT_USERDATA value is the userdata pointer itself; OPT_BELL
+        // value is the function pointer. ghostty_terminal_set copies
+        // neither — they must stay valid for the terminal's life, so
+        // the box lives on the handle and the C function is a static
+        // top-level pointer.
+        let userdata = Unmanaged.passUnretained(box).toOpaque()
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, userdata)
+        ghostty_terminal_set(
+            terminal,
+            GHOSTTY_TERMINAL_OPT_BELL,
+            unsafeBitCast(ghosttyBellTrampoline, to: UnsafeRawPointer.self)
+        )
     }
 
     public func close(_ handle: GhosttySessionHandle) throws {

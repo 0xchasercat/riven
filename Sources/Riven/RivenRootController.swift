@@ -248,6 +248,22 @@ final class RivenRootController: ObservableObject {
                 responseBox.text = self.suggestionForCommandBar(prefix: prefix)
             }
         }
+
+        // BEL → audible system beep. The visual side (a bell dot on
+        // the tab) is handled by InnerTabChip observing .rivenBell
+        // directly — it knows its own terminalPaneID, so no state
+        // needs threading through the controller / pane-graph
+        // snapshot. The title label is likewise handled in the chip
+        // via .rivenTerminalTitleChanged. The controller owns only
+        // the centralized beep so it fires once per bell regardless
+        // of which tab (if any) is visible.
+        bellObserver = NotificationCenter.default.addObserver(
+            forName: .rivenBell,
+            object: nil,
+            queue: nil
+        ) { _ in
+            MainActor.assumeIsolated { NSSound.beep() }
+        }
     }
 
     /// Returns the most-recent submitted command starting with
@@ -266,6 +282,7 @@ final class RivenRootController: ObservableObject {
     private nonisolated(unsafe) var historyObserver: NSObjectProtocol?
     private nonisolated(unsafe) var altScreenObserver: NSObjectProtocol?
     private nonisolated(unsafe) var suggestObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var bellObserver: NSObjectProtocol?
 
     deinit {
         if let historyObserver {
@@ -276,6 +293,9 @@ final class RivenRootController: ObservableObject {
         }
         if let suggestObserver {
             NotificationCenter.default.removeObserver(suggestObserver)
+        }
+        if let bellObserver {
+            NotificationCenter.default.removeObserver(bellObserver)
         }
     }
 

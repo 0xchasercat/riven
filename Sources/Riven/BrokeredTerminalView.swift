@@ -638,6 +638,19 @@ public final class BrokeredTerminalView: NSView {
         }
         self.session = handle
 
+        // BEL (0x07) → notify the UI. libghostty's parser fires this
+        // only for real bells, not OSC-terminator BELs. The closure
+        // runs synchronously during `feed` (on the main actor, since
+        // feedOutput is @MainActor) — hop to the main actor explicitly
+        // anyway to satisfy Sendable, then post with our paneID so the
+        // tab strip can flash the right tab + beep.
+        let bellPaneID = paneID
+        bridge.setBellHandler(handle) {
+            Task { @MainActor in
+                NotificationCenter.default.post(name: .rivenBell, object: bellPaneID)
+            }
+        }
+
         subscriptionTask = Task { [weak self] in
             await self?.runBrokerLoop()
         }
@@ -898,6 +911,22 @@ public final class BrokeredTerminalView: NSView {
         onCwdChanged(newCwd)
     }
 
+    /// Polled from `draw` like the cwd: read the OSC 0/2 title and,
+    /// when it changes, post it so the inner-tab label can reflect
+    /// what's running (ssh host, vim filename, etc.). An empty/cleared
+    /// title posts nil so the label falls back to its cwd-derived
+    /// default.
+    private var lastReportedTitle: String?
+    private func reportTitleIfChanged(on session: GhosttySessionHandle) {
+        let newTitle = bridge.readTitle(session)
+        guard newTitle != lastReportedTitle else { return }
+        lastReportedTitle = newTitle
+        NotificationCenter.default.post(
+            name: .rivenTerminalTitleChanged,
+            object: TerminalTitleChange(paneID: paneID, title: newTitle)
+        )
+    }
+
     private func teardown() {
         subscriptionTask?.cancel()
         subscriptionTask = nil
@@ -976,6 +1005,7 @@ public final class BrokeredTerminalView: NSView {
             // borrowed pointer copied into Swift) and only matters when
             // it actually changes — see `reportCwdIfChanged` for dedupe.
             reportCwdIfChanged(on: session)
+            reportTitleIfChanged(on: session)
             // Refresh the alt-screen latch on every draw. Cheap probe
             // (one libghostty mode_get per draw, ~ns) so we don't need
             // to subscribe to a change event. The next focus-stealing
