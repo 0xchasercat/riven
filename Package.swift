@@ -90,9 +90,6 @@ let package = Package(
         .executableTarget(
             name: "GhosttySpike",
             dependencies: ["GhosttyKit"],
-            swiftSettings: [
-                .unsafeFlags(["-parse-as-library"])
-            ],
             // The full static lib references the macOS frameworks
             // Ghostty's renderer + runtime use. They must be linked
             // for symbol resolution even for a trivial call.
