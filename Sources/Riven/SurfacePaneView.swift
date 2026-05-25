@@ -195,26 +195,48 @@ final class SurfacePaneView: NSView {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
-        sendKey(event, action: GHOSTTY_ACTION_PRESS)
+        sendKey(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
     }
 
     override func keyUp(with event: NSEvent) {
         sendKey(event, action: GHOSTTY_ACTION_RELEASE)
     }
 
+    /// Translate an AppKit key event into ghostty's key event and send it.
+    /// The field setup mirrors Ghostty's own AppKit surface and it
+    /// matters: ghostty's key encoder identifies a printable key from its
+    /// `unshifted_codepoint` plus the modifiers consumed by text
+    /// translation. Leaving those zeroed made control combos (Ctrl+X)
+    /// encode correctly — they come from keycode+mods — while plain
+    /// letters produced nothing, so a TUI's single-key prompt (nano's
+    /// Y/N) silently ignored input.
+    ///
+    /// Note: this is the non-IME path. Dead-key composition and CJK input
+    /// methods (which need `interpretKeyEvents` + NSTextInputClient) are a
+    /// separate follow-up; latin / US-layout input works fully here.
     private func sendKey(_ event: NSEvent, action: ghostty_input_action_e) {
         guard let surface else { return }
         var key = ghostty_input_key_s()
         key.action = action
         key.keycode = UInt32(event.keyCode)
-        key.mods = Self.ghosttyMods(event.modifierFlags)
-        key.consumed_mods = GHOSTTY_MODS_NONE
         key.composing = false
+        key.mods = Self.ghosttyMods(event.modifierFlags)
+        // Control + command never contribute to text translation; assume
+        // shift / option did. (Ghostty's long-standing heuristic.)
+        key.consumed_mods = Self.ghosttyMods(event.modifierFlags.subtracting([.control, .command]))
+        // The codepoint with NO modifiers applied — 'n' (0x6E) for the N
+        // key regardless of shift. Ghostty needs this to identify the key.
         key.unshifted_codepoint = 0
-        // `text` carries the resolved characters for printable keys;
-        // ghostty encodes control keys from keycode+mods regardless.
-        if action == GHOSTTY_ACTION_PRESS, let chars = event.characters, !chars.isEmpty {
-            chars.withCString { ptr in
+        if let bare = event.characters(byApplyingModifiers: []),
+           let scalar = bare.unicodeScalars.first {
+            key.unshifted_codepoint = scalar.value
+        }
+        // Send resolved characters as `text` only for genuinely printable
+        // input. A lone control char is left for ghostty's encoder (keeps
+        // Ctrl+X etc. correct); function-key private-use scalars are
+        // dropped (ghostty encodes arrows / F-keys from the keycode).
+        if action != GHOSTTY_ACTION_RELEASE, let text = Self.keyText(event) {
+            text.withCString { ptr in
                 key.text = ptr
                 _ = ghostty_surface_key(surface, key)
             }
@@ -222,6 +244,19 @@ final class SurfacePaneView: NSView {
             key.text = nil
             _ = ghostty_surface_key(surface, key)
         }
+    }
+
+    /// The text to hand ghostty as the key event's `text`, mirroring
+    /// Ghostty's `ghosttyCharacters`: nil for a lone control character or
+    /// a function-key PUA scalar (ghostty encodes those itself), the
+    /// resolved characters otherwise.
+    private static func keyText(_ event: NSEvent) -> String? {
+        guard let chars = event.characters, !chars.isEmpty else { return nil }
+        if chars.count == 1, let scalar = chars.unicodeScalars.first {
+            if scalar.value < 0x20 { return nil }
+            if scalar.value >= 0xF700 && scalar.value <= 0xF8FF { return nil }
+        }
+        return chars
     }
 
     private static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
