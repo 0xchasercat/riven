@@ -239,11 +239,21 @@ public actor WorkspaceController {
         let graph = currentPaneGraph ?? defaultPaneGraph(for: projectRoot)
         currentPaneGraph = graph
 
-        // ProjectFileTree.scan can throw on permission failures; catch
-        // here and synthesize an empty stub so the workspace still
-        // mounts. The sidebar's own .task path will retry/report once
-        // the view is up.
-        let scanned: ProjectFileTree = (try? ProjectFileTree.scan(root: projectRoot))
+        // SHALLOW scan only (maxDepth 1). This used to be a full
+        // depth-6 walk — and it BLOCKED session restore: openProject
+        // doesn't return (so `self.state = real`, which paints the
+        // restored workspace, doesn't run) until makeState finishes,
+        // and a depth-6 scan of a home directory takes 10-30 s. The
+        // user saw the empty fallback state for that whole window,
+        // assumed restore failed, made a fresh workspace — and then
+        // the restore landed on top, feeling random.
+        //
+        // The live sidebar (WorkspaceSidebarView + SidebarTreeModel)
+        // does its OWN shallow+lazy scan independent of this field, so
+        // `WorkspaceState.fileTree` is effectively vestigial (only the
+        // legacy, unmounted SidebarView reads it). A depth-1 scan is
+        // instant even for ~, so restore now appears immediately.
+        let scanned: ProjectFileTree = (try? ProjectFileTree.scan(root: projectRoot, maxDepth: 1))
             ?? ProjectFileTree(
                 name: projectRoot.lastPathComponent,
                 path: projectRoot.path,
