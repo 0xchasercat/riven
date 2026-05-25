@@ -382,7 +382,19 @@ private struct CommandBarTextView: NSViewRepresentable {
         // the source of truth (e.g. after a submit clears `text`). Avoid
         // touching the view if it already matches — otherwise we lose
         // selection and undo each render pass.
-        if textView.string != text {
+        //
+        // Compare against the TYPED-only string, not `textView.string`.
+        // When autosuggestion ghost text is present, `textView.string`
+        // is "typed + ghost" while the binding `text` is just "typed"
+        // (textDidChange pushes only the typed portion). Comparing the
+        // full string would mismatch on every keystroke and call
+        // applyExternalText(text) — which wipes the ghost we just
+        // inserted, making the suggestion flash for one frame and
+        // vanish before the user can press → to accept. Comparing the
+        // typed portion means a genuine external change (submit clear,
+        // history recall) still overwrites, but the ghost survives a
+        // routine binding sync.
+        if context.coordinator.currentTypedString() != text {
             textView.applyExternalText(text)
             context.coordinator.recomputeContentHeight()
         }
@@ -525,6 +537,31 @@ private struct CommandBarTextView: NSViewRepresentable {
         // MARK: Ghost text
 
         /// Remove any storage ranges flagged with `ghostKey` so the
+        /// The user-typed portion of the buffer, excluding any
+        /// trailing autosuggestion ghost text. Ghost text is always a
+        /// contiguous trailing run flagged with `ghostKey`, so the
+        /// typed portion is everything before the first ghost-flagged
+        /// character. Used by `updateNSView` to decide whether the
+        /// SwiftUI binding genuinely diverged from what the user typed
+        /// (vs. just differing by the ghost suffix we inserted).
+        fileprivate func currentTypedString() -> String {
+            guard let textView, let storage = textView.textStorage else {
+                return textView?.string ?? ""
+            }
+            var ghostStart = storage.length
+            storage.enumerateAttribute(
+                Coordinator.ghostKey,
+                in: NSRange(location: 0, length: storage.length),
+                options: []
+            ) { value, range, stop in
+                if value != nil {
+                    ghostStart = range.location
+                    stop.pointee = true
+                }
+            }
+            return (storage.string as NSString).substring(to: ghostStart)
+        }
+
         /// visible text is exactly what the user has typed. Safe to
         /// call when there's no ghost text — it's a no-op.
         fileprivate func stripGhostText() {
