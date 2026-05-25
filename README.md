@@ -8,23 +8,23 @@ A native macOS workspace for power users. Terminal panes, an integrated editor, 
 
 ## What's in the box
 
-- **Terminal panes** backed by [libghostty-vt](https://github.com/ghostty-org/ghostty). Out-of-process PTY broker so UI crashes don't kill your shells.
+- **Terminal panes** powered by the full [libghostty](https://github.com/ghostty-org/ghostty) embedding — Ghostty's GPU (Metal) renderer, native input, and PTY, running in-process. You get Ghostty's terminal quality with Riven's workspace model on top.
 - **Editor panes** as first-class tab citizens (not a side column), backed by [STTextView](https://github.com/krzyzanowskim/STTextView). Dirty indicators, save-on-close prompts, file-deletion detection.
 - **Workspaces, tabs, splits** — three nested levels of structure. Each workspace has its own sidebar following the live `cd`. Splits land inside a tab; the tab lives inside a workspace.
 - **Global search** across every project and every past session. Vendored ripgrep for file matches, scrollback metadata sidecars so `grep cargo` in last Tuesday's session still finds the hit.
 - **Four bundled themes** (Amber · Carbon · Tokyo · Paper) plus user-authored JSON themes. Live theme switching from the menu, palette, or status-bar swatch.
 - **Optional zsh shell integration** with a minimal theme-aware prompt, async git status, autosuggestions, fast-syntax-highlighting, substring history search, and a frecency-based smart `cd`. Two clicks to install, two clicks to remove.
-- **Hardening**: dirty-quit prompts, file-vanished detection, project-fallback banner, broker respawn that preserves focus, sleep/wake recovery.
+- **Hardening**: dirty-quit prompts, file-vanished detection, project-fallback banner, session restore from snapshots on relaunch.
 
 ## Targets
 
 | Target | What it is |
 |---|---|
-| `RivenCore` | Pure model + persistence layer. Pane graph, session YAML, themes, scrollback store with metadata sidecars, ripgrep + unified search, IPC protocol, recent-searches ring. |
-| `Riven` | The macOS app: AppKit/SwiftUI shell, command palette, overlays, hosting controllers, BrokeredTerminalView wrapping libghostty-vt. |
-| `RivenAgent` | Helper process owning every PTY. Survives UI restarts; the app re-attaches by paneID. |
+| `RivenCore` | Pure model + persistence layer. Pane graph, session YAML, themes, scrollback store with metadata sidecars, ripgrep + unified search, recent-searches ring. |
+| `Riven` | The macOS app: AppKit/SwiftUI shell, command palette, overlays, hosting controllers, and the libghostty binding (`GhosttyApp` + `SurfacePaneView`). |
+| `GhosttyKit` | The full libghostty embedding (Ghostty's app + surface + Metal renderer + PTY), built as an xcframework via `scripts/setup-ghostty.sh`. Linked statically into `Riven`. |
 
-External dependencies: [Yams](https://github.com/jpsim/Yams) for session YAML, [STTextView](https://github.com/krzyzanowskim/STTextView) for the editor, vendored Universal2 [ripgrep](https://github.com/BurntSushi/ripgrep) for file search.
+External dependencies: [Yams](https://github.com/jpsim/Yams) for session YAML, [STTextView](https://github.com/krzyzanowskim/STTextView) for the editor, vendored Universal2 [ripgrep](https://github.com/BurntSushi/ripgrep) for file search, and [libghostty](https://github.com/ghostty-org/ghostty) (vendored, built locally) for terminals.
 
 ## Install
 
@@ -43,16 +43,16 @@ Manual install path: grab the latest `Riven-X.Y.Z.dmg` from the [Releases page](
 Requires macOS 15+, Xcode 16+ toolchain (Swift 6.2), and [zig](https://ziglang.org) 0.15.x for the one-time Ghostty build.
 
 ```sh
-# First-time setup: clone Ghostty + build libghostty-vt.
+# First-time setup: clone Ghostty + build the libghostty embedding
+# (GhosttyKit.xcframework). Pins a known-good Ghostty revision.
 ./scripts/setup-ghostty.sh
 
 # Subsequent builds:
 swift build              # debug
 swift build -c release   # release
-swift run RivenAgent     # broker on its own (rarely useful directly)
 ```
 
-The `Riven` and `RivenAgent` executables drop into `.build/<config>/`. Launch `Riven` from Finder for the real experience — when launched that way the AgentLauncher spawns RivenAgent automatically and the app picks up `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=Riven` for every PTY it opens.
+The `Riven` executable drops into `.build/<config>/`. It links GhosttyKit statically and owns its PTYs in-process; ghostty advertises `TERM=xterm-256color` to child programs. Launch `Riven` from Finder (or `swift run Riven`) for the real experience.
 
 ## Release
 
@@ -97,21 +97,17 @@ See [`Sources/RivenCore/Resources/shell-integration/README.md`](Sources/RivenCor
 ## Tests
 
 ```sh
-swift test --filter 'Theme|ScrollbackMetadata|ScrollbackStore|SearchIndex|RecentSearches|Ripgrep|CustomThemeLoader|EditorBuffer|WorkspaceStateDirtyFilename|CommandHistory|CommandPalette|PaneGraph|StringEllipsis|ProjectFileTreeCap|ProjectFileTree|ShellIntegrationInstaller|PseudoTerminal|WorkspaceController'
+swift test
 ```
 
-This curated filter excludes the broker IPC tests, which are flaky on contended CI but pass deterministically when run in isolation:
-
-```sh
-swift test --filter 'BrokerPersistence|LiveTerminalGhostty|AgentService|AgentIPC'
-```
+All suites are model/persistence/UI-logic tests that run deterministically and fast — there's no PTY or broker IPC to flake on anymore (the terminal is libghostty in-process; its rendering/input is exercised by running the app, not the unit suite).
 
 ## Non-negotiables
 
 - No AI product features.
 - No telemetry, no analytics, no phone-home.
 - No Electron, WebView terminal, or xterm.js fallback.
-- libghostty for terminals. STTextView for the editor. AppKit + SwiftUI for chrome.
+- The full libghostty embedding for terminals. STTextView for the editor. AppKit + SwiftUI for chrome.
 - Performance and UI precision over feature count.
 
 ## Status

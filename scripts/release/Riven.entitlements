@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Hardened Runtime entitlements for Riven + RivenAgent.
+  Hardened Runtime entitlements for Riven.
 
   Riven is an UNSANDBOXED terminal emulator. Deliberately no
   `com.apple.security.app-sandbox` key: sandboxing would trap the
@@ -9,9 +9,9 @@
   if the user granted it), and a terminal that can't read the
   user's files isn't a terminal.
 
-  The exceptions below LOOSEN the Hardened Runtime for Riven's own
-  two binaries (Riven, RivenAgent). They do NOT govern child
-  processes — a shell or tool spawned by RivenAgent gets its own
+  The exceptions below LOOSEN the Hardened Runtime for the Riven
+  binary. They do NOT govern child processes — a shell or tool
+  Riven spawns (in-process, via libghostty's PTY) gets its own
   code-signing context at exec. We ship the conventional terminal-
   emulator set (matches iTerm2) defensively: nothing in our own
   code strictly requires them today (we statically link libghostty

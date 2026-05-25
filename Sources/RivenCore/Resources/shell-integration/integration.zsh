@@ -4,11 +4,10 @@
 # chrome state:
 #
 #   OSC 7  — "the shell is now in directory X"
-#            Riven's BrokeredTerminalView reads this in its draw loop
-#            (snapshotFrame + reportCwdIfChanged), and the sidebar
-#            updates to scan that path. Without this, the sidebar
-#            stays parked at the workspace's initial cwd even after
-#            you `cd elsewhere`.
+#            libghostty parses this and fires its PWD action, which
+#            Riven routes to the sidebar (it re-scans that path).
+#            Without this, the sidebar stays parked at the workspace's
+#            initial cwd even after you `cd elsewhere`.
 #
 #   OSC 133 — Final Term-style prompt / command boundary marks.
 #            Each command segment is delimited by:

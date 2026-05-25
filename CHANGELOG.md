@@ -5,7 +5,27 @@ about to ship; promote it on `git tag`.
 
 ## Unreleased
 
-(work-in-progress; promote to a version header on tag.)
+### Changed — terminal engine
+
+- **Now powered by the full libghostty embedding.** Riven's terminal panes
+  render with Ghostty's own GPU (Metal) renderer and use Ghostty's native
+  input + PTY, via the `ghostty_app_*` / `ghostty_surface_*` C API
+  (`GhosttyKit`). This replaces Riven's previous hand-rolled stack
+  (libghostty-vt parser + a custom CoreText renderer + an out-of-process
+  `RivenAgent` PTY broker). You get Ghostty's terminal quality with Riven's
+  workspace model — tabs, splits, sidebar, command bar, themes — on top.
+- The command bar, themes, sidebar-follows-`cd`, bell/title, search, and
+  session restore all carry over. Terminal theming maps Riven's palette to
+  `ghostty_config`; scrollback search pulls live grid text via
+  `ghostty_surface_read_text` on demand.
+
+### Removed
+
+- The out-of-process `RivenAgent` broker. **Tradeoff:** PTYs now run
+  in-process and exit with the app — a UI crash takes your running shells
+  with it. Session *restore* (tab/split/cwd layout, via snapshots) is
+  unchanged; if anything it's snappier. The custom CoreText renderer,
+  libghostty-vt binding, and the IPC layer are gone.
 
 ## 0.1.0 — first public alpha
 

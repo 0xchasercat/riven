@@ -67,12 +67,12 @@
     <key>NSHighResolutionCapable</key>
     <true/>
 
-    <!-- Riven is opaque to AppleEvents but ships an in-bundle
-         RivenAgent broker; this key keeps the broker's spawn path
-         from being flagged by Privacy & Security as an unauthorised
-         child process. -->
+    <!-- Riven spawns shells / tools in-process (libghostty owns the
+         PTYs). This usage string keeps the spawn path from being
+         flagged by Privacy & Security as an unauthorised child
+         process. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Riven needs to spawn its broker process to manage terminal panes.</string>
+    <string>Riven spawns shell processes to run your terminal panes.</string>
 
     <!-- Standard about-box copy. -->
     <key>NSHumanReadableCopyright</key>

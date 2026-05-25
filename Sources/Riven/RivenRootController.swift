@@ -13,13 +13,12 @@ final class RivenRootController: ObservableObject {
     let preference = ThemePreferenceStore()
     let workspace: WorkspaceController
     let fileMap = PaneFileMap()
-    /// Shared scrollback store. The broker and the controller write to
-    /// the same root under `~/Library/Application Support/Riven/
-    /// scrollback`. The broker (`Sources/RivenAgent/main.swift`) seeds
-    /// metadata sidecars at PTY spawn (sessionID, cwd, command-derived
-    /// label); the controller patches them with project + workspace +
-    /// pane-label context via `enrichScrollbackMetadata(...)` whenever
-    /// it learns something the broker can't know.
+    /// Scrollback store under `~/Library/Application Support/Riven/
+    /// scrollback`. libghostty owns the live grid in-process, so the
+    /// controller pulls each surface's text on demand at search time
+    /// (`syncScrollbackFromLiveSurfaces`) and patches the metadata
+    /// sidecars with project + workspace + pane-label + cwd context via
+    /// `enrichScrollbackMetadata(...)` / `updateMetadataCwd(...)`.
     let scrollback: ScrollbackStore
     /// Z-3: installer for Riven's optional zsh shell integration.
     /// Stateless — the on-disk install status drives every read.
@@ -645,8 +644,8 @@ You can rename or delete this tab — it's a regular file at
     /// context we know. Static / nonisolated so the off-thread sync
     /// can call it without hopping back to the controller actor.
     ///
-    /// Skips the write when the sidecar doesn't exist yet (the broker
-    /// may still be spawning the PTY); subsequent calls will retry.
+    /// Skips the write when the sidecar doesn't exist yet (the surface
+    /// may still be spawning its PTY); subsequent calls will retry.
     nonisolated private static func enrichScrollbackMetadataOffThread(
         paneID: PaneID,
         projectRoot: String?,
@@ -830,8 +829,8 @@ You can rename or delete this tab — it's a regular file at
     }
 
     /// Add a new **inner tab** to the currently focused workspace. Wired
-    /// to Cmd+T. The new tab gets its own broker PaneID (own PTY), and
-    /// focus moves to it. The new shell starts in the workspace's
+    /// to Cmd+T. The new tab gets its own PaneID (own surface + PTY),
+    /// and focus moves to it. The new shell starts in the workspace's
     /// **current** pwd (where the user is right now), not the
     /// workspace's original directory — workspaces are spaces, not
     /// directory locks.
@@ -909,7 +908,7 @@ You can rename or delete this tab — it's a regular file at
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
               var workspace = pane.workspace else { return }
         // Update the focused tab's `cwd` to the workspace's live pwd
-        // before splitting — that field is what BrokeredTerminalView
+        // before splitting — that field is what the new SurfacePaneView
         // reads on PTY startup, and we want the new shell to start
         // where the user is, not where the tab was originally
         // created. Existing surfaces in the tab are unaffected:

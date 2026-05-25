@@ -4,10 +4,10 @@ DerivedData/
 .DS_Store
 .superpowers/
 
-# Vendored Ghostty source — built locally via scripts/setup-ghostty.sh
+# Vendored Ghostty source + built xcframework — produced locally via
+# scripts/setup-ghostty.sh (GhosttyKit.xcframework is ~134 MB).
 External/ghostty/
-External/ghostty-vt-install/
+External/ghostty-kit-install/
 .claude/
 dist/
 assets/AppIcon.icns
-External/ghostty-kit-install/

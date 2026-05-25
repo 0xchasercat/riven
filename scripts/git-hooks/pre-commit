@@ -22,9 +22,9 @@ if [ -z "$staged" ]; then
 fi
 
 # Reject any path under External/ (the vendored Ghostty source + the
-# built libghostty-vt install). Allows External/.keep or similar marker
-# files at the top level if we ever need them, but rejects everything
-# nested.
+# built GhosttyKit.xcframework install). Allows External/.keep or
+# similar marker files at the top level if we ever need them, but
+# rejects everything nested.
 blocked="$(printf '%s\n' "$staged" | grep -E '^External/.+' || true)"
 
 if [ -n "$blocked" ]; then
@@ -33,7 +33,7 @@ if [ -n "$blocked" ]; then
 
 $blocked
 
-Those are vendored / built artifacts (Ghostty source, libghostty-vt
+Those are vendored / built artifacts (Ghostty source, GhosttyKit
 install) and live in .gitignore. They were re-staged most likely by a
 'git add -A' from the repo root — git auto-tracks embedded repos.
 

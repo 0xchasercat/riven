@@ -164,26 +164,40 @@ final class GhosttyApp: @unchecked Sendable {
         guard let config = ghostty_config_new() else {
             fatalError("ghostty_config_new failed")
         }
-        if let theme {
-            let text = themeConfigText(theme)
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("riven-ghostty-\(UUID().uuidString).conf")
-            do {
-                try text.write(to: tmp, atomically: true, encoding: .utf8)
-                tmp.path.withCString { ghostty_config_load_file(config, $0) }
-                try? FileManager.default.removeItem(at: tmp)
-            } catch {
-                NSLog("[ghostty] theme config write failed: \(error)")
-            }
+        let text = configText(theme: theme)
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("riven-ghostty-\(UUID().uuidString).conf")
+        do {
+            try text.write(to: tmp, atomically: true, encoding: .utf8)
+            tmp.path.withCString { ghostty_config_load_file(config, $0) }
+            try? FileManager.default.removeItem(at: tmp)
+        } catch {
+            NSLog("[ghostty] config write failed: \(error)")
         }
         ghostty_config_finalize(config)
         return config
     }
 
-    private static func themeConfigText(_ theme: ThemeSpec) -> String {
+    private static func configText(theme: ThemeSpec?) -> String {
+        var lines: [String] = [
+            // Advertise the universally-present xterm-256color terminfo
+            // to child programs rather than ghostty's own xterm-ghostty
+            // (which needs its terminfo DB installed system-wide). This
+            // matches Riven's long-standing TERM choice and means we
+            // don't have to ship a terminfo tree in the .app. ghostty's
+            // renderer fidelity is unaffected — TERM only tells child
+            // programs which escape sequences are safe to emit.
+            "term = xterm-256color",
+        ]
+        if let theme { lines += themeLines(theme) }
+        lines.append("")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func themeLines(_ theme: ThemeSpec) -> [String] {
         let t = theme.terminal
         let a = t.ansi
-        let lines: [String] = [
+        return [
             "background = \(t.background.hex)",
             "foreground = \(t.foreground.hex)",
             "cursor-color = \(t.cursor.hex)",
@@ -205,9 +219,7 @@ final class GhosttyApp: @unchecked Sendable {
             "palette = 12=\(a.brightBlue.hex)",
             "palette = 13=\(a.brightMagenta.hex)",
             "palette = 14=\(a.brightCyan.hex)",
-            "",
         ]
-        return lines.joined(separator: "\n")
     }
 
     /// Reduce a `#RRGGBB`/`#RRGGBBAA` token to opaque `#RRGGBB`.

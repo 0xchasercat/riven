@@ -24,7 +24,7 @@ SOFTWARE.
 
 Bundled third-party components retain their own licenses:
 
-  * Ghostty (libghostty-vt) — MIT — https://github.com/ghostty-org/ghostty
+  * Ghostty (libghostty) — MIT — https://github.com/ghostty-org/ghostty
   * STTextView — MIT — https://github.com/krzyzanowskim/STTextView
   * Yams — MIT — https://github.com/jpsim/Yams
   * ripgrep — MIT — https://github.com/BurntSushi/ripgrep

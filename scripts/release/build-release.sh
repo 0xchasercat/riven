@@ -159,8 +159,8 @@ plutil -lint "$APP_BUNDLE/Contents/Info.plist" >/dev/null
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
 # ─── Code signing ──────────────────────────────────────────────────
-# Sign inside-out: nested binaries (RivenAgent) first, then the
-# resource bundle, then the .app bundle itself. `--force` is safe
+# Sign inside-out: the nested `rg` Mach-O first, then the Riven
+# executable, then the .app bundle itself. `--force` is safe
 # because we just assembled the bundle; nothing's been signed yet.
 sign_with_identity() {
   local identity="$1"

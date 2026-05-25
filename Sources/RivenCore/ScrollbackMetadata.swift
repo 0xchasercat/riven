@@ -11,9 +11,8 @@ import Foundation
 ///
 /// Update cadence:
 ///   - `create(_:)` writes the full record atomically on PTY spawn.
-///   - `touch(...)` is a hot path — debounce in the caller (5 s is the
-///     baseline in RivenAgent's record loop). One read + one write per
-///     debounce window, no fsync.
+///   - `touch(...)` is a hot path — debounce in the caller. One read +
+///     one write per debounce window, no fsync.
 ///   - `update*(...)` mutators are rare (cwd changes on OSC 7, label
 ///     changes on inner-tab rename). Single read+write each.
 public struct ScrollbackMetadata: Equatable, Codable, Sendable {
@@ -72,8 +71,8 @@ extension ScrollbackStore {
     }
 
     /// Read-modify-write: update `lastWriteAt` and bump `byteCount` by the
-    /// delta of the latest append. The broker calls this from its debounced
-    /// record loop; callers don't need to coalesce themselves.
+    /// delta of the latest append. Callers debounce in their own write
+    /// path; this stays a simple read-modify-write.
     ///
     /// If no sidecar exists yet (someone wrote to the log before metadata
     /// was created), this is a no-op — callers should ensure `writeMetadata`
