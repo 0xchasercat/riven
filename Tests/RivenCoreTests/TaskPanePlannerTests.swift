@@ -13,7 +13,7 @@ struct TaskPanePlannerTests {
         let planner = TaskPanePlanner(config: config, projectRoot: project, trustStore: ProjectTrustStore())
 
         #expect(planner.requiresTrustPrompt == true)
-        #expect(planner.agentRequests().isEmpty)
+        #expect(planner.taskTerminals().isEmpty)
     }
 
     @Test("creates terminal requests after trust using resolved cwd")
@@ -26,7 +26,7 @@ struct TaskPanePlannerTests {
         ])
         let planner = TaskPanePlanner(config: config, projectRoot: project, trustStore: trust)
 
-        let requests = planner.agentRequests()
+        let requests = planner.taskTerminals()
 
         #expect(requests == [
             .createTerminal(PaneID("task-api"), cwd: "/repo/backend", command: "cargo run")

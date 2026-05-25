@@ -934,10 +934,9 @@ final class CommandInputTextView: NSTextView {
             }
         }
         // Also auto-grab on first mount. The tab-area subtree is `.id`'d
-        // by tab + brokerEpoch, so a fresh CommandInputTextView lands
-        // every time the user switches tabs — making us first-responder
-        // on attach means the user can type immediately without
-        // clicking.
+        // by tab, so a fresh CommandInputTextView lands every time the
+        // user switches tabs — making us first-responder on attach means
+        // the user can type immediately without clicking.
         DispatchQueue.main.async { [weak self] in
             self?.grabFocusIfAppropriate()
         }

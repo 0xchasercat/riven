@@ -91,10 +91,10 @@ if command -v create-dmg >/dev/null 2>&1; then
 fi
 
 # ─── Ghostty dependency check ──────────────────────────────────────
-# libghostty-vt has to be built before swift can link. The Package
-# binaryTarget points at the xcframework produced by
-# scripts/setup-ghostty.sh.
-XCFRAMEWORK="External/ghostty-vt-install/lib/ghostty-vt.xcframework"
+# The full libghostty embedding (GhosttyKit) has to be built before
+# swift can link. The Package binaryTarget points at the xcframework
+# produced by scripts/setup-ghostty.sh.
+XCFRAMEWORK="External/ghostty-kit-install/lib/GhosttyKit.xcframework"
 if [ ! -d "$XCFRAMEWORK" ]; then
   echo "✗ $XCFRAMEWORK is missing." >&2
   echo "  Run: scripts/setup-ghostty.sh" >&2
@@ -107,17 +107,15 @@ echo "→ swift build -c release"
 swift build -c release 2>&1 | grep -vE '^(Building|Computing|Preparing|Resolving|Fetching)' || true
 
 # SwiftPM puts release output here. Architecture-suffixed on
-# universal builds — Apple-silicon-only for now since GhosttyVt
+# universal builds — Apple-silicon-only for now since GhosttyKit
 # is built per-arch.
 ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
 BUILD_DIR="$REPO_ROOT/.build/$ARCH-apple-macosx/release"
 
-for bin in "$BUILD_DIR/Riven" "$BUILD_DIR/RivenAgent"; do
-  if [ ! -x "$bin" ]; then
-    echo "✗ Missing release binary: $bin" >&2
-    exit 1
-  fi
-done
+if [ ! -x "$BUILD_DIR/Riven" ]; then
+  echo "✗ Missing release binary: $BUILD_DIR/Riven" >&2
+  exit 1
+fi
 
 # ─── Assemble .app bundle ──────────────────────────────────────────
 echo "→ Assembling $APP_BUNDLE"
@@ -126,7 +124,6 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/Riven"      "$APP_BUNDLE/Contents/MacOS/Riven"
-cp "$BUILD_DIR/RivenAgent" "$APP_BUNDLE/Contents/MacOS/RivenAgent"
 
 # Drop the .icns into Contents/Resources/. Info.plist already
 # references `AppIcon` (without extension) via CFBundleIconFile, so
@@ -138,10 +135,11 @@ if [ -f "assets/AppIcon.icns" ]; then
 fi
 
 # SwiftPM emits the resource bundle as Riven_RivenCore.bundle —
-# carries the vendored rg + shell-integration tree. AgentLauncher
-# + ShellIntegrationInstaller resolve it via `Bundle.module`,
-# which Swift looks up via the executable's `Bundle.main.bundleURL`.
-# Drop it next to the executable so the lookup works.
+# carries the vendored rg + shell-integration tree.
+# ShellIntegrationInstaller + RipgrepFileSearch resolve it via
+# `Bundle.module`, which Swift looks up via the executable's
+# `Bundle.main.bundleURL`. Drop it next to the executable so the
+# lookup works.
 RESOURCE_BUNDLE="$BUILD_DIR/Riven_RivenCore.bundle"
 if [ ! -d "$RESOURCE_BUNDLE" ]; then
   echo "✗ Missing resource bundle: $RESOURCE_BUNDLE" >&2
@@ -203,13 +201,11 @@ sign_with_identity() {
 
   # The resource bundle WRAPPER itself isn't signed (it has no
   # Info.plist, so codesign rejects it as an unrecognized bundle);
-  # the outer .app seal covers it. Only the executables get the
-  # Hardened-Runtime entitlement exceptions: RivenAgent because
-  # it's the process that fork/exec's shells (responsible parent
-  # for everything the user runs), Riven because it hosts the UI +
-  # statically-linked libghostty.
-  codesign --force --sign "$identity" $hardened_flag $entitlements_flag $timestamp_flag \
-    "$APP_BUNDLE/Contents/MacOS/RivenAgent"
+  # the outer .app seal covers it. Only the executable gets the
+  # Hardened-Runtime entitlement exceptions: Riven hosts the UI,
+  # statically links libghostty, and fork/exec's the user's shells
+  # in-process (it's the responsible parent for everything the user
+  # runs now that there's no separate broker).
   codesign --force --sign "$identity" $hardened_flag $entitlements_flag $timestamp_flag \
     "$APP_BUNDLE/Contents/MacOS/Riven"
   codesign --force --sign "$identity" $hardened_flag $timestamp_flag \

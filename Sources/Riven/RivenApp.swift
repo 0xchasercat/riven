@@ -8,28 +8,12 @@ import SwiftUI
 final class RivenApplication: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var rootController: RivenRootController?
-    private var agentLauncher: AgentLauncher?
     private var titleSubscription: AnyCancellable?
     /// Local NSEvent monitor for the global Tab-snap behavior. Tab from
     /// anywhere outside a text-input surface routes focus to the
     /// command bar. Stored on the delegate so the monitor lives as
     /// long as the app does. Removed in `applicationWillTerminate`.
     private var tabFocusMonitor: Any?
-    /// H-11: NSWorkspace observer for `didWakeNotification`. On wake we
-    /// nudge the broker connection with a `ping` (proactive failure
-    /// detection — without this we'd wait for the next watchdog tick
-    /// or the user typing into a stale terminal) and post a system-
-    /// wide redraw so every `BrokeredTerminalView` blits its current
-    /// state to screen rather than waiting for an idle redraw pass.
-    private var wakeObserver: NSObjectProtocol?
-    /// Observer for `NSWindow.didBecomeKeyNotification`. When the
-    /// user comes back to Riven from another app, the focused-
-    /// responder gets reset by AppKit to whatever it claimed before.
-    /// If a TUI was running (vim, nano, claude-code, …) that path
-    /// usually lands focus back in the command bar — keystrokes
-    /// type into the bar instead of reaching the TUI. We snap
-    /// first-responder back to the focused terminal on the way in.
-    private var keyWindowObserver: NSObjectProtocol?
 
     static func main() {
         let app = NSApplication.shared
@@ -42,30 +26,13 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
 
+        // Initialize the process-wide libghostty app before any surface
+        // is built. Terminal panes spawn their PTY in-process via
+        // `GhosttyApp.shared` — there is no out-of-process broker.
+        _ = GhosttyApp.shared
+
         let controller = RivenRootController()
         self.rootController = controller
-
-        let launcher = AgentLauncher()
-        // Wire the launcher's respawn callback to the controller so
-        // terminal panes can rebuild against the fresh broker when the
-        // watchdog brings one back up.
-        launcher.onClientReplaced = { [weak controller] client in
-            controller?.attachAgentClient(client)
-        }
-        self.agentLauncher = launcher
-
-        // Spin up the broker and hand the connected client to the
-        // controller. Until this finishes, terminal panes render a
-        // "connecting to broker" placeholder.
-        Task { [weak controller] in
-            do {
-                try await launcher.start()
-                let client = try await launcher.client()
-                controller?.attachAgentClient(client)
-            } catch {
-                NSLog("RivenAgent launch failed: \(error)")
-            }
-        }
 
         let hosting = NSHostingController(rootView: RivenRootView().environmentObject(controller))
         let window = NSWindow(contentViewController: hosting)
@@ -79,84 +46,19 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
 
-        // Tab from anywhere outside a text-input view routes focus to
-        // the command bar. The command bar is the default writing
-        // surface in Riven — clicks already bounce there (BrokeredTerm-
-        // inalView.mouseDown), and the user expects Tab to behave the
-        // same way. Inside the command bar's own NSTextView, Tab still
-        // inserts `\t` (useful for shell heredocs); inside the editor
-        // pane's STTextView it indents (useful for code). Anywhere
-        // else (workspace path field, sidebar, tab bar, terminal grid
-        // chrome), Tab snaps to the bar.
+        // Tab from anywhere outside a text-input or terminal surface
+        // routes focus to the command bar — Riven's default writing
+        // surface. Inside the command bar's NSTextView, Tab inserts
+        // "\t" (shell heredocs); inside the editor it indents; inside a
+        // focused terminal surface it reaches the PTY (shell completion).
+        //
+        // Control keys (Ctrl+C/D/Z and friends) are NOT intercepted
+        // anymore: the focused ghostty surface owns its keyboard input
+        // and handles them natively. To interrupt a running command,
+        // focus the terminal (click it) and press Ctrl+C as usual.
         tabFocusMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let responder = NSApp.keyWindow?.firstResponder
-
-            // Ctrl+C / Ctrl+D / Ctrl+Z — terminal control characters
-            // that the focused PTY needs to see directly. AppKit's
-            // text-view input system doesn't map these to any
-            // standard `doCommand:` selector, so without this they'd
-            // just get swallowed — meaning Ctrl+C couldn't interrupt
-            // a running shell command. Route them to the focused
-            // terminal's PTY regardless of which view holds the
-            // first-responder; the command bar / sidebar / editor
-            // never need Ctrl+C themselves (Cmd+C is the macOS copy
-            // binding via the Edit menu).
-            //
-            // The editor pane is one explicit exception: STTextView
-            // honors Ctrl+anything emacs-style bindings (Ctrl+A go to
-            // line start, Ctrl+E end, Ctrl+K kill-line, etc.) so if
-            // the user is actively editing a file we let those
-            // through unmodified.
-            if mods == .control, !(responder is EditorTextView) {
-                // C/D/Z: signals that always need to reach the
-                // focused PTY regardless of which view holds the
-                // first-responder — Ctrl+C from the command bar
-                // should still interrupt a running command.
-                let signalByte: UInt8?
-                switch event.charactersIgnoringModifiers?.lowercased() {
-                case "c": signalByte = 0x03
-                case "d": signalByte = 0x04
-                case "z": signalByte = 0x1A
-                default:  signalByte = nil
-                }
-                if let signalByte {
-                    NotificationCenter.default.post(
-                        name: .rivenSendCtrlByte,
-                        object: NSNumber(value: signalByte)
-                    )
-                    return nil
-                }
-                // Every OTHER Ctrl+letter combo — also route to the
-                // focused PTY, but only when the focused tab's
-                // terminal is currently on the alt screen (i.e. a
-                // TUI is running). Without this carve-out, the user
-                // returning to a Riven window after focusing another
-                // app lands with first-responder on the command bar,
-                // so Ctrl+X / Ctrl+O / Ctrl+W / Ctrl+R inside nano
-                // hit AppKit's editing pipeline (cut / nothing /
-                // nothing / nothing) instead of reaching the PTY.
-                //
-                // On the primary screen (no TUI), we deliberately
-                // let these fall through so the command bar keeps
-                // its standard text-editing affordances.
-                if let controller = self.rootController,
-                   controller.focusedTerminalIsInAltScreen,
-                   let chars = event.charactersIgnoringModifiers,
-                   chars.count == 1,
-                   let scalar = chars.unicodeScalars.first,
-                   scalar.isASCII {
-                    let lowered = scalar.value | 0x20
-                    if lowered >= 0x61 && lowered <= 0x7A {
-                        let ctrlByte = UInt8(lowered & 0x1F)
-                        NotificationCenter.default.post(
-                            name: .rivenSendCtrlByte,
-                            object: NSNumber(value: ctrlByte)
-                        )
-                        return nil
-                    }
-                }
-            }
 
             // Tab keyCode is 48 on every modern Mac keyboard layout.
             // Only intercept bare Tab — Shift+Tab keeps native
@@ -172,11 +74,8 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 // Editor pane — Tab indents in the buffer.
                 return event
             }
-            // Fullscreen TUIs (vim, nano, htop, claude-code, …) ride
-            // the alt screen and own keyboard input — Tab is real
-            // input there, not a focus-traversal hint. Skip the snap
-            // so the TUI gets its tab.
-            if let term = responder as? BrokeredTerminalView, term.isInAltScreen {
+            if responder is SurfacePaneView {
+                // Focused terminal — Tab is real PTY input (completion).
                 return event
             }
             // Anywhere else: snap to the command bar and consume the
@@ -210,40 +109,6 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
                 }
             }
 
-        // H-11: wake-from-sleep recovery. During a long sleep the
-        // broker's PTY children remain alive but the SwiftUI view tree
-        // may still hold stale renderer state, and (rarely) the Unix
-        // domain socket can hand us a half-broken connection that
-        // surfaces only on the next IPC call. Ping the broker
-        // proactively + tell every terminal view to redraw.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated {
-                NotificationCenter.default.post(name: .rivenSystemDidWake, object: nil)
-            }
-            Task { [weak self] in
-                await self?.handleSystemWake()
-            }
-        }
-
-        // Restore terminal focus when the user comes back from
-        // another app. Without this, AppKit re-installs whoever
-        // claimed first-responder before the window lost key,
-        // which is usually the command bar — so a Cmd+Tab to
-        // Slack and back leaves nano typing into the bar.
-        keyWindowObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.restoreTerminalFocusIfAltScreen()
-            }
-        }
-
         // One-shot Full Disk Access onboarding. A terminal genuinely
         // needs broad filesystem read access; without FDA the user
         // gets a per-folder TCC prompt on every cd into a protected
@@ -254,40 +119,6 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async {
             FullDiskAccess.promptIfNeeded()
         }
-    }
-
-    /// On window-becomes-key, if the focused inner tab's terminal
-    /// is currently on the alt screen, broadcast the paneID and let
-    /// the matching `BrokeredTerminalView` grab first-responder.
-    /// We can't reach the view from app-delegate code, so we hop
-    /// through a notification — the view subscribes during its
-    /// init and ignores anything that doesn't carry its own paneID.
-    private func restoreTerminalFocusIfAltScreen() {
-        guard let controller = rootController,
-              controller.focusedTerminalIsInAltScreen,
-              let pane = controller.state.paneGraph.pane(controller.state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace,
-              let paneID = workspace.focusedTab.terminalPaneID else {
-            return
-        }
-        NotificationCenter.default.post(
-            name: .rivenRestoreTerminalFocus,
-            object: paneID
-        )
-    }
-
-    /// Ping the broker to catch a half-dead connection early. A failed
-    /// ping doesn't itself trigger a respawn — the AgentLauncher
-    /// watchdog already runs at 250 ms and will catch a dead process
-    /// inside one cycle — but pinging tickles the connection so the
-    /// watchdog notices any wedge faster than waiting for the next
-    /// user input to surface it. Ignored if the launcher hasn't
-    /// finished its initial connect yet (still in `connecting…`
-    /// placeholder state).
-    private func handleSystemWake() async {
-        guard let launcher = agentLauncher else { return }
-        guard let client = try? await launcher.client() else { return }
-        try? await client.ping()
     }
 
     /// Build the window title from the focused workspace. Falls back to
@@ -337,20 +168,13 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
             NSEvent.removeMonitor(tabFocusMonitor)
             self.tabFocusMonitor = nil
         }
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
-            self.wakeObserver = nil
-        }
-        if let keyWindowObserver {
-            NotificationCenter.default.removeObserver(keyWindowObserver)
-            self.keyWindowObserver = nil
-        }
+        // Persist the workspace snapshot on the way out so relaunch can
+        // restore the tab/split/cwd layout (the in-process PTYs die with
+        // the app — only the layout is restored, not live processes).
         let workspace = rootController?.workspace
-        let launcher = agentLauncher
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
             if let workspace { try? await workspace.persistSnapshot() }
-            await launcher?.shutdown()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + .seconds(2))
@@ -673,12 +497,6 @@ extension Notification.Name {
     /// Posted by Ctrl+Tab when the user wants to cycle focus to the
     /// next surface within the currently-focused tab.
     static let rivenCycleSurfaceFocus = Notification.Name("RivenCycleSurfaceFocus")
-    /// Posted by the global key monitor when the user presses one of
-    /// the terminal control combinations (Ctrl+C / Ctrl+D / Ctrl+Z).
-    /// The notification's `object` is the raw control byte (UInt8 in
-    /// an NSNumber). RootView routes to
-    /// `controller.sendByteToFocusedTerminal`.
-    static let rivenSendCtrlByte = Notification.Name("RivenSendCtrlByte")
     /// Posted by the controller when closing a tab/surface with a
     /// dirty editor and the user picks "Save" in the prompt. Object
     /// is the SurfaceID. EditorTabContent observes this; the matching
@@ -704,34 +522,6 @@ extension Notification.Name {
     /// previously-vanished file. Object is the SurfaceID. The
     /// controller drops the surface from `vanishedFileSurfaces`.
     static let rivenEditorFileRestored = Notification.Name("RivenEditorFileRestored")
-    /// H-5: posted after `RivenRootController.attachAgentClient(_:)`
-    /// bumps `brokerEpoch` due to a watchdog respawn. The controller
-    /// itself observes this and re-applies focus to whichever pane /
-    /// surface was focused before the rebuild — the cached host
-    /// teardown that the epoch bump triggers can otherwise leave
-    /// first-responder somewhere SwiftUI picked arbitrarily.
-    static let rivenBrokerRespawned = Notification.Name("RivenBrokerRespawned")
-    /// H-11: posted by the RivenApp's NSWorkspace.didWakeNotification
-    /// observer. BrokeredTerminalView listens and forces a synchronous
-    /// redraw via `displayIfNeeded()` so the terminal grid blits its
-    /// current state to screen rather than waiting for the next idle
-    /// AppKit display pass — long sleeps can otherwise leave the
-    /// snapshot stale until the user moves the mouse over the pane.
-    static let rivenSystemDidWake = Notification.Name("RivenSystemDidWake")
-    /// Posted by `BrokeredTerminalView` when its underlying terminal
-    /// transitions in or out of the alt screen (DECSET 1049 / 1047
-    /// / 47). Object is an `AltScreenChange` carrying the paneID +
-    /// new state. The global Tab-snap monitor + the focused-pane
-    /// tracker in `RivenRootController` both listen so Riven steps
-    /// out of the way while a TUI is active.
-    static let rivenAltScreenChanged = Notification.Name("RivenAltScreenChanged")
-    /// Posted by the app delegate on `NSWindow.didBecomeKeyNotification`
-    /// when the focused tab's terminal is currently on the alt screen.
-    /// Object is the PaneID. The matching `BrokeredTerminalView`
-    /// (the one whose own paneID equals the object) grabs first-
-    /// responder so keystrokes flow back into the TUI without the
-    /// user having to click into the pane.
-    static let rivenRestoreTerminalFocus = Notification.Name("RivenRestoreTerminalFocus")
     /// Posted by the command bar on every textDidChange to ask the
     /// controller for an autosuggestion. Object is a
     /// `CommandSuggestRequest`; the observer fills `response.text`
@@ -739,6 +529,11 @@ extension Notification.Name {
     static let rivenCommandSuggestRequest = Notification.Name("RivenCommandSuggestRequest")
     /// A terminal pane rang the bell (BEL / 0x07). Object is the PaneID.
     static let rivenBell = Notification.Name("RivenBell")
+    /// A terminal pane's shell exited / surface asked to close. Object
+    /// is the PaneID. The controller closes the matching surface so a
+    /// `exit`-ed shell tears its pane down (libghostty owns the PTY now,
+    /// so this replaces the old broker child-exit path).
+    static let rivenTerminalPaneExited = Notification.Name("RivenTerminalPaneExited")
     /// A terminal pane's OSC 0/2 title changed. Object is a
     /// `TerminalTitleChange` (paneID + title, nil = cleared).
     static let rivenTerminalTitleChanged = Notification.Name("RivenTerminalTitleChanged")
@@ -763,15 +558,6 @@ extension Notification.Name {
     /// item (⌘?). RootView listens and toggles the cheatsheet
     /// overlay open.
     static let rivenShowShortcutsCheatsheet = Notification.Name("RivenShowShortcutsCheatsheet")
-}
-
-/// Payload for `.rivenAltScreenChanged`. Names which pane flipped
-/// and the new state. The controller mirrors this into a per-pane
-/// set so the workspace chrome can dim the command bar when the
-/// focused terminal is inside a fullscreen TUI.
-struct AltScreenChange: Equatable, Sendable {
-    let paneID: PaneID
-    let isInAltScreen: Bool
 }
 
 /// Payload for `.rivenTerminalTitleChanged`. `title` nil means the

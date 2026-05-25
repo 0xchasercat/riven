@@ -106,9 +106,6 @@ struct RivenRootView: View {
                 controller.closeSurface(tabID: focus.tabID, surfaceID: focus.surfaceID)
             },
             onCycleSurfaceFocus: { controller.cycleFocusedTabSurface() },
-            onSendCtrlByte: { byte in
-                controller.sendByteToFocusedTerminal(byte)
-            },
             onEditorDirtyChanged: { change in
                 controller.setSurfaceDirty(change.surfaceID, dirty: change.isDirty)
             },
@@ -117,9 +114,6 @@ struct RivenRootView: View {
             },
             onEditorFileRestored: { surfaceID in
                 controller.clearSurfaceVanished(surfaceID)
-            },
-            onAltScreenChanged: { change in
-                controller.setAltScreen(paneID: change.paneID, isInAltScreen: change.isInAltScreen)
             },
             onCommandSubmitted: { text in
                 controller.recordCommandSubmission(text)
@@ -250,8 +244,6 @@ struct RivenRootView: View {
                 paneGraph: controller.state.paneGraph,
                 projectRoot: controller.state.projectRoot,
                 fileMap: controller.fileMap,
-                agentClient: controller.agentClient,
-                brokerEpoch: controller.brokerEpoch,
                 submitMode: controller.submitsOnEnter ? .enterSubmits : .enterIsNewline,
                 dirtySurfaces: controller.dirtyEditorSurfaces,
                 vanishedSurfaces: controller.vanishedFileSurfaces,
@@ -337,10 +329,6 @@ struct RivenRootView: View {
         HStack(spacing: RivenSpacing.s) {
             workspacePathField
             Spacer()
-            if controller.agentClient == nil {
-                Text("connecting to broker…")
-                    .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-            }
             if controller.state.restoredFromSnapshot {
                 Text("session restored")
                     .foregroundStyle(Color(hex: theme.chrome.activeBorder.hex))
@@ -772,11 +760,9 @@ private struct NotificationWiring: ViewModifier {
     let onFocusSurface: (SurfaceFocus) -> Void
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
-    let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
     let onEditorFileVanished: (SurfaceID) -> Void
     let onEditorFileRestored: (SurfaceID) -> Void
-    let onAltScreenChanged: (AltScreenChange) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -787,11 +773,9 @@ private struct NotificationWiring: ViewModifier {
                 onFocusSurface: onFocusSurface,
                 onCloseSurface: onCloseSurface,
                 onCycleSurfaceFocus: onCycleSurfaceFocus,
-                onSendCtrlByte: onSendCtrlByte,
                 onEditorDirtyChanged: onEditorDirtyChanged,
                 onEditorFileVanished: onEditorFileVanished,
                 onEditorFileRestored: onEditorFileRestored,
-                onAltScreenChanged: onAltScreenChanged,
                 onCommandSubmitted: onCommandSubmitted,
                 onCommandHistoryRequest: onCommandHistoryRequest
             ))
@@ -827,11 +811,9 @@ private struct SurfaceWiring: ViewModifier {
     let onFocusSurface: (SurfaceFocus) -> Void
     let onCloseSurface: (SurfaceFocus) -> Void
     let onCycleSurfaceFocus: () -> Void
-    let onSendCtrlByte: (UInt8) -> Void
     let onEditorDirtyChanged: (EditorDirtyChange) -> Void
     let onEditorFileVanished: (SurfaceID) -> Void
     let onEditorFileRestored: (SurfaceID) -> Void
-    let onAltScreenChanged: (AltScreenChange) -> Void
     let onCommandSubmitted: (String) -> Void
     let onCommandHistoryRequest: (CommandHistoryRequest) -> Void
 
@@ -849,9 +831,6 @@ private struct SurfaceWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .rivenCycleSurfaceFocus)) { _ in
                 onCycleSurfaceFocus()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .rivenSendCtrlByte)) { note in
-                if let n = note.object as? NSNumber { onSendCtrlByte(n.uint8Value) }
-            }
             .onReceive(NotificationCenter.default.publisher(for: .rivenEditorDirtyChanged)) { note in
                 if let change = note.object as? EditorDirtyChange { onEditorDirtyChanged(change) }
             }
@@ -861,15 +840,14 @@ private struct SurfaceWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .rivenEditorFileRestored)) { note in
                 if let id = note.object as? SurfaceID { onEditorFileRestored(id) }
             }
-            // NOTE: deliberately NOT subscribing to `.rivenAltScreenChanged`
-            // or `.rivenCommandHistoryRequest` here. Both are already
-            // handled synchronously by `NotificationCenter.addObserver`
-            // tokens in `RivenRootController.init` (see
-            // `altScreenObserver`, `historyObserver`). Adding `.onReceive`
-            // duplicates was a double-handling bug — the controller
-            // mutated state twice per notification, and the SwiftUI
-            // observer fired a render-tick later than the synchronous
-            // one (so command-bar history reads always saw a nil
+            // NOTE: deliberately NOT subscribing to
+            // `.rivenCommandHistoryRequest` here. It's already handled
+            // synchronously by a `NotificationCenter.addObserver` token
+            // in `RivenRootController.init` (see `historyObserver`).
+            // Adding `.onReceive` duplicates was a double-handling bug —
+            // the controller mutated state twice per notification, and
+            // the SwiftUI observer fired a render-tick later than the
+            // synchronous one (so command-bar history reads always saw a nil
             // response box in the first race).
             .onReceive(NotificationCenter.default.publisher(for: .rivenCommandSubmitted)) { note in
                 if let text = note.object as? String { onCommandSubmitted(text) }

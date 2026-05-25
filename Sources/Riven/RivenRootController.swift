@@ -30,13 +30,6 @@ final class RivenRootController: ObservableObject {
 
     @Published private(set) var state: WorkspaceState
     @Published var openFilePaths: [String] = []
-    @Published private(set) var agentClient: AgentClient?
-    /// Bumped each time `agentClient` is replaced — initial connect counts
-    /// as epoch 1, every subsequent watchdog respawn bumps to 2, 3, …
-    /// Views that hold long-lived broker sessions stamp this into their
-    /// SwiftUI `.id(...)` so they tear down + rebuild against the fresh
-    /// client when the broker is respawned.
-    @Published private(set) var brokerEpoch: Int = 0
     /// Mirrors `preference.submitsOnEnter` so SwiftUI views see the change
     /// the moment the user toggles via the palette. `false` (default) =
     /// Enter inserts a newline, Cmd+Enter submits — Slack/Claude pattern.
@@ -57,14 +50,6 @@ final class RivenRootController: ObservableObject {
     ///   * `InnerTabStrip` / `InnerTabChip` append "(missing)" to the
     ///     displayName.
     @Published private(set) var vanishedFileSurfaces: Set<SurfaceID> = []
-    /// PaneIDs whose underlying terminal is currently on the alt
-    /// screen (vim, nano, less, htop, claude-code, …). Posted by
-    /// every `BrokeredTerminalView.draw` and mirrored here so the
-    /// global Ctrl-byte monitor in `RivenApp` can route the entire
-    /// Ctrl+letter surface to the PTY (not just C/D/Z) whenever a
-    /// TUI owns the focused tab — without having to query the
-    /// libghostty mode-state from app-delegate code.
-    @Published private(set) var altScreenPaneIDs: Set<PaneID> = []
     /// Window-global command history. Each command bar submit
     /// appends here, and the up/down arrows in any command bar walk
     /// through the entries. Scoped to the controller (one history
@@ -202,32 +187,6 @@ final class RivenRootController: ObservableObject {
             }
         }
 
-        // Alt-screen state observer — same async-vs-sync problem the
-        // history observer above solves. The global key monitor in
-        // RivenApp asks `focusedTerminalIsInAltScreen` on every
-        // Ctrl+letter keystroke; that relies on
-        // `altScreenPaneIDs` being current. SwiftUI's .onReceive
-        // wiring runs on the next render tick, so a user who hits
-        // Ctrl+X right after nano boots can miss the routing
-        // window. Direct NotificationCenter observer keeps the set
-        // up-to-date synchronously with the BrokeredTerminalView's
-        // draw cycle.
-        altScreenObserver = NotificationCenter.default.addObserver(
-            forName: .rivenAltScreenChanged,
-            object: nil,
-            queue: nil
-        ) { [weak self] note in
-            // AltScreenChange is a value type (Sendable), but we
-            // copy out the fields before hopping the actor to keep
-            // strict-concurrency happy.
-            guard let change = note.object as? AltScreenChange else { return }
-            let paneID = change.paneID
-            let isInAltScreen = change.isInAltScreen
-            MainActor.assumeIsolated {
-                self?.setAltScreen(paneID: paneID, isInAltScreen: isInAltScreen)
-            }
-        }
-
         // Synchronous observer for autosuggestion lookups. Same
         // architecture as the history request above — the bar
         // posts a request carrying a mutable response box, we
@@ -264,6 +223,17 @@ final class RivenRootController: ObservableObject {
         ) { _ in
             MainActor.assumeIsolated { NSSound.beep() }
         }
+
+        // A terminal's shell exited (libghostty close_surface →
+        // GhosttyApp). Tear the matching pane down.
+        paneExitedObserver = NotificationCenter.default.addObserver(
+            forName: .rivenTerminalPaneExited,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let paneID = note.object as? PaneID else { return }
+            MainActor.assumeIsolated { self?.closeExitedTerminal(paneID: paneID) }
+        }
     }
 
     /// Returns the most-recent submitted command starting with
@@ -280,7 +250,7 @@ final class RivenRootController: ObservableObject {
     /// nonisolated(unsafe) so the deinit (nonisolated) can remove
     /// it without crossing actor boundaries.
     private nonisolated(unsafe) var historyObserver: NSObjectProtocol?
-    private nonisolated(unsafe) var altScreenObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var paneExitedObserver: NSObjectProtocol?
     private nonisolated(unsafe) var suggestObserver: NSObjectProtocol?
     private nonisolated(unsafe) var bellObserver: NSObjectProtocol?
 
@@ -288,8 +258,8 @@ final class RivenRootController: ObservableObject {
         if let historyObserver {
             NotificationCenter.default.removeObserver(historyObserver)
         }
-        if let altScreenObserver {
-            NotificationCenter.default.removeObserver(altScreenObserver)
+        if let paneExitedObserver {
+            NotificationCenter.default.removeObserver(paneExitedObserver)
         }
         if let suggestObserver {
             NotificationCenter.default.removeObserver(suggestObserver)
@@ -471,82 +441,6 @@ later is one click).
 You can rename or delete this tab — it's a regular file at
 `~/Library/Application Support/Riven/welcome.md`. Happy hacking.
 """
-
-    /// Hand off the broker connection once `AgentLauncher` finishes its
-    /// startup handshake. Until this fires, terminal panes render a
-    /// "connecting" placeholder.
-    ///
-    /// Also called by the launcher's watchdog after a respawn — in that
-    /// case the previous `agentClient` is already closed and views need
-    /// to rebuild against the new one. We bump `brokerEpoch` so views
-    /// that key off it (`PaneGridView`, terminal tab content) tear down
-    /// their cached NSViews and ask SwiftUI for a fresh build.
-    ///
-    /// H-5: when this fires for a **respawn** (epoch goes 1 → 2 → …,
-    /// i.e. not the initial connect), we capture the focused pane +
-    /// surface BEFORE the bump and re-apply them via a deferred
-    /// `.rivenBrokerRespawned` post AFTER the SwiftUI tree has had a
-    /// runloop tick to rebuild against the fresh client. Without this,
-    /// the cached-host teardown the epoch bump triggers can leave
-    /// AppKit first-responder pointed at whichever surface SwiftUI
-    /// happened to mount first.
-    func attachAgentClient(_ client: AgentClient) {
-        // Initial connect has no prior focus to preserve; only the
-        // respawn path needs the restore dance.
-        let isRespawn = brokerEpoch > 0
-        let preservedFocus = preservedSurfaceFocus()
-        self.agentClient = client
-        self.brokerEpoch &+= 1
-        guard isRespawn else { return }
-
-        // Hop the focus restore to the next runloop tick so the
-        // SwiftUI tree has rebuilt against the new agentClient +
-        // brokerEpoch first. Re-applying focus immediately would race
-        // against the teardown of the old hosting controllers and
-        // either no-op or leave AppKit pointed at a stale view.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.restorePreservedFocus(preservedFocus)
-            NotificationCenter.default.post(name: .rivenBrokerRespawned, object: nil)
-        }
-    }
-
-    /// Snapshot of the user's pre-respawn focus position. Pair of
-    /// (workspace pane id, optional inner surface focus). Used by
-    /// `attachAgentClient` to restore exactly where the user was after
-    /// the broker respawn rebuilds the view tree.
-    private struct PreservedFocus {
-        let paneID: PaneID
-        let tabFocus: (tabID: TabID, surfaceID: SurfaceID)?
-    }
-
-    private func preservedSurfaceFocus() -> PreservedFocus {
-        let paneID = state.paneGraph.focusedPaneID
-        if let workspace = state.paneGraph.pane(paneID)?.workspace {
-            let tab = workspace.focusedTab
-            return PreservedFocus(
-                paneID: paneID,
-                tabFocus: (tab.id, tab.focusedSurfaceID)
-            )
-        }
-        return PreservedFocus(paneID: paneID, tabFocus: nil)
-    }
-
-    private func restorePreservedFocus(_ preserved: PreservedFocus) {
-        // Re-apply the pane-graph focus first. If the focused pane
-        // already matches (typical case), `focus(...)` no-ops.
-        let next = state.paneGraph.focus(preserved.paneID)
-        if next != state.paneGraph {
-            recordPaneGraph(next)
-        }
-        // If we were inside a workspace, also re-apply the inner-tab
-        // surface focus so the visible accent border + the
-        // command-bar target route to the surface the user had
-        // before the respawn.
-        if let tabFocus = preserved.tabFocus {
-            focusSurface(tabID: tabFocus.tabID, surfaceID: tabFocus.surfaceID)
-        }
-    }
 
     /// Open `url` in the focused workspace as an editor tab.
     ///
@@ -786,7 +680,30 @@ You can rename or delete this tab — it's a regular file at
         _ query: String,
         scope: SearchScope = .thisProject
     ) async throws -> [UnifiedSearchResult] {
-        try await workspace.search(query, scope: scope)
+        // libghostty owns the scrollback grid in-process, so pull each
+        // live terminal surface's current text into the on-disk store
+        // before the (file-backed) search runs over it. Bounded to
+        // ghostty's scrollback depth and refreshed at search time.
+        syncScrollbackFromLiveSurfaces()
+        return try await workspace.search(query, scope: scope)
+    }
+
+    /// Pull every live terminal surface's grid + scrollback via
+    /// `GhosttyApp.readScrollback` and overwrite its log so search /
+    /// peek see current content. Cheap to skip a pane with no live
+    /// surface (closed tab from a restored snapshot) — it just keeps
+    /// whatever was last written.
+    private func syncScrollbackFromLiveSurfaces() {
+        for pane in state.paneGraph.panes.values {
+            guard let workspace = pane.workspace else { continue }
+            for tab in workspace.tabs {
+                for surface in tab.surfaces {
+                    guard case let .terminal(paneID, _) = surface.kind,
+                          let text = GhosttyApp.shared.readScrollback(for: paneID) else { continue }
+                    try? scrollback.replace(text, to: paneID)
+                }
+            }
+        }
     }
 
     /// Add a brand-new top-level **workspace** (a new screen-level Riven
@@ -829,8 +746,7 @@ You can rename or delete this tab — it's a regular file at
     func changeFocusedShellPwd(_ raw: String) -> Bool {
         guard var pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
               var workspace = pane.workspace,
-              let paneID = workspace.focusedTab.terminalPaneID,
-              let client = agentClient else { return false }
+              let paneID = workspace.focusedTab.terminalPaneID else { return false }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         let expanded = (trimmed as NSString).expandingTildeInPath
@@ -859,10 +775,9 @@ You can rename or delete this tab — it's a regular file at
         }
 
         // (2) Send the cd so the shell tracks the new pwd. Single-
-        // quote so paths with spaces / special chars survive.
-        let payload = "cd '\(resolved)'\n"
-        let data = Data(payload.utf8)
-        Task { try? await client.writeInput(paneID: paneID, data: data) }
+        // quote so paths with spaces / special chars survive. CR (\r)
+        // is the Enter byte; the PTY line discipline maps it to NL.
+        GhosttyApp.shared.injectText("cd '\(resolved)'\r", into: paneID)
         return true
     }
 
@@ -1069,6 +984,28 @@ You can rename or delete this tab — it's a regular file at
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
+    /// A terminal's shell exited — libghostty fired `close_surface`,
+    /// which `GhosttyApp` routed to `.rivenTerminalPaneExited` carrying
+    /// the PaneID. Locate the matching terminal surface anywhere in the
+    /// pane graph (not just the focused pane) and remove it, so typing
+    /// `exit` tears the pane down like a normal terminal multiplexer.
+    func closeExitedTerminal(paneID: PaneID) {
+        for var pane in state.paneGraph.panes.values {
+            guard let workspace = pane.workspace else { continue }
+            for tab in workspace.tabs {
+                for surface in tab.surfaces {
+                    guard case let .terminal(pid, _) = surface.kind, pid == paneID else { continue }
+                    let updated = workspace.removingSurface(tabID: tab.id, surfaceID: surface.id)
+                    guard updated != workspace else { return }
+                    dirtyEditorSurfaces.remove(surface.id)
+                    pane.kind = .workspace(updated)
+                    recordPaneGraph(state.paneGraph.replacingPane(pane))
+                    return
+                }
+            }
+        }
+    }
+
     /// Append a just-submitted command to the global history.
     /// CommandBar's onSubmit posts `.rivenCommandSubmitted` with the
     /// submitted text; the wiring routes here. Dedupe + capacity
@@ -1133,32 +1070,6 @@ You can rename or delete this tab — it's a regular file at
 
     func clearSurfaceVanished(_ surfaceID: SurfaceID) {
         vanishedFileSurfaces.remove(surfaceID)
-    }
-
-    /// Mirror a `.rivenAltScreenChanged` payload into
-    /// `altScreenPaneIDs`. Called from RootView's notification
-    /// wiring so SwiftUI surfaces re-evaluate (the command bar
-    /// dim-while-TUI signal lands on this state).
-    func setAltScreen(paneID: PaneID, isInAltScreen: Bool) {
-        if isInAltScreen {
-            altScreenPaneIDs.insert(paneID)
-        } else {
-            altScreenPaneIDs.remove(paneID)
-        }
-    }
-
-    /// True when the focused inner-tab's terminal is currently on
-    /// the alt screen. The global key monitor in RivenApp uses this
-    /// to route every Ctrl+letter combo to the PTY whenever a TUI
-    /// owns the focused tab — without it, only Ctrl+C/D/Z would
-    /// reach (e.g.) nano when focus is on the command bar.
-    var focusedTerminalIsInAltScreen: Bool {
-        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
-              let workspace = pane.workspace,
-              let paneID = workspace.focusedTab.terminalPaneID else {
-            return false
-        }
-        return altScreenPaneIDs.contains(paneID)
     }
 
     /// Filter `tab.surfaces` down to the editor surfaces currently
@@ -1369,20 +1280,17 @@ You can rename or delete this tab — it's a regular file at
         sendByteToFocusedTerminal(0x0C)
     }
 
-    /// Generic byte-write helper for the global Ctrl+C / Ctrl+D /
-    /// Ctrl+Z monitor in RivenApp. Editor tabs no-op — there's no PTY
-    /// to send to. Lives here (not on the terminal view directly)
-    /// because the global key monitor doesn't know which surface is
-    /// focused; the controller's state graph does.
+    /// Inject a single control byte into the focused workspace's
+    /// focused terminal (e.g. Cmd+K → Ctrl+L clear). Editor tabs no-op
+    /// — there's no PTY. Routes through `GhosttyApp` to the registered
+    /// surface for the focused pane.
     func sendByteToFocusedTerminal(_ byte: UInt8) {
         guard
             let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
             let workspace = pane.workspace,
-            let paneID = workspace.focusedTab.terminalPaneID,
-            let client = agentClient
+            let paneID = workspace.focusedTab.terminalPaneID
         else { return }
-        let payload = Data([byte])
-        Task { try? await client.writeInput(paneID: paneID, data: payload) }
+        GhosttyApp.shared.injectText(String(UnicodeScalar(byte)), into: paneID)
     }
 
     /// Toggle the focused workspace's sidebar between collapsed and
@@ -1538,7 +1446,7 @@ You can rename or delete this tab — it's a regular file at
             selectedThemeID: themeID,
             requiresTaskTrust: false,
             pendingTaskCommands: [],
-            agentRequests: [],
+            taskTerminals: [],
             fileTree: tree,
             paneGraph: PaneGraph(root: pane),
             openFiles: [],

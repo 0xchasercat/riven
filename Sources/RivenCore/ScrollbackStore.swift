@@ -81,6 +81,22 @@ public struct ScrollbackStore: Sendable {
         }
     }
 
+    /// Overwrite the pane's log with `text` (UTF-8). Used by the
+    /// on-demand scrollback sync: libghostty owns the grid, so before a
+    /// search/peek we pull the surface's full text and replace the log
+    /// rather than append (appending the whole buffer each time would
+    /// grow it without bound). Creates the parent directory on demand;
+    /// empty text removes the file so stale content can't linger.
+    public func replace(_ text: String, to paneID: PaneID) throws {
+        let url = fileURL(for: paneID)
+        guard !text.isEmpty else {
+            try? delete(paneID)
+            return
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url, options: .atomic)
+    }
+
     /// Read the whole log file for `paneID`. Returns empty `Data` when the
     /// file does not exist (a brand-new pane).
     public func read(_ paneID: PaneID) throws -> Data {

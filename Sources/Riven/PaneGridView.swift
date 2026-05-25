@@ -17,12 +17,6 @@ struct PaneGridView: NSViewRepresentable {
     let paneGraph: PaneGraph
     let projectRoot: String
     let fileMap: PaneFileMap
-    let agentClient: AgentClient?
-    /// Bumped each time the agent client is replaced (initial connect /
-    /// watchdog respawn). Threaded through so terminal tab content can
-    /// stamp it into its `.id(...)` and SwiftUI tears down + rebuilds
-    /// the underlying `BrokeredTerminalView` against the fresh client.
-    let brokerEpoch: Int
     /// Which key submits the command bar. Sourced from
     /// `RivenRootController.submitsOnEnter`.
     let submitMode: CommandBarView.SubmitMode
@@ -48,8 +42,6 @@ struct PaneGridView: NSViewRepresentable {
         paneGraph: PaneGraph,
         projectRoot: String,
         fileMap: PaneFileMap,
-        agentClient: AgentClient?,
-        brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
         vanishedSurfaces: Set<SurfaceID> = [],
@@ -67,8 +59,6 @@ struct PaneGridView: NSViewRepresentable {
         self.paneGraph = paneGraph
         self.projectRoot = projectRoot
         self.fileMap = fileMap
-        self.agentClient = agentClient
-        self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
         self.vanishedSurfaces = vanishedSurfaces
@@ -90,8 +80,6 @@ struct PaneGridView: NSViewRepresentable {
             theme: theme,
             projectRoot: projectRoot,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -114,8 +102,6 @@ struct PaneGridView: NSViewRepresentable {
             theme: theme,
             projectRoot: projectRoot,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -127,13 +113,10 @@ struct PaneGridView: NSViewRepresentable {
     }
 
     /// Holds per-leaf `NSHostingController`s across SwiftUI updates so the
-    /// underlying terminal PTYs / editor text views aren't torn down every
-    /// time the graph mutates. Also remembers the last broker epoch we
-    /// served — when it changes (broker respawn), the entire cache is
-    /// invalidated so stale BrokeredTerminalView captures get rebuilt.
+    /// underlying terminal surfaces / editor text views aren't torn down
+    /// every time the graph mutates.
     final class Coordinator {
         var leafHosts: [PaneID: NSHostingController<AnyView>] = [:]
-        var brokerEpoch: Int = 0
     }
 }
 
@@ -182,8 +165,6 @@ final class RivenPaneContainerView: NSView {
     private struct AppliedSnapshot: Equatable {
         let graph: PaneGraph
         let projectRoot: String
-        let brokerEpoch: Int
-        let agentClientID: ObjectIdentifier?
         let themeID: String
         let submitMode: CommandBarView.SubmitMode
         let dirtySurfaces: Set<SurfaceID>
@@ -211,7 +192,7 @@ final class RivenPaneContainerView: NSView {
 
     /// Once we're attached to a window, watch for first-responder changes so
     /// that clicks inside an editor (`STTextView`) or terminal
-    /// (`BrokeredTerminalView`) update `paneGraph.focusedPaneID`. Without
+    /// (`SurfacePaneView`) update `paneGraph.focusedPaneID`. Without
     /// this, only clicks on the pane's chrome border or header would change
     /// focus — which makes it impossible to tell which pane Cmd+W targets
     /// after typing in a buffer.
@@ -255,8 +236,6 @@ final class RivenPaneContainerView: NSView {
         theme: ThemeSpec,
         projectRoot: String,
         fileMap: PaneFileMap,
-        agentClient: AgentClient?,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -285,8 +264,6 @@ final class RivenPaneContainerView: NSView {
         let snapshot = AppliedSnapshot(
             graph: graph,
             projectRoot: projectRoot,
-            brokerEpoch: brokerEpoch,
-            agentClientID: agentClient.map { ObjectIdentifier($0) },
             themeID: theme.id,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
@@ -297,15 +274,6 @@ final class RivenPaneContainerView: NSView {
         }
         lastAppliedSnapshot = snapshot
 
-        // If the broker has been respawned since the last apply, drop the
-        // cached leaf hosting controllers — they hold BrokeredTerminalView
-        // instances that captured the *previous* (now-closed) agent
-        // client and would silently fail their next subscribe.
-        if let coord = coordinator, coord.brokerEpoch != brokerEpoch {
-            coord.leafHosts.removeAll()
-            coord.brokerEpoch = brokerEpoch
-        }
-
         // Build a fresh tree. NSHostingControllers for leaves are cached on
         // the coordinator so the existing terminal/editor NSViews are reused.
         let builder = PaneTreeBuilder(
@@ -313,8 +281,6 @@ final class RivenPaneContainerView: NSView {
             graph: graph,
             projectRoot: projectRoot,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -384,8 +350,8 @@ final class RivenPaneContainerView: NSView {
             return
         }
 
-        // Structural change: workspace tab focus switched, broker
-        // respawned, theme cycled, etc. Pay the constraint cost.
+        // Structural change: workspace tab focus switched, theme
+        // cycled, etc. Pay the constraint cost.
         contentView?.removeFromSuperview()
         newContent.translatesAutoresizingMaskIntoConstraints = false
         addSubview(newContent)
@@ -497,8 +463,6 @@ private struct PaneTreeBuilder {
     let graph: PaneGraph
     let projectRoot: String
     let fileMap: PaneFileMap
-    let agentClient: AgentClient?
-    let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
     let vanishedSurfaces: Set<SurfaceID>
@@ -646,38 +610,27 @@ private struct PaneTreeBuilder {
         if let pane {
             switch pane.kind {
             case let .terminal(terminal):
-                if let agentClient {
-                    TerminalPaneView(
-                        theme: theme,
-                        paneID: pane.id,
-                        cwd: terminal.cwd,
-                        command: terminal.command,
-                        agentClient: agentClient
-                    )
-                } else {
-                    BrokerConnectingPlaceholder(theme: theme)
-                }
+                TerminalPaneView(
+                    theme: theme,
+                    paneID: pane.id,
+                    cwd: terminal.cwd,
+                    command: terminal.command
+                )
             case .editor:
                 EditorPaneView(theme: theme, paneID: pane.id, fileMap: fileMap)
             case let .workspace(workspace):
-                if let agentClient {
-                    WorkspaceGroupView(
-                        theme: theme,
-                        paneID: pane.id,
-                        workspace: workspace,
-                        fileMap: fileMap,
-                        agentClient: agentClient,
-                        brokerEpoch: brokerEpoch,
-                        submitMode: submitMode,
-                        dirtySurfaces: dirtySurfaces,
-                        vanishedSurfaces: vanishedSurfaces,
-                        scrollback: scrollback,
-                        onOpenFile: onOpenFile,
-                        onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
-                    )
-                } else {
-                    BrokerConnectingPlaceholder(theme: theme)
-                }
+                WorkspaceGroupView(
+                    theme: theme,
+                    paneID: pane.id,
+                    workspace: workspace,
+                    fileMap: fileMap,
+                    submitMode: submitMode,
+                    dirtySurfaces: dirtySurfaces,
+                    vanishedSurfaces: vanishedSurfaces,
+                    scrollback: scrollback,
+                    onOpenFile: onOpenFile,
+                    onCwdChanged: { newCwd in onCwdChanged(pane.id, newCwd) }
+                )
             }
         } else {
             // Defensive fallback: the graph referenced an unknown id. Show
@@ -688,25 +641,6 @@ private struct PaneTreeBuilder {
 
     private func leafView(for id: PaneID, pane: PaneDescriptor?) -> AnyView {
         AnyView(leafContent(for: id, pane: pane))
-    }
-}
-
-/// Placeholder shown in a terminal leaf while `AgentClient` is still
-/// connecting. Once the client lands, the leaf re-renders with a real
-/// `TerminalPaneView`.
-private struct BrokerConnectingPlaceholder: View {
-    let theme: ThemeSpec
-
-    var body: some View {
-        VStack {
-            Spacer()
-            Text("connecting to broker…")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(hex: theme.chrome.dimText.hex))
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(hex: theme.terminal.background.hex))
     }
 }
 

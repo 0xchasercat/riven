@@ -1,19 +1,44 @@
 import AppKit
 import GhosttyKit
+import RivenCore
 
-/// NSView hosting one libghostty surface. libghostty attaches its own
-/// CAMetalLayer to this view (we just need to be layer-backed) and
-/// renders into it. We forward keyboard/mouse input + size/scale, and
-/// draw when the app's RENDER action fires.
+/// NSView hosting one libghostty surface — Riven's terminal pane. The
+/// surface owns its PTY in-process and renders into a CAMetalLayer that
+/// libghostty attaches to this (layer-backed) view. We forward keyboard
+/// / mouse / size / focus, draw on RENDER actions, expose `injectText`
+/// for the command bar, and pull scrollback text on demand for search.
 ///
-/// Spike scope: a single pane running a shell. Input is a minimal-but-
-/// functional `ghostty_surface_key` path (full IME/dead-key handling
-/// is a later concern).
+/// Input is handled natively by ghostty (control keys, alt-screen,
+/// IME-ish text, mouse reporting) — there is no hand-rolled key routing
+/// here anymore.
 final class SurfacePaneView: NSView {
+    /// Stable pane identity. Drives the registry lookup (command bar +
+    /// search) and keys the title/bell/cwd notifications from action_cb.
+    let paneID: PaneID?
+    /// Working directory the shell spawns in.
+    private let cwd: String
+    /// Optional command to run instead of an interactive prompt. Sent as
+    /// `initial_input` into a normal login shell so the command inherits
+    /// the user's full environment (PATH etc.) — matching the old
+    /// `zsh -l` behavior without wrestling ghostty's command parsing.
+    private let command: String?
+    /// Extra environment for the spawned shell (minimal — ghostty owns
+    /// TERM/COLORTERM/TERM_PROGRAM + shell integration).
+    private let env: [String: String]
+
+    /// Called when ghostty reports a new working directory (OSC 7 →
+    /// PWD action). Re-bound by the SwiftUI wrapper on each update.
+    var onCwdChanged: (String) -> Void = { _ in }
+    private var lastReportedCwd: String?
+
     private nonisolated(unsafe) var surface: ghostty_surface_t?
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(paneID: PaneID?, cwd: String, command: String?, env: [String: String]) {
+        self.paneID = paneID
+        self.cwd = cwd
+        self.command = command
+        self.env = env
+        super.init(frame: .zero)
         wantsLayer = true
         // Redraw the layer on resize rather than stretch its contents.
         layerContentsRedrawPolicy = .duringViewResize
@@ -38,12 +63,35 @@ final class SurfacePaneView: NSView {
         cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
         let scale = Double(window?.backingScaleFactor ?? 2.0)
         cfg.scale_factor = scale
-        // Default shell, home dir. Spike: no command override.
-        let home = NSHomeDirectory()
-        home.withCString { cwdPtr in
-            cfg.working_directory = cwdPtr
+
+        // C-string buffers kept alive only until ghostty_surface_new
+        // returns (libghostty copies what it needs during spawn).
+        let cwdC = strdup(cwd)
+        cfg.working_directory = UnsafePointer(cwdC)
+        var initialC: UnsafeMutablePointer<CChar>?
+        if let command {
+            initialC = strdup(command + "\n")
+            cfg.initial_input = UnsafePointer(initialC)
+        }
+        var envC: [UnsafeMutablePointer<CChar>?] = []
+        var envVars: [ghostty_env_var_s] = []
+        for (k, v) in env {
+            let kc = strdup(k)
+            let vc = strdup(v)
+            envC.append(kc)
+            envC.append(vc)
+            envVars.append(ghostty_env_var_s(key: UnsafePointer(kc), value: UnsafePointer(vc)))
+        }
+        envVars.withUnsafeMutableBufferPointer { buf in
+            cfg.env_vars = buf.baseAddress
+            cfg.env_var_count = buf.count
             surface = ghostty_surface_new(GhosttyApp.shared.app, &cfg)
         }
+
+        free(cwdC)
+        if let initialC { free(initialC) }
+        for ptr in envC { free(ptr) }
+
         guard let surface else {
             NSLog("[ghostty] ghostty_surface_new failed")
             return
@@ -51,6 +99,7 @@ final class SurfacePaneView: NSView {
         ghostty_surface_set_content_scale(surface, scale, scale)
         pushSize()
         ghostty_surface_set_focus(surface, true)
+        if let paneID { GhosttyApp.shared.register(self, for: paneID) }
         window?.makeFirstResponder(self)
     }
 
@@ -58,6 +107,43 @@ final class SurfacePaneView: NSView {
     func requestDraw() {
         guard let surface else { return }
         ghostty_surface_draw(surface)
+    }
+
+    /// Re-apply a rebuilt config (theme switch) to this surface.
+    func applyConfig(_ config: ghostty_config_t) {
+        guard let surface else { return }
+        ghostty_surface_update_config(surface, config)
+    }
+
+    /// Inject text programmatically (command-bar path:
+    /// `ghostty_surface_text` sends straight to the PTY).
+    func injectText(_ text: String) {
+        guard let surface else { return }
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
+        }
+    }
+
+    /// Pull the entire scrollback + viewport as text (search / peek).
+    /// Selects the whole SCREEN (scrollback-inclusive) top-to-bottom.
+    func readFullText() -> String? {
+        guard let surface else { return nil }
+        var sel = ghostty_selection_s()
+        sel.top_left = ghostty_point_s(tag: GHOSTTY_POINT_SCREEN, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0)
+        sel.bottom_right = ghostty_point_s(tag: GHOSTTY_POINT_SCREEN, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0)
+        sel.rectangle = false
+        var out = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, sel, &out) else { return nil }
+        defer { ghostty_surface_free_text(surface, &out) }
+        guard let textPtr = out.text, out.text_len > 0 else { return nil }
+        let raw = UnsafeRawPointer(textPtr)
+        return String(decoding: UnsafeRawBufferPointer(start: raw, count: Int(out.text_len)), as: UTF8.self)
+    }
+
+    func reportCwd(_ path: String) {
+        guard path != lastReportedCwd else { return }
+        lastReportedCwd = path
+        onCwdChanged(path)
     }
 
     /// Complete a pending paste/OSC-52-read request with pasteboard
@@ -103,7 +189,7 @@ final class SurfacePaneView: NSView {
         return super.resignFirstResponder()
     }
 
-    // MARK: - Keyboard (minimal spike path)
+    // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
         sendKey(event, action: GHOSTTY_ACTION_PRESS)
@@ -135,16 +221,6 @@ final class SurfacePaneView: NSView {
         }
     }
 
-    /// Inject text programmatically (the command-bar path:
-    /// `ghostty_surface_text` sends straight to the PTY). Proves the
-    /// differentiator survives the migration.
-    func injectText(_ text: String) {
-        guard let surface else { return }
-        text.withCString { ptr in
-            ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
-        }
-    }
-
     private static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
         var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
         if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
@@ -155,7 +231,7 @@ final class SurfacePaneView: NSView {
         return ghostty_input_mods_e(mods)
     }
 
-    // MARK: - Mouse (minimal)
+    // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -192,6 +268,10 @@ final class SurfacePaneView: NSView {
     }
 
     deinit {
+        if let paneID {
+            let pid = paneID
+            DispatchQueue.main.async { GhosttyApp.shared.unregister(pid) }
+        }
         if let surface { ghostty_surface_free(surface) }
     }
 }

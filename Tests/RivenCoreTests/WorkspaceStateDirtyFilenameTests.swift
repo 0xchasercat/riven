@@ -29,7 +29,7 @@ struct WorkspaceStateDirtyFilenameTests {
             selectedThemeID: "riven",
             requiresTaskTrust: false,
             pendingTaskCommands: [],
-            agentRequests: [],
+            taskTerminals: [],
             fileTree: ProjectFileTree(name: "proj", path: "/tmp/proj", kind: .directory),
             paneGraph: PaneGraph(root: pane)
         )

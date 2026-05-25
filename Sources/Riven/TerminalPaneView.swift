@@ -2,28 +2,21 @@ import AppKit
 import RivenCore
 import SwiftUI
 
-/// SwiftUI wrapper around `BrokeredTerminalView`.
+/// SwiftUI wrapper around `SurfacePaneView` — one in-process libghostty
+/// terminal surface (PTY + Metal renderer owned by ghostty). The PTY
+/// lives inside this process now, so it dies with the UI; session
+/// *restore* is handled separately by workspace snapshots.
 ///
-/// Each instance represents one PTY-backed shell that lives inside the
-/// out-of-process `RivenAgent` broker. The view itself is just a thin
-/// surface that renders the broker's pane and forwards input back.
-/// Because the PTY lives in the broker, UI crashes and relaunches do
-/// not kill the shell — a fresh `TerminalPaneView` constructed with the
-/// same `paneID` will reattach and replay the broker's ring buffer.
-///
-/// The `agentClient` parameter is the connection to the broker; the
-/// orchestrator is expected to obtain it from `AgentLauncher` once at
-/// startup and pass it down through the pane tree.
+/// The `paneID` keys the surface in `GhosttyApp`'s registry so the
+/// command bar can inject into it and search can pull its scrollback.
 struct TerminalPaneView: NSViewRepresentable {
     let theme: ThemeSpec
     let paneID: PaneID
     let cwd: String
     let command: String?
-    let agentClient: AgentClient
-    /// Forwarded to `BrokeredTerminalView.onCwdChanged` on each render.
-    /// SwiftUI rebuilds this struct on every parent update, so we
-    /// re-bind the latest closure into the cached `NSView` inside
-    /// `updateNSView` rather than only at `makeNSView` time.
+    /// Forwarded to `SurfacePaneView.onCwdChanged`. SwiftUI rebuilds this
+    /// struct on every parent update, so we re-bind the latest closure
+    /// into the cached NSView inside `updateNSView`.
     let onCwdChanged: (String) -> Void
 
     init(
@@ -31,120 +24,43 @@ struct TerminalPaneView: NSViewRepresentable {
         paneID: PaneID = PaneID(),
         cwd: String = NSHomeDirectory(),
         command: String? = nil,
-        agentClient: AgentClient,
         onCwdChanged: @escaping (String) -> Void = { _ in }
     ) {
         self.theme = theme
         self.paneID = paneID
         self.cwd = cwd
         self.command = command
-        self.agentClient = agentClient
         self.onCwdChanged = onCwdChanged
     }
 
-    func makeNSView(context: Context) -> BrokeredTerminalView {
-        // Spawn-time env. When Riven.app is launched from Finder /
-        // LaunchServices, the inherited process environment has no
-        // TERM, no COLORTARM, no TERM_PROGRAM — so the spawned shell
-        // negotiates down to `dumb` (no colors, no cursor positioning,
-        // breaks every modern prompt + vim + less + git). These four
-        // overrides bring it back up to what every other GUI
-        // terminal advertises:
-        //   * TERM = xterm-256color — the most-supported terminfo
-        //     advertising 256-color + every standard CSI/SGR we care
-        //     about. (Ghostty ships its own `xterm-ghostty` terminfo
-        //     with extra extensions but that's not installed by
-        //     default on a stock macOS, so picking the universally-
-        //     present xterm-256color is the safe call. Users who've
-        //     installed xterm-ghostty's terminfo via `tic` can
-        //     override via .zshrc.)
-        //   * COLORTERM = truecolor — lets bat/eza/delta/etc. emit
-        //     24-bit ANSI without a probing handshake.
-        //   * TERM_PROGRAM / TERM_PROGRAM_VERSION = Riven — lets
-        //     shells / scripts detect us specifically (Starship +
-        //     Powerlevel10k both branch on this).
-        //   * LANG = en_US.UTF-8 — only set when the inherited env
-        //     doesn't already carry one, so user-chosen locales still
-        //     win.
-        var env: [String: String] = [
-            "TERM": "xterm-256color",
-            "COLORTERM": "truecolor",
-            "TERM_PROGRAM": "Riven",
-            "TERM_PROGRAM_VERSION": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-        ]
+    func makeNSView(context: Context) -> SurfacePaneView {
+        // Apply the active theme to the ghostty config before the surface
+        // spawns so it renders correct colors from the first frame.
+        GhosttyApp.shared.applyTheme(theme)
+
+        // Minimal spawn env. ghostty owns TERM / COLORTERM / TERM_PROGRAM
+        // and injects its own shell integration (which is what emits the
+        // OSC 7 / OSC 133 sequences we consume via action callbacks), so
+        // we must NOT override those — doing so would downgrade the
+        // terminal and suppress ghostty's integration. We only backfill
+        // LANG when the launch environment (Finder / LaunchServices) has
+        // none, so the shell gets a sane UTF-8 locale.
+        var env: [String: String] = [:]
         if ProcessInfo.processInfo.environment["LANG"] == nil {
             env["LANG"] = "en_US.UTF-8"
         }
 
-        let shell: BrokeredTerminalView.ShellSpec
-        if let command {
-            shell = BrokeredTerminalView.ShellSpec(
-                executable: "/bin/zsh",
-                arguments: ["-l", "-c", command],
-                cwd: cwd,
-                environment: env
-            )
-        } else {
-            shell = BrokeredTerminalView.ShellSpec(
-                executable: "/bin/zsh",
-                arguments: ["-il"],
-                cwd: cwd,
-                environment: env
-            )
-        }
-        let view = BrokeredTerminalView(
-            paneID: paneID,
-            shell: shell,
-            configuration: configuration(for: theme),
-            agentClient: agentClient,
-            onCwdChanged: onCwdChanged
-        )
-        // We deliberately do NOT auto-grab first-responder here anymore.
-        // The Riven model is: the command bar is the default writing
-        // surface, and clicks anywhere on the terminal pane bounce focus
-        // back to it. See BrokeredTerminalView.mouseDown for the bounce,
-        // and CommandBarView's `rivenFocusCommandBar` listener for the
-        // landing.
+        let view = SurfacePaneView(paneID: paneID, cwd: cwd, command: command, env: env)
+        view.onCwdChanged = onCwdChanged
         return view
     }
 
-    func updateNSView(_ nsView: BrokeredTerminalView, context: Context) {
-        // Equality-gate the configure() call. SwiftUI invokes
-        // updateNSView whenever ANY parent's @Published state
-        // changes (so basically every controller mutation —
-        // focus shift, dirty flag flip, alt-screen toggle, OSC 7
-        // cwd report). `configure()` redoes CoreText cell-metric
-        // measurement, rebuilds the per-cell attribute cache, and
-        // fires an async broker resize RPC — none of that is free.
-        // For an identical configuration (the common case during
-        // unrelated controller mutations), skipping is a meaningful
-        // win — multiplied by every visible terminal surface in
-        // every split. Configuration is value-typed + Equatable so
-        // the diff is one cheap struct compare.
-        let newConfig = configuration(for: theme)
-        if nsView.configuration != newConfig {
-            nsView.configure(newConfig)
-        }
-        // Re-bind the cwd callback so the closure captured here always
-        // reflects the latest SwiftUI environment. Without this, a stale
-        // closure from `makeNSView` would persist across orchestrator
-        // updates.
+    func updateNSView(_ nsView: SurfacePaneView, context: Context) {
+        // Theme switches rebuild the ghostty config + re-apply to every
+        // live surface; applyTheme is a no-op when the theme is unchanged.
+        GhosttyApp.shared.applyTheme(theme)
+        // Re-bind the cwd callback so the closure always reflects the
+        // latest SwiftUI environment.
         nsView.onCwdChanged = onCwdChanged
-    }
-
-    private func configuration(for theme: ThemeSpec) -> BrokeredTerminalView.Configuration {
-        BrokeredTerminalView.Configuration(
-            foreground: NSColor(hex: theme.terminal.foreground.hex),
-            background: NSColor(hex: theme.terminal.background.hex),
-            cursor: NSColor(hex: theme.terminal.cursor.hex),
-            fontSize: 13,
-            fontName: nil,
-            // Drag-to-select highlight color. `chrome.selectionBg` is
-            // the 8-digit alpha-bearing hex token added in T-1 — it
-            // automatically follows the active theme so Amber gets
-            // amber-22%, Tokyo gets violet-15%, Paper gets ink-10%
-            // on cream, etc.
-            selectionBackground: NSColor(hex: theme.chrome.selectionBg.hex)
-        )
     }
 }

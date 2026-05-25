@@ -497,7 +497,7 @@ enum CodePreview {
     static let sample = """
     import SwiftUI
     import STTextView
-    import GhosttyVt
+    import GhosttyKit
 
     struct PaneView: View {
         var body: some View {

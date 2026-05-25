@@ -29,8 +29,8 @@ import SwiftUI
 ///   tabs).
 ///
 /// `currentCwd` is read straight from the model. OSC 7 plumbing from the
-/// broker bridge up to here lands in `onCwdChanged` and the parent
-/// controller mutates `workspace.currentCwd`. The sidebar animates the
+/// in-process libghostty surface up to here lands in `onCwdChanged` and
+/// the parent controller mutates `workspace.currentCwd`. The sidebar animates the
 /// file-list refresh with `RivenMotion.pane` so `cd`-driven re-renders
 /// feel smooth rather than jarring.
 struct WorkspaceGroupView: View {
@@ -38,11 +38,6 @@ struct WorkspaceGroupView: View {
     let paneID: PaneID
     let workspace: WorkspaceGroup
     let fileMap: PaneFileMap
-    let agentClient: AgentClient
-    /// Bumped each time the agent client is replaced (initial connect /
-    /// watchdog respawn). Stamped into terminal tab `.id(...)` so the
-    /// BrokeredTerminalView is rebuilt against the fresh client.
-    let brokerEpoch: Int
     /// Which key submits the command bar. Threaded down from the root
     /// so the user's palette-toggle takes effect immediately on every
     /// live command bar.
@@ -65,8 +60,6 @@ struct WorkspaceGroupView: View {
         paneID: PaneID,
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
-        agentClient: AgentClient,
-        brokerEpoch: Int = 0,
         submitMode: CommandBarView.SubmitMode = .enterIsNewline,
         dirtySurfaces: Set<SurfaceID> = [],
         vanishedSurfaces: Set<SurfaceID> = [],
@@ -84,8 +77,6 @@ struct WorkspaceGroupView: View {
         self.paneID = paneID
         self.workspace = workspace
         self.fileMap = fileMap
-        self.agentClient = agentClient
-        self.brokerEpoch = brokerEpoch
         self.submitMode = submitMode
         self.dirtySurfaces = dirtySurfaces
         self.vanishedSurfaces = vanishedSurfaces
@@ -100,8 +91,6 @@ struct WorkspaceGroupView: View {
             paneID: paneID,
             workspace: workspace,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -120,7 +109,7 @@ struct WorkspaceGroupView: View {
 
 /// Hosts the workspace's `NSSplitView` (sidebar | tab-area). The tab-area
 /// SwiftUI root is rebuilt on focused-tab transitions so each tab gets a
-/// fresh BrokeredTerminalView / EditorPaneView pointed at its own surface
+/// fresh SurfacePaneView / EditorPaneView pointed at its own surface
 /// — but the cached `NSHostingController`s on the coordinator survive
 /// re-renders so the underlying terminal PTY / editor text view aren't
 /// torn down on every model mutation.
@@ -129,8 +118,6 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
     let paneID: PaneID
     let workspace: WorkspaceGroup
     let fileMap: PaneFileMap
-    let agentClient: AgentClient
-    let brokerEpoch: Int
     let submitMode: CommandBarView.SubmitMode
     let dirtySurfaces: Set<SurfaceID>
     let vanishedSurfaces: Set<SurfaceID>
@@ -150,8 +137,6 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             paneID: paneID,
             workspace: workspace,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -169,8 +154,6 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
             paneID: paneID,
             workspace: workspace,
             fileMap: fileMap,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -182,9 +165,9 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
 
     /// Caches the SwiftUI hosting controllers for the three subpanes
     /// (sidebar, terminal, editor) across re-renders. Without this cache,
-    /// every model mutation would tear down and rebuild the broker-backed
-    /// terminal view and the STTextView, losing scroll position, focus,
-    /// and any in-flight PTY draws.
+    /// every model mutation would tear down and rebuild the in-process
+    /// libghostty surface and the STTextView, losing scroll position,
+    /// focus, and any in-flight PTY draws.
     @MainActor
     final class Coordinator {
         var sidebarHost: NSHostingController<AnyView>?
@@ -195,7 +178,7 @@ private struct WorkspaceSplitRepresentable: NSViewRepresentable {
         var tabAreaHost: NSHostingController<AnyView>?
         /// The last paneID this coordinator served. If it changes (e.g. the
         /// pane was replaced), we throw the caches away so the new pane's
-        /// terminal isn't bound to the stale broker session.
+        /// terminal isn't bound to a stale surface.
         var lastPaneID: PaneID?
     }
 }
@@ -216,13 +199,9 @@ private final class WorkspaceContainerView: NSView {
     private var currentWorkspace: WorkspaceGroup?
     private var lastSidebarState: WorkspaceSidebarState?
     /// Rebuild the tab area when the user switches inner tabs so each
-    /// tab gets its own BrokeredTerminalView / EditorPaneView pointed at
+    /// tab gets its own SurfacePaneView / EditorPaneView pointed at
     /// its own surface. Tracked here so `apply` can detect transitions.
     private var lastFocusedTabID: TabID?
-    /// Force a tab-area rebuild when the broker is respawned so the
-    /// cached `tabAreaHost`'s SwiftUI subtree gets fresh BrokeredTerminal
-    /// instances pointed at the new agent client.
-    private var lastBrokerEpoch: Int?
     private var pendingSidebarPosition: CGFloat?
     /// Where the sidebar *wants* to be, retained across layout
     /// passes. `pendingSidebarPosition` was the previous design but
@@ -254,8 +233,6 @@ private final class WorkspaceContainerView: NSView {
         paneID: PaneID,
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
-        agentClient: AgentClient,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -273,18 +250,12 @@ private final class WorkspaceContainerView: NSView {
 
         let focusedTabChanged = lastFocusedTabID != nil
             && lastFocusedTabID != workspace.focusedTabID
-        // Broker respawn invalidates the cached host so a fresh
-        // BrokeredTerminalView is built against the new agent client.
-        let brokerEpochChanged = lastBrokerEpoch != nil
-            && lastBrokerEpoch != brokerEpoch
         let needsRebuild = outerSplit == nil
             || focusedTabChanged
-            || brokerEpochChanged
-        if focusedTabChanged || brokerEpochChanged {
+        if focusedTabChanged {
             coordinator?.tabAreaHost = nil
         }
         lastFocusedTabID = workspace.focusedTabID
-        lastBrokerEpoch = brokerEpoch
 
         layer?.backgroundColor = NSColor(hex: theme.chrome.hairline.hex).cgColor
 
@@ -310,8 +281,6 @@ private final class WorkspaceContainerView: NSView {
                 paneID: paneID,
                 workspace: workspace,
                 fileMap: fileMap,
-                agentClient: agentClient,
-                brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
@@ -327,8 +296,6 @@ private final class WorkspaceContainerView: NSView {
                 paneID: paneID,
                 workspace: workspace,
                 fileMap: fileMap,
-                agentClient: agentClient,
-                brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
@@ -348,8 +315,6 @@ private final class WorkspaceContainerView: NSView {
         paneID: PaneID,
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
-        agentClient: AgentClient,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -384,8 +349,6 @@ private final class WorkspaceContainerView: NSView {
             theme: theme,
             paneID: paneID,
             workspace: workspace,
-            agentClient: agentClient,
-            brokerEpoch: brokerEpoch,
             submitMode: submitMode,
             dirtySurfaces: dirtySurfaces,
             vanishedSurfaces: vanishedSurfaces,
@@ -521,8 +484,6 @@ private final class WorkspaceContainerView: NSView {
         paneID: PaneID,
         workspace: WorkspaceGroup,
         fileMap: PaneFileMap,
-        agentClient: AgentClient,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -538,8 +499,6 @@ private final class WorkspaceContainerView: NSView {
                 theme: theme,
                 paneID: paneID,
                 workspace: workspace,
-                agentClient: agentClient,
-                brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
@@ -586,8 +545,6 @@ private final class WorkspaceContainerView: NSView {
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
-        agentClient: AgentClient,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -600,8 +557,6 @@ private final class WorkspaceContainerView: NSView {
                 theme: theme,
                 paneID: paneID,
                 workspace: workspace,
-                agentClient: agentClient,
-                brokerEpoch: brokerEpoch,
                 submitMode: submitMode,
                 dirtySurfaces: dirtySurfaces,
                 vanishedSurfaces: vanishedSurfaces,
@@ -658,15 +613,13 @@ private final class WorkspaceContainerView: NSView {
 
     /// The right-hand column: inner tab strip + focused tab content +
     /// (for terminal tabs) command bar. The whole stack is keyed on
-    /// `(tab.id, brokerEpoch)` so swapping tabs OR getting a fresh
-    /// broker connection gives SwiftUI clean teardown/build semantics.
+    /// `tab.id` so swapping tabs gives SwiftUI clean teardown/build
+    /// semantics.
     @ViewBuilder
     private func tabAreaView(
         theme: ThemeSpec,
         paneID: PaneID,
         workspace: WorkspaceGroup,
-        agentClient: AgentClient,
-        brokerEpoch: Int,
         submitMode: CommandBarView.SubmitMode,
         dirtySurfaces: Set<SurfaceID>,
         vanishedSurfaces: Set<SurfaceID>,
@@ -688,16 +641,14 @@ private final class WorkspaceContainerView: NSView {
                 theme: theme,
                 tab: tab,
                 workspace: workspace,
-                agentClient: agentClient,
                 fileMap: fileMap,
                 vanishedSurfaces: vanishedSurfaces,
                 scrollback: scrollback,
                 onCwdChanged: onCwdChanged
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Combined id: switching tabs OR getting a new broker client
-            // both rebuild the inner subtree against fresh state.
-            .id("\(tab.id.rawValue)|epoch:\(brokerEpoch)")
+            // Switching tabs rebuilds the inner subtree against fresh state.
+            .id(tab.id.rawValue)
             // Only terminal tabs get the warp-style command bar. Editor
             // tabs reclaim that vertical space for the text view — typing
             // commands at a file doesn't make sense.
@@ -708,20 +659,12 @@ private final class WorkspaceContainerView: NSView {
                     submitMode: submitMode,
                     onSubmit: { text in
                         guard let paneID = tab.terminalPaneID else { return }
-                        // Terminate with CR (\r, 0x0d), NOT LF (\n, 0x0a).
-                        // CR is what the Enter key actually sends. A
-                        // cooked-mode shell translates CR→NL via the
-                        // PTY line discipline (ICRNL) and runs the
-                        // command either way — but a raw-mode TUI
-                        // (Claude Code, a REPL, anything reading keys
-                        // directly) sees the byte verbatim: it submits
-                        // on CR and treats LF as a newline-in-input.
-                        // Sending LF here was why typing a prompt into
-                        // Claude Code via the command bar just inserted
-                        // a newline instead of sending it.
-                        let payload = text + "\r"
-                        let data = Data(payload.utf8)
-                        Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
+                        // Inject straight into the focused terminal's PTY. CR (\r, 0x0d)
+                        // is the Enter byte — the PTY line discipline maps CR→NL for a
+                        // cooked-mode shell, while a raw-mode TUI (Claude Code, a REPL)
+                        // sees it verbatim and submits. Sending LF here would make such
+                        // a TUI insert a newline instead of submitting.
+                        GhosttyApp.shared.injectText(text + "\r", into: paneID)
                     }
                 )
             }
@@ -734,7 +677,6 @@ private final class WorkspaceContainerView: NSView {
         theme: ThemeSpec,
         tab: WorkspaceInnerTab,
         workspace: WorkspaceGroup,
-        agentClient: AgentClient,
         fileMap: PaneFileMap,
         vanishedSurfaces: Set<SurfaceID>,
         scrollback: ScrollbackStore,
@@ -748,7 +690,6 @@ private final class WorkspaceContainerView: NSView {
             theme: theme,
             tab: tab,
             workspaceCwd: workspace.currentCwd,
-            agentClient: agentClient,
             fileMap: fileMap,
             vanishedSurfaces: vanishedSurfaces,
             scrollback: scrollback,
@@ -790,7 +731,6 @@ struct TabLayoutView: View {
     /// can spawn a fresh shell in the same directory the user is
     /// actually sitting in. Defaults to `tab.cwd` for back-compat.
     let workspaceCwd: String
-    let agentClient: AgentClient
     let fileMap: PaneFileMap
     let vanishedSurfaces: Set<SurfaceID>
     let scrollback: ScrollbackStore
@@ -800,7 +740,6 @@ struct TabLayoutView: View {
         theme: ThemeSpec,
         tab: WorkspaceInnerTab,
         workspaceCwd: String? = nil,
-        agentClient: AgentClient,
         fileMap: PaneFileMap,
         vanishedSurfaces: Set<SurfaceID> = [],
         scrollback: ScrollbackStore,
@@ -809,7 +748,6 @@ struct TabLayoutView: View {
         self.theme = theme
         self.tab = tab
         self.workspaceCwd = workspaceCwd ?? tab.cwd
-        self.agentClient = agentClient
         self.fileMap = fileMap
         self.vanishedSurfaces = vanishedSurfaces
         self.scrollback = scrollback
@@ -838,7 +776,6 @@ struct TabLayoutView: View {
                         showCloseAffordance: tab.isSplit,
                         tabCwd: tab.cwd,
                         workspaceCwd: workspaceCwd,
-                        agentClient: agentClient,
                         fileMap: fileMap,
                         scrollback: scrollback,
                         isVanished: vanishedSurfaces.contains(surface.id),
@@ -910,7 +847,6 @@ private struct SurfaceLeafView: View {
     /// Workspace-level cwd, threaded for the scrollback-peek surface
     /// (the "Replay in new pane" button spawns a shell in this dir).
     let workspaceCwd: String
-    let agentClient: AgentClient
     let fileMap: PaneFileMap
     /// S-6: shared scrollback store. Used by `.scrollbackPeek`
     /// surfaces to read on-disk log bytes.
@@ -926,7 +862,7 @@ private struct SurfaceLeafView: View {
     var body: some View {
         // The focused surface is the common case (every single-surface
         // tab hits this branch). Render it without a SwiftUI tap
-        // gesture so AppKit mouseDown reaches the BrokeredTerminalView
+        // gesture so AppKit mouseDown reaches the SurfacePaneView
         // / EditorPaneView underneath uninterrupted — that's what
         // drives text-selection, click-to-focus-the-input
         // (.rivenFocusCommandBar), and the per-cell hit-testing inside
@@ -1014,7 +950,6 @@ private struct SurfaceLeafView: View {
                 paneID: paneID,
                 cwd: tabCwd,
                 command: command,
-                agentClient: agentClient,
                 onCwdChanged: onCwdChanged
             )
         case let .editor(path):
@@ -1120,7 +1055,7 @@ private struct SurfaceCloseButton: View {
 ///
 /// The existing `EditorPaneView` is keyed off `(PaneID, PaneFileMap)` —
 /// it expects the file map to carry the open URL. Inner tabs don't have
-/// their own broker `PaneID` (only terminal tabs do), so we synthesize a
+/// their own terminal `PaneID` (only terminal tabs do), so we synthesize a
 /// deterministic PaneID derived from the tab's id and seed the file map
 /// before the editor mounts. The seeding happens in `task(id:)` so a
 /// later focus-back-to-this-tab restores the binding cleanly even if the
@@ -1169,7 +1104,7 @@ private struct EditorTabContent: View {
 
     /// Stable virtual paneID — `editor-tab-<tab>-<surface>`. Survives
     /// focus changes because both the tab id and the surface id
-    /// survive. Coexists with real broker paneIDs (which are UUIDs)
+    /// survive. Coexists with real terminal paneIDs (which are UUIDs)
     /// because of the `editor-tab-` prefix.
     private var virtualPaneID: PaneID {
         PaneID("editor-tab-\(tabID.rawValue)-\(surfaceID.rawValue)")

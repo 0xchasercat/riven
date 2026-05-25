@@ -5,7 +5,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
     public var selectedThemeID: String
     public var requiresTaskTrust: Bool
     public var pendingTaskCommands: [String]
-    public var agentRequests: [AgentRequest]
+    public var taskTerminals: [TaskTerminalRequest]
     public var fileTree: ProjectFileTree
     public var paneGraph: PaneGraph
     public var openFiles: [String]
@@ -22,7 +22,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
         selectedThemeID: String,
         requiresTaskTrust: Bool,
         pendingTaskCommands: [String],
-        agentRequests: [AgentRequest],
+        taskTerminals: [TaskTerminalRequest],
         fileTree: ProjectFileTree,
         paneGraph: PaneGraph,
         openFiles: [String] = [],
@@ -33,7 +33,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
         self.selectedThemeID = selectedThemeID
         self.requiresTaskTrust = requiresTaskTrust
         self.pendingTaskCommands = pendingTaskCommands
-        self.agentRequests = agentRequests
+        self.taskTerminals = taskTerminals
         self.fileTree = fileTree
         self.paneGraph = paneGraph
         self.openFiles = openFiles
@@ -47,7 +47,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
     // that predates this field.
     private enum CodingKeys: String, CodingKey {
         case projectRoot, selectedThemeID, requiresTaskTrust
-        case pendingTaskCommands, agentRequests, fileTree
+        case pendingTaskCommands, taskTerminals, fileTree
         case paneGraph, openFiles, restoredFromSnapshot
         case projectFallbackReason
     }
@@ -58,7 +58,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
         self.selectedThemeID = try c.decode(String.self, forKey: .selectedThemeID)
         self.requiresTaskTrust = try c.decode(Bool.self, forKey: .requiresTaskTrust)
         self.pendingTaskCommands = try c.decode([String].self, forKey: .pendingTaskCommands)
-        self.agentRequests = try c.decode([AgentRequest].self, forKey: .agentRequests)
+        self.taskTerminals = try c.decode([TaskTerminalRequest].self, forKey: .taskTerminals)
         self.fileTree = try c.decode(ProjectFileTree.self, forKey: .fileTree)
         self.paneGraph = try c.decode(PaneGraph.self, forKey: .paneGraph)
         self.openFiles = try c.decodeIfPresent([String].self, forKey: .openFiles) ?? []
@@ -72,7 +72,7 @@ public struct WorkspaceState: Equatable, Codable, Sendable {
         try c.encode(selectedThemeID, forKey: .selectedThemeID)
         try c.encode(requiresTaskTrust, forKey: .requiresTaskTrust)
         try c.encode(pendingTaskCommands, forKey: .pendingTaskCommands)
-        try c.encode(agentRequests, forKey: .agentRequests)
+        try c.encode(taskTerminals, forKey: .taskTerminals)
         try c.encode(fileTree, forKey: .fileTree)
         try c.encode(paneGraph, forKey: .paneGraph)
         try c.encode(openFiles, forKey: .openFiles)
@@ -266,7 +266,7 @@ public actor WorkspaceController {
                 selectedThemeID: selectedThemeID,
                 requiresTaskTrust: false,
                 pendingTaskCommands: [],
-                agentRequests: [],
+                taskTerminals: [],
                 fileTree: scanned,
                 paneGraph: graph,
                 openFiles: currentOpenFiles,
@@ -280,7 +280,7 @@ public actor WorkspaceController {
             selectedThemeID: selectedThemeID,
             requiresTaskTrust: planner.requiresTrustPrompt,
             pendingTaskCommands: config.panes.map { "\($0.name): \($0.command)" },
-            agentRequests: planner.agentRequests(),
+            taskTerminals: planner.taskTerminals(),
             fileTree: scanned,
             paneGraph: graph,
             openFiles: currentOpenFiles,

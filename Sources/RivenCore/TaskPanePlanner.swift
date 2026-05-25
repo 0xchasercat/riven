@@ -15,7 +15,7 @@ public struct TaskPanePlanner: Sendable {
         !config.panes.isEmpty && !trustStore.isTrusted(projectRoot: projectRoot)
     }
 
-    public func agentRequests() -> [AgentRequest] {
+    public func taskTerminals() -> [TaskTerminalRequest] {
         guard !requiresTrustPrompt else { return [] }
         return config.panes.map { pane in
             .createTerminal(

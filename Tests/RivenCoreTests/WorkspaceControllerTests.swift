@@ -28,7 +28,7 @@ struct WorkspaceControllerTests {
         #expect(state.projectRoot == project.standardizedFileURL.path)
         #expect(state.requiresTaskTrust == true)
         #expect(state.pendingTaskCommands == ["api: cargo run"])
-        #expect(state.agentRequests.isEmpty)
+        #expect(state.taskTerminals.isEmpty)
         #expect(state.fileTree.children.map(\.name) == ["README.md"])
     }
 
@@ -54,7 +54,7 @@ struct WorkspaceControllerTests {
         let state = try await controller.trustCurrentProject()
 
         #expect(state.requiresTaskTrust == false)
-        #expect(state.agentRequests == [
+        #expect(state.taskTerminals == [
             .createTerminal(PaneID("task-api"), cwd: project.appendingPathComponent("backend").standardizedFileURL.path, command: "cargo run")
         ])
     }

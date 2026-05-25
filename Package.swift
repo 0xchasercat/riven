@@ -10,13 +10,6 @@ let package = Package(
     products: [
         .library(name: "RivenCore", targets: ["RivenCore"]),
         .executable(name: "Riven", targets: ["Riven"]),
-        .executable(name: "RivenAgent", targets: ["RivenAgent"]),
-        // Phase-0 spike: a throwaway link-test for the full
-        // libghostty embedding (GhosttyKit). Proves the 134 MB
-        // static lib links + the C API is callable from Swift
-        // before we invest in the full app/surface binding. Lives
-        // on the `spike/libghostty-surface` branch only.
-        .executable(name: "GhosttySpike", targets: ["GhosttySpike"]),
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.1"),
@@ -25,7 +18,7 @@ let package = Package(
     targets: [
         .target(
             name: "RivenCore",
-            dependencies: ["Yams", "GhosttyVt"],
+            dependencies: ["Yams"],
             resources: [
                 // Use `.copy` (preserves layout) rather than
                 // `.process` (flattens directories). The shell
@@ -52,6 +45,7 @@ let package = Package(
             name: "Riven",
             dependencies: [
                 "RivenCore",
+                "GhosttyKit",
                 .product(name: "STTextView", package: "STTextView")
             ],
             swiftSettings: [
@@ -60,43 +54,15 @@ let package = Package(
                 // conflict). The file is owned by the orchestrator and must
                 // not be renamed.
                 .unsafeFlags(["-parse-as-library"])
-            ]
-        ),
-        .executableTarget(
-            name: "RivenAgent",
-            dependencies: ["RivenCore"],
-            swiftSettings: [
-                // main.swift uses @main on a top-level type. Without this
-                // flag SourceKit (and some toolchain configurations) flags
-                // "@main attribute cannot be used in a module that contains
-                // top-level code" because the filename main.swift would
-                // otherwise be treated as a script.
-                .unsafeFlags(["-parse-as-library"])
-            ]
-        ),
-        .testTarget(name: "RivenCoreTests", dependencies: ["RivenCore"]),
-        .binaryTarget(
-            name: "GhosttyVt",
-            path: "External/ghostty-vt-install/lib/ghostty-vt.xcframework"
-        ),
-        // Full libghostty embedding lib (app + surface + Metal
-        // renderer). Built via `zig build -Demit-xcframework`.
-        // Separate from GhosttyVt — they share `ghostty_*` symbols,
-        // so a target links ONE or the other, never both.
-        .binaryTarget(
-            name: "GhosttyKit",
-            path: "External/ghostty-kit-install/lib/GhosttyKit.xcframework"
-        ),
-        .executableTarget(
-            name: "GhosttySpike",
-            dependencies: ["GhosttyKit"],
-            // The full static lib references the macOS frameworks
-            // Ghostty's renderer + runtime use. They must be linked
-            // for symbol resolution even for a trivial call.
+            ],
+            // The full libghostty static lib (app + surface + Metal
+            // renderer) references the macOS frameworks Ghostty's
+            // renderer + runtime use; they must be linked for symbol
+            // resolution.
             linkerSettings: [
-                // Ghostty's renderer embeds C++ (spirv-cross for
-                // shader cross-compile, imgui for the inspector), so
-                // the C++ runtime must be linked.
+                // Ghostty's renderer embeds C++ (spirv-cross for shader
+                // cross-compile, imgui for the inspector), so the C++
+                // runtime must be linked.
                 .linkedLibrary("c++"),
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),
@@ -109,6 +75,15 @@ let package = Package(
                 .linkedFramework("IOSurface"),
                 .linkedFramework("UniformTypeIdentifiers"),
             ]
+        ),
+        .testTarget(name: "RivenCoreTests", dependencies: ["RivenCore"]),
+        // Full libghostty embedding lib (app + surface + Metal renderer).
+        // Built via `zig build -Demit-xcframework`. Vendored (gitignored,
+        // ~134MB); reproduce with `RIVEN_BUILD_GHOSTTY_KIT=1
+        // scripts/setup-ghostty.sh`.
+        .binaryTarget(
+            name: "GhosttyKit",
+            path: "External/ghostty-kit-install/lib/GhosttyKit.xcframework"
         ),
     ]
 )
