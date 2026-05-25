@@ -708,7 +708,18 @@ private final class WorkspaceContainerView: NSView {
                     submitMode: submitMode,
                     onSubmit: { text in
                         guard let paneID = tab.terminalPaneID else { return }
-                        let payload = text + "\n"
+                        // Terminate with CR (\r, 0x0d), NOT LF (\n, 0x0a).
+                        // CR is what the Enter key actually sends. A
+                        // cooked-mode shell translates CR→NL via the
+                        // PTY line discipline (ICRNL) and runs the
+                        // command either way — but a raw-mode TUI
+                        // (Claude Code, a REPL, anything reading keys
+                        // directly) sees the byte verbatim: it submits
+                        // on CR and treats LF as a newline-in-input.
+                        // Sending LF here was why typing a prompt into
+                        // Claude Code via the command bar just inserted
+                        // a newline instead of sending it.
+                        let payload = text + "\r"
                         let data = Data(payload.utf8)
                         Task { try? await agentClient.writeInput(paneID: paneID, data: data) }
                     }

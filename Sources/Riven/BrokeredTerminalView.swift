@@ -356,7 +356,18 @@ public final class BrokeredTerminalView: NSView {
     public override var isFlipped: Bool { true }
     public override var acceptsFirstResponder: Bool { true }
     public override func becomeFirstResponder() -> Bool { true }
-    public override func resignFirstResponder() -> Bool { true }
+    public override func resignFirstResponder() -> Bool {
+        // Focus is leaving the terminal (user clicked the command bar
+        // / tabbed away) — release the double-click raw-input lock.
+        rawInputLock = false
+        return true
+    }
+
+    /// Set by a double-click: the user has explicitly asked for raw
+    /// terminal input, so suppress the OSC-133 auto-return-to-command-
+    /// bar that would otherwise pull focus away when a command ends.
+    /// Cleared in `resignFirstResponder` when focus leaves.
+    private var rawInputLock: Bool = false
 
     /// Riven's focus model: the command bar is the default writing
     /// surface. A plain click on the terminal (no drag past
@@ -385,6 +396,18 @@ public final class BrokeredTerminalView: NSView {
         // to the command bar from anywhere, so users who prefer
         // the typed-command flow keep their muscle memory.
         window?.makeFirstResponder(self)
+
+        // Double-click = "give me raw terminal input, like a regular
+        // Ghostty terminal." Sets a lock that stops Riven's command-
+        // bar cleverness (the OSC 133 auto-return-to-command-bar) from
+        // pulling focus back when a command finishes. Input stays on
+        // the terminal until the user explicitly clicks / tabs to the
+        // command bar (which clears the lock via resignFirstResponder).
+        // This is the universal escape hatch for any input-routing
+        // edge case — double-click in and type directly.
+        if event.clickCount >= 2 {
+            rawInputLock = true
+        }
 
         if isInAltScreen {
             super.mouseDown(with: event)
@@ -835,12 +858,14 @@ public final class BrokeredTerminalView: NSView {
         } else {
             // Command finished — back at the shell prompt. Cancel any
             // pending grab; if we DID grab focus for this command,
-            // still hold it, and aren't in an alt-screen TUI, return
-            // input to the command bar (Riven's default at a prompt).
+            // still hold it, aren't in an alt-screen TUI, AND the user
+            // hasn't double-clicked into raw-input mode, return input
+            // to the command bar (Riven's default at a prompt).
             commandFocusGrabTask?.cancel()
             if grabbedForCommand,
                window?.firstResponder === self,
-               !isInAltScreen {
+               !isInAltScreen,
+               !rawInputLock {
                 NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
             }
             grabbedForCommand = false
@@ -1105,6 +1130,19 @@ public final class BrokeredTerminalView: NSView {
            event.charactersIgnoringModifiers?.lowercased() == "c",
            selection != nil {
             copySelection()
+            return
+        }
+
+        // Cmd+Enter → force a real carriage return (0x0d) to the PTY.
+        // Some TUIs (Claude Code, other Ink apps) bind plain Enter to
+        // "insert newline" in their multi-line input and submit on a
+        // distinct gesture — but a stock terminal can't send anything
+        // OTHER than CR for Enter, so there was no way to submit. This
+        // gives an unambiguous "send Enter / submit" key: Shift+Enter
+        // (and the TUI's own newline binding) inserts a newline, and
+        // Cmd+Enter forces the submit CR through.
+        if mods == .command, event.keyCode == 36 || event.keyCode == 76 {
+            sendBytes([0x0d])
             return
         }
 
