@@ -60,6 +60,15 @@ final class SurfacePaneView: NSView {
         ghostty_surface_draw(surface)
     }
 
+    /// Complete a pending paste/OSC-52-read request with pasteboard
+    /// text. Returns true if handed off to the surface.
+    func completeClipboardRead(_ str: String, stateBits: UInt) -> Bool {
+        guard let surface else { return false }
+        let state = UnsafeMutableRawPointer(bitPattern: stateBits)
+        str.withCString { ghostty_surface_complete_clipboard_request(surface, $0, state, true) }
+        return true
+    }
+
     // MARK: - Layout
 
     override func setFrameSize(_ newSize: NSSize) {

@@ -14,11 +14,36 @@ private let ghosttyActionCb: @convention(c) (ghostty_app_t?, ghostty_target_s, g
     MainActor.assumeIsolated { GhosttyApp.handleAction(target: target, action: action) }
 }
 
-private let ghosttyReadClipboardCb: @convention(c) (UnsafeMutableRawPointer?, ghostty_clipboard_e, UnsafeMutableRawPointer?) -> Bool = { _, _, _ in false }
+// Paste (Cmd+V / OSC 52 read): hand the macOS pasteboard's text back
+// to the surface. `userdata` is the SURFACE userdata (= the
+// SurfacePaneView), per libghostty's per-surface clipboard model.
+private let ghosttyReadClipboardCb: @convention(c) (UnsafeMutableRawPointer?, ghostty_clipboard_e, UnsafeMutableRawPointer?) -> Bool = { userdata, location, state in
+    guard location == GHOSTTY_CLIPBOARD_STANDARD,
+          let userdata,
+          let str = NSPasteboard.general.string(forType: .string) else { return false }
+    let view = Unmanaged<SurfacePaneView>.fromOpaque(userdata).takeUnretainedValue()
+    // Pass the request token as an int bit-pattern so it doesn't trip
+    // the Sendable check crossing into the main actor.
+    let stateBits = UInt(bitPattern: state)
+    return MainActor.assumeIsolated { view.completeClipboardRead(str, stateBits: stateBits) }
+}
 
 private let ghosttyConfirmReadClipboardCb: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?, ghostty_clipboard_request_e) -> Void = { _, _, _, _ in }
 
-private let ghosttyWriteClipboardCb: @convention(c) (UnsafeMutableRawPointer?, ghostty_clipboard_e, UnsafePointer<ghostty_clipboard_content_s>?, Int, Bool) -> Void = { _, _, _, _, _ in }
+// Copy (Cmd+C / OSC 52 write): write the surface's clipboard content
+// to the macOS pasteboard. No surface needed — just take the text.
+private let ghosttyWriteClipboardCb: @convention(c) (UnsafeMutableRawPointer?, ghostty_clipboard_e, UnsafePointer<ghostty_clipboard_content_s>?, Int, Bool) -> Void = { _, location, content, len, _ in
+    guard location == GHOSTTY_CLIPBOARD_STANDARD, let content, len > 0 else { return }
+    for i in 0..<len {
+        guard let dataPtr = content[i].data else { continue }
+        let str = String(cString: dataPtr)
+        guard !str.isEmpty else { continue }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(str, forType: .string)
+        return
+    }
+}
 
 private let ghosttyCloseSurfaceCb: @convention(c) (UnsafeMutableRawPointer?, Bool) -> Void = { _, _ in }
 
