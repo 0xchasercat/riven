@@ -83,6 +83,17 @@ final class GhosttyApp: @unchecked Sendable {
     }
     private var registry: [PaneID: WeakSurfaceRef] = [:]
 
+    /// The pane the user DELIBERATELY double-clicked into, if any. This
+    /// is the single source of truth for "the terminal owns input." The
+    /// command bar — Riven's default writing surface — auto-grabs focus
+    /// only while this is nil; a SurfacePaneView re-grabs first-responder
+    /// on reattach only if it matches. That keeps deliberate terminal
+    /// focus surviving SwiftUI subtree detach/reattach without letting an
+    /// incidental AppKit first-responder assignment hijack the default.
+    /// Set on double-click, cleared when the command bar takes focus or
+    /// the focused pane's view is torn down (tab switch / close).
+    var explicitlyFocusedPaneID: PaneID?
+
     private init() {
         let argv = CommandLine.unsafeArgv
         ghostty_init(UInt(CommandLine.argc), argv)

@@ -962,13 +962,14 @@ final class CommandInputTextView: NSTextView {
             // is "don't change focus".
             return
         }
-        // Don't yank focus away from a terminal surface the user
-        // deliberately double-clicked into — that's their interactive
-        // session (vim/htop/claude). They hand focus back by clicking
-        // the command bar, which makes us first-responder directly.
-        // Without this guard, every SwiftUI re-render that remounts this
-        // text view would steal keyboard focus mid-session.
-        if window.firstResponder is SurfacePaneView {
+        // Don't yank focus away from a terminal the user deliberately
+        // double-clicked into — that's their interactive session
+        // (vim/htop/claude). The intent flag (not the live first
+        // responder) is the source of truth, so deliberate terminal
+        // focus survives subtree detach/reattach. They hand focus back
+        // by clicking the command bar, which makes us first-responder
+        // directly and clears the intent (see becomeFirstResponder).
+        if GhosttyApp.shared.explicitlyFocusedPaneID != nil {
             return
         }
         window.makeFirstResponder(self)
@@ -986,6 +987,10 @@ final class CommandInputTextView: NSTextView {
         needsDisplay = true
         // Tell SwiftUI the focus state changed so the bar can light up.
         if result {
+            // The command bar now owns input — clear any deliberate
+            // terminal focus so the default (us) sticks until the user
+            // double-clicks a terminal again.
+            GhosttyApp.shared.explicitlyFocusedPaneID = nil
             coordinator?.reportFocus(true)
         }
         return result

@@ -52,8 +52,16 @@ final class SurfacePaneView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil, surface == nil else { return }
-        createSurface()
+        guard window != nil else { return }
+        if surface == nil { createSurface() }
+        // Restore deliberate terminal focus after a SwiftUI subtree
+        // detach/reattach: the view kept its surface but lost
+        // first-responder when it left the window. Only the pane the
+        // user explicitly double-clicked into re-grabs — everything else
+        // leaves the command bar as the default writer.
+        if let paneID, GhosttyApp.shared.explicitlyFocusedPaneID == paneID {
+            window?.makeFirstResponder(self)
+        }
     }
 
     private func createSurface() {
@@ -280,6 +288,7 @@ final class SurfacePaneView: NSView {
         // vim / htop / claude to type directly, then a single click on
         // the command bar (or any surface outside) hands focus back.
         if event.clickCount == 2 {
+            if let paneID { GhosttyApp.shared.explicitlyFocusedPaneID = paneID }
             window?.makeFirstResponder(self)
         }
         sendMouseButton(event, state: GHOSTTY_MOUSE_PRESS)
@@ -317,7 +326,15 @@ final class SurfacePaneView: NSView {
     deinit {
         if let paneID {
             let pid = paneID
-            DispatchQueue.main.async { GhosttyApp.shared.unregister(pid) }
+            DispatchQueue.main.async {
+                GhosttyApp.shared.unregister(pid)
+                // This pane's view is gone (tab switch / close). If it
+                // held the explicit terminal focus, drop the intent so
+                // the command bar resumes being the default writer.
+                if GhosttyApp.shared.explicitlyFocusedPaneID == pid {
+                    GhosttyApp.shared.explicitlyFocusedPaneID = nil
+                }
+            }
         }
         if let surface { ghostty_surface_free(surface) }
     }
