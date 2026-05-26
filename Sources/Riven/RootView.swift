@@ -91,6 +91,7 @@ struct RivenRootView: View {
             onCloseEditor: { controller.closeFocusedEditor() },
             onToggleSidebar: { controller.toggleFocusedSidebar() },
             onClearTerminal: { controller.clearFocusedTerminal() },
+            onToggleTerminalInput: { controller.toggleTerminalInputFocus() },
             onFocusInnerTab: { controller.focusInnerTab($0) },
             onCloseInnerTab: { controller.closeInnerTab($0) },
             onRenameInnerTab: { rename in
@@ -753,6 +754,7 @@ private struct NotificationWiring: ViewModifier {
     let onCloseEditor: () -> Void
     let onToggleSidebar: () -> Void
     let onClearTerminal: () -> Void
+    let onToggleTerminalInput: () -> Void
     let onFocusInnerTab: (TabID) -> Void
     let onCloseInnerTab: (TabID) -> Void
     let onRenameInnerTab: (InnerTabRename) -> Void
@@ -790,6 +792,7 @@ private struct NotificationWiring: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .rivenCloseEditor)) { _ in onCloseEditor() }
             .onReceive(NotificationCenter.default.publisher(for: .rivenToggleSidebar)) { _ in onToggleSidebar() }
             .onReceive(NotificationCenter.default.publisher(for: .rivenClearFocusedTerminal)) { _ in onClearTerminal() }
+            .onReceive(NotificationCenter.default.publisher(for: .rivenToggleTerminalInput)) { _ in onToggleTerminalInput() }
             .onReceive(NotificationCenter.default.publisher(for: .rivenFocusInnerTab)) { note in
                 if let id = note.object as? TabID { onFocusInnerTab(id) }
             }

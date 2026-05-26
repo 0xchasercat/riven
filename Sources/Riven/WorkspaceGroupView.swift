@@ -659,12 +659,13 @@ private final class WorkspaceContainerView: NSView {
                     submitMode: submitMode,
                     onSubmit: { text in
                         guard let paneID = tab.terminalPaneID else { return }
-                        // Inject straight into the focused terminal's PTY. CR (\r, 0x0d)
-                        // is the Enter byte — the PTY line discipline maps CR→NL for a
-                        // cooked-mode shell, while a raw-mode TUI (Claude Code, a REPL)
-                        // sees it verbatim and submits. Sending LF here would make such
-                        // a TUI insert a newline instead of submitting.
-                        GhosttyApp.shared.injectText(text + "\r", into: paneID)
+                        // Insert the line, then send a real Return keypress so
+                        // the shell executes it. A bare "\r" in injected text
+                        // doesn't reliably submit (bracketed paste / zle raw
+                        // mode); a Return KEY event is encoded by ghostty for
+                        // the terminal's current mode, so it works in a plain
+                        // shell and a raw-mode TUI (Claude Code, a REPL) alike.
+                        GhosttyApp.shared.submitLine(text, into: paneID)
                     }
                 )
             }

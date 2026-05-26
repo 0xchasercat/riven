@@ -320,6 +320,18 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
         )
         clearItem.keyEquivalentModifierMask = [.command]
         commandMenu.addItem(clearItem)
+        // Cmd+I → toggle interactive terminal input. Hands keyboard focus
+        // to the focused tab's terminal (so a TUI gets every keystroke
+        // natively), and toggles back to the command bar on a second
+        // press. The keyboard twin of double-clicking the pane. (Ctrl+I
+        // would be wrong — it's literally Tab to the terminal.)
+        let interactiveItem = NSMenuItem(
+            title: "Toggle Terminal Input",
+            action: #selector(toggleTerminalInput),
+            keyEquivalent: "i"
+        )
+        interactiveItem.keyEquivalentModifierMask = [.command]
+        commandMenu.addItem(interactiveItem)
         commandItem.submenu = commandMenu
         main.addItem(commandItem)
 
@@ -396,6 +408,10 @@ final class RivenApplication: NSObject, NSApplicationDelegate {
 
     @objc private func clearTerminal() {
         NotificationCenter.default.post(name: .rivenClearFocusedTerminal, object: nil)
+    }
+
+    @objc private func toggleTerminalInput() {
+        NotificationCenter.default.post(name: .rivenToggleTerminalInput, object: nil)
     }
 
     @objc private func splitRight() {
@@ -478,6 +494,10 @@ extension Notification.Name {
     static let rivenToggleSidebar = Notification.Name("RivenToggleSidebar")
     static let rivenOpenProject = Notification.Name("RivenOpenProject")
     static let rivenClearFocusedTerminal = Notification.Name("RivenClearFocusedTerminal")
+    /// Cmd+I — toggle interactive terminal input. RootView routes to
+    /// `controller.toggleTerminalInputFocus()`: hand keyboard focus to
+    /// the focused tab's terminal, or back to the command bar.
+    static let rivenToggleTerminalInput = Notification.Name("RivenToggleTerminalInput")
     /// Posted when a terminal pane is clicked. CommandInputTextView
     /// listens and grabs first-responder so the user can immediately
     /// type — the command bar is the default writing surface in Riven.

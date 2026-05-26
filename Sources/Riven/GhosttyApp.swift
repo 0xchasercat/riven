@@ -145,6 +145,23 @@ final class GhosttyApp: @unchecked Sendable {
         view(for: paneID)?.injectText(text)
     }
 
+    /// Command-bar submit: inject the line + a real Return keypress so
+    /// the shell executes it (see SurfacePaneView.submitLine).
+    @MainActor
+    func submitLine(_ text: String, into paneID: PaneID) {
+        view(for: paneID)?.submitLine(text)
+    }
+
+    /// Cmd+I path: give a terminal pane explicit keyboard focus (the
+    /// keyboard twin of double-clicking it).
+    @MainActor
+    func focusTerminal(_ paneID: PaneID) {
+        explicitlyFocusedPaneID = paneID
+        if let view = view(for: paneID) {
+            view.window?.makeFirstResponder(view)
+        }
+    }
+
     /// Pull the full grid+scrollback text for a pane (search / peek).
     @MainActor
     func readScrollback(for paneID: PaneID) -> String? {

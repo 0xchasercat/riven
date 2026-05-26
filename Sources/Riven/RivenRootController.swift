@@ -773,10 +773,10 @@ You can rename or delete this tab — it's a regular file at
             try? scrollback.updateMetadataCwd(paneID: paneID, cwd: resolved)
         }
 
-        // (2) Send the cd so the shell tracks the new pwd. Single-
-        // quote so paths with spaces / special chars survive. CR (\r)
-        // is the Enter byte; the PTY line discipline maps it to NL.
-        GhosttyApp.shared.injectText("cd '\(resolved)'\r", into: paneID)
+        // (2) Send the cd so the shell tracks the new pwd. Single-quote
+        // so paths with spaces / special chars survive. submitLine sends
+        // a real Return keypress so the shell actually runs it.
+        GhosttyApp.shared.submitLine("cd '\(resolved)'", into: paneID)
         return true
     }
 
@@ -1290,6 +1290,23 @@ You can rename or delete this tab — it's a regular file at
             let paneID = workspace.focusedTab.terminalPaneID
         else { return }
         GhosttyApp.shared.injectText(String(UnicodeScalar(byte)), into: paneID)
+    }
+
+    /// Cmd+I — toggle interactive terminal input. Hands keyboard focus
+    /// to the focused tab's terminal (so a TUI gets every keystroke
+    /// natively), or back to the command bar if the terminal already has
+    /// it. The keyboard twin of double-clicking the pane. No-op when the
+    /// focused surface isn't a terminal (e.g. an editor tab).
+    func toggleTerminalInputFocus() {
+        guard let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
+              let workspace = pane.workspace,
+              let paneID = workspace.focusedTab.terminalPaneID else { return }
+        if GhosttyApp.shared.explicitlyFocusedPaneID == paneID {
+            GhosttyApp.shared.explicitlyFocusedPaneID = nil
+            NotificationCenter.default.post(name: .rivenFocusCommandBar, object: nil)
+        } else {
+            GhosttyApp.shared.focusTerminal(paneID)
+        }
     }
 
     /// Toggle the focused workspace's sidebar between collapsed and

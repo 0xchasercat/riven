@@ -106,11 +106,14 @@ final class SurfacePaneView: NSView {
         }
         ghostty_surface_set_content_scale(surface, scale, scale)
         pushSize()
-        // Start UNfocused: the command bar is Riven's default writing
-        // surface. The user transfers keyboard focus to the terminal
-        // with a deliberate double-click (see mouseDown), and the solid/
-        // hollow cursor reflects which surface owns input.
-        ghostty_surface_set_focus(surface, false)
+        // Keep the surface visually focused (solid cursor): the command
+        // bar drives this terminal even when it holds AppKit keyboard
+        // focus, so the terminal is always the active output. KEYBOARD
+        // routing is separate — it follows AppKit first-responder, which
+        // defaults to the command bar and moves to the terminal on a
+        // deliberate double-click. (ghostty focus = cursor style; AppKit
+        // first-responder = where keystrokes go.)
+        ghostty_surface_set_focus(surface, true)
         if let paneID { GhosttyApp.shared.register(self, for: paneID) }
     }
 
@@ -133,6 +136,28 @@ final class SurfacePaneView: NSView {
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
         }
+    }
+
+    /// Command-bar submit: insert `text`, then send a REAL Return
+    /// keypress so the shell's line editor executes it. A bare "\r" in
+    /// injected text doesn't reliably trigger accept-line — bracketed
+    /// paste, zle raw mode, and CR/LF handling all interfere — but a
+    /// Return KEY event is encoded by ghostty for the terminal's current
+    /// mode, so it submits in a plain shell AND a raw-mode TUI alike.
+    func submitLine(_ text: String) {
+        guard let surface else { return }
+        if !text.isEmpty { injectText(text) }
+        var key = ghostty_input_key_s()
+        key.keycode = 36 // kVK_Return
+        key.mods = GHOSTTY_MODS_NONE
+        key.consumed_mods = GHOSTTY_MODS_NONE
+        key.composing = false
+        key.unshifted_codepoint = 0
+        key.text = nil
+        key.action = GHOSTTY_ACTION_PRESS
+        _ = ghostty_surface_key(surface, key)
+        key.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, key)
     }
 
     /// Pull the entire scrollback + viewport as text (search / peek).
@@ -190,14 +215,17 @@ final class SurfacePaneView: NSView {
 
     // MARK: - Focus
 
+    // We deliberately do NOT toggle ghostty's surface focus from
+    // become/resignFirstResponder: the surface stays visually focused
+    // (solid cursor) because the command bar drives it. These overrides
+    // exist only so AppKit keyboard first-responder still tracks here
+    // for the double-click-to-type path.
     override func becomeFirstResponder() -> Bool {
-        if let surface { ghostty_surface_set_focus(surface, true) }
-        return super.becomeFirstResponder()
+        super.becomeFirstResponder()
     }
 
     override func resignFirstResponder() -> Bool {
-        if let surface { ghostty_surface_set_focus(surface, false) }
-        return super.resignFirstResponder()
+        super.resignFirstResponder()
     }
 
     // MARK: - Keyboard
