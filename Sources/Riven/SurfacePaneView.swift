@@ -180,6 +180,25 @@ final class SurfacePaneView: NSView {
         return String(decoding: UnsafeRawBufferPointer(start: raw, count: Int(out.text_len)), as: UTF8.self)
     }
 
+    /// Send a Ctrl+<key> combo as a real key event (e.g. Cmd+K → Ctrl+L
+    /// clear). ghostty encodes the control byte from keycode + ctrl mod;
+    /// feeding the raw control byte through `ghostty_surface_text`
+    /// doesn't reliably fire the shell's bound widget.
+    func sendControlKey(keycode: UInt32, unshiftedCodepoint: UInt32) {
+        guard let surface else { return }
+        var key = ghostty_input_key_s()
+        key.keycode = keycode
+        key.mods = ghostty_input_mods_e(GHOSTTY_MODS_CTRL.rawValue)
+        key.consumed_mods = GHOSTTY_MODS_NONE
+        key.composing = false
+        key.unshifted_codepoint = unshiftedCodepoint
+        key.text = nil
+        key.action = GHOSTTY_ACTION_PRESS
+        _ = ghostty_surface_key(surface, key)
+        key.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, key)
+    }
+
     func reportCwd(_ path: String) {
         guard path != lastReportedCwd else { return }
         lastReportedCwd = path

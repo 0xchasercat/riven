@@ -152,6 +152,13 @@ final class GhosttyApp: @unchecked Sendable {
         view(for: paneID)?.submitLine(text)
     }
 
+    /// Cmd+K path: clear a terminal pane (Ctrl+L as a real key event).
+    @MainActor
+    func clearScreen(_ paneID: PaneID) {
+        // kVK_ANSI_L = 37, 'l' = 0x6C.
+        view(for: paneID)?.sendControlKey(keycode: 37, unshiftedCodepoint: 0x6C)
+    }
+
     /// Cmd+I path: give a terminal pane explicit keyboard focus (the
     /// keyboard twin of double-clicking it).
     @MainActor
@@ -182,17 +189,46 @@ final class GhosttyApp: @unchecked Sendable {
         config = newConfig
     }
 
-    /// Build a finalized `ghostty_config_t`. When a theme is supplied we
-    /// translate its terminal colors + ANSI palette into ghostty config
-    /// directives written to a temp file (libghostty has no set-by-key C
-    /// API — only `load_file`). We deliberately skip
-    /// `load_default_files` so Riven's behavior is deterministic and a
-    /// user's ~/.config/ghostty keybindings can't hijack the app.
+    /// Build a finalized `ghostty_config_t` in layers (later loads
+    /// override earlier ones):
+    ///   1. Riven's fallback defaults — TERM + a Nerd Font fallback.
+    ///   2. The user's ghostty config (`~/.config/ghostty/config` etc.),
+    ///      if any — so their font, colors, transparency, behaviors are
+    ///      all respected and override our fallbacks.
+    ///   3. Riven's theme colors LAST — but ONLY when the user has no
+    ///      ghostty config. With a user config present, their terminal
+    ///      should look exactly like their ghostty (the in-app theme
+    ///      picker still drives Riven's chrome); without one, Riven's
+    ///      theme drives the terminal.
+    /// (libghostty has no set-by-key C API, so each Riven layer is
+    /// written to a temp file and loaded via `ghostty_config_load_file`.)
     private static func makeConfig(theme: ThemeSpec?) -> ghostty_config_t {
         guard let config = ghostty_config_new() else {
             fatalError("ghostty_config_new failed")
         }
-        let text = configText(theme: theme)
+        load(config, baseConfigText())
+        let hasUserConfig = userGhosttyConfigExists()
+        ghostty_config_load_default_files(config)
+        if !hasUserConfig, let theme { load(config, themeColorText(theme)) }
+        ghostty_config_finalize(config)
+        return config
+    }
+
+    /// True if the user has a ghostty config at any of the standard
+    /// locations. When they do, we let it fully drive the terminal.
+    private static func userGhosttyConfigExists() -> Bool {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        var paths: [String] = []
+        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            paths.append("\(xdg)/ghostty/config")
+        }
+        paths.append("\(home)/.config/ghostty/config")
+        paths.append("\(home)/Library/Application Support/com.mitchellh.ghostty/config")
+        return paths.contains { fm.fileExists(atPath: $0) }
+    }
+
+    private static func load(_ config: ghostty_config_t, _ text: String) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("riven-ghostty-\(UUID().uuidString).conf")
         do {
@@ -202,37 +238,36 @@ final class GhosttyApp: @unchecked Sendable {
         } catch {
             NSLog("[ghostty] config write failed: \(error)")
         }
-        ghostty_config_finalize(config)
-        return config
     }
 
-    private static func configText(theme: ThemeSpec?) -> String {
-        var lines: [String] = [
+    /// Riven's fallback defaults. The user's ghostty config (loaded
+    /// after this) overrides these where it sets them.
+    private static func baseConfigText() -> String {
+        var lines = [
             // Advertise the universally-present xterm-256color terminfo
             // to child programs rather than ghostty's own xterm-ghostty
-            // (which needs its terminfo DB installed system-wide). This
-            // matches Riven's long-standing TERM choice and means we
-            // don't have to ship a terminfo tree in the .app. ghostty's
-            // renderer fidelity is unaffected — TERM only tells child
-            // programs which escape sequences are safe to emit.
+            // (which needs its terminfo DB installed system-wide). Means
+            // we don't have to ship a terminfo tree in the .app; ghostty's
+            // renderer fidelity is unaffected (TERM only tells child
+            // programs which escape sequences are safe to emit).
             "term = xterm-256color",
-            // Match Riven's long-standing terminal type: SF Mono at 13pt.
-            // Without an explicit family ghostty falls back to whatever it
-            // can find (it isn't shipping its bundled font here), which
-            // reads as a different, smaller face. ghostty falls back
-            // gracefully if SF Mono isn't installed.
-            "font-family = SF Mono",
-            "font-size = 13",
         ]
-        if let theme { lines += themeLines(theme) }
+        // Default to an installed Nerd Font (glyph-rich prompts —
+        // powerline, p10k, starship — expect one); fall back to ghostty's
+        // built-in default if the user has none. Deliberately NOT SF Mono.
+        // The user's ghostty config wins over this if it sets a font.
+        if let font = fallbackNerdFont() {
+            lines.append("font-family = \(font)")
+        }
+        lines.append("font-size = 13")
         lines.append("")
         return lines.joined(separator: "\n")
     }
 
-    private static func themeLines(_ theme: ThemeSpec) -> [String] {
+    private static func themeColorText(_ theme: ThemeSpec) -> String {
         let t = theme.terminal
         let a = t.ansi
-        return [
+        let lines = [
             "background = \(t.background.hex)",
             "foreground = \(t.foreground.hex)",
             "cursor-color = \(t.cursor.hex)",
@@ -253,7 +288,27 @@ final class GhosttyApp: @unchecked Sendable {
             "palette = 12=\(a.brightBlue.hex)",
             "palette = 13=\(a.brightMagenta.hex)",
             "palette = 14=\(a.brightCyan.hex)",
+            "",
         ]
+        return lines.joined(separator: "\n")
+    }
+
+    /// The name of an installed Nerd Font to use as the default terminal
+    /// face, or nil to let ghostty pick its built-in default. Checks a
+    /// few common mono Nerd Fonts first, then any family advertising
+    /// "Nerd Font".
+    private static func fallbackNerdFont() -> String? {
+        let families = NSFontManager.shared.availableFontFamilies
+        let preferred = [
+            "JetBrainsMono Nerd Font",
+            "Hack Nerd Font",
+            "FiraCode Nerd Font",
+            "MesloLGS NF",
+            "SauceCodePro Nerd Font",
+            "Symbols Nerd Font Mono",
+        ]
+        for name in preferred where families.contains(name) { return name }
+        return families.first { $0.localizedCaseInsensitiveContains("Nerd Font") }
     }
 
     /// Reduce a `#RRGGBB`/`#RRGGBBAA` token to opaque `#RRGGBB`.

@@ -1268,28 +1268,22 @@ You can rename or delete this tab — it's a regular file at
         recordPaneGraph(state.paneGraph.replacingPane(pane))
     }
 
-    /// Send a Ctrl+L (FF, 0x0C) byte to the focused workspace's focused
-    /// terminal tab — the binding every shell already interprets as
-    /// "clear screen". Editor tabs are a no-op for this command.
+    /// Clear the focused workspace's focused terminal tab — sends Ctrl+L,
+    /// the binding every shell interprets as "clear screen". Editor tabs
+    /// are a no-op. Wired to Cmd+K (see `RivenApp.installMenu`) via the
+    /// `.rivenClearFocusedTerminal` notification.
     ///
-    /// Wired to Cmd+K (see `RivenApp.installMenu`) and routed through
-    /// the `.rivenClearFocusedTerminal` notification so menu, palette,
-    /// and any future entry point can converge on one path.
+    /// We send Ctrl+L as a real KEY event (not a raw 0x0C byte through
+    /// the text path): ghostty encodes the control byte from keycode +
+    /// ctrl, whereas a control char fed through `ghostty_surface_text`
+    /// doesn't reliably trigger the shell's clear-screen widget.
     func clearFocusedTerminal() {
-        sendByteToFocusedTerminal(0x0C)
-    }
-
-    /// Inject a single control byte into the focused workspace's
-    /// focused terminal (e.g. Cmd+K → Ctrl+L clear). Editor tabs no-op
-    /// — there's no PTY. Routes through `GhosttyApp` to the registered
-    /// surface for the focused pane.
-    func sendByteToFocusedTerminal(_ byte: UInt8) {
         guard
             let pane = state.paneGraph.pane(state.paneGraph.focusedPaneID),
             let workspace = pane.workspace,
             let paneID = workspace.focusedTab.terminalPaneID
         else { return }
-        GhosttyApp.shared.injectText(String(UnicodeScalar(byte)), into: paneID)
+        GhosttyApp.shared.clearScreen(paneID)
     }
 
     /// Cmd+I — toggle interactive terminal input. Hands keyboard focus
