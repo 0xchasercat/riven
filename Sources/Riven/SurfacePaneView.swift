@@ -152,7 +152,11 @@ final class SurfacePaneView: NSView {
         key.mods = GHOSTTY_MODS_NONE
         key.consumed_mods = GHOSTTY_MODS_NONE
         key.composing = false
-        key.unshifted_codepoint = 0
+        // CR (0x0D) is the codepoint the Return key produces with no
+        // modifiers. ghostty's encoder needs this to emit accept-line —
+        // leaving it 0 made the key a no-op (same failure mode that
+        // broke printable keys), so the text appeared but never ran.
+        key.unshifted_codepoint = 0x0D
         key.text = nil
         key.action = GHOSTTY_ACTION_PRESS
         _ = ghostty_surface_key(surface, key)

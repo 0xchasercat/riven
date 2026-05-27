@@ -216,6 +216,13 @@ final class GhosttyApp: @unchecked Sendable {
             // renderer fidelity is unaffected — TERM only tells child
             // programs which escape sequences are safe to emit.
             "term = xterm-256color",
+            // Match Riven's long-standing terminal type: SF Mono at 13pt.
+            // Without an explicit family ghostty falls back to whatever it
+            // can find (it isn't shipping its bundled font here), which
+            // reads as a different, smaller face. ghostty falls back
+            // gracefully if SF Mono isn't installed.
+            "font-family = SF Mono",
+            "font-size = 13",
         ]
         if let theme { lines += themeLines(theme) }
         lines.append("")
@@ -232,7 +239,6 @@ final class GhosttyApp: @unchecked Sendable {
             // selectionBg is an 8-digit rgba token; ghostty's
             // selection-background wants an opaque color, so drop alpha.
             "selection-background = \(hex6(theme.chrome.selectionBg.hex))",
-            "font-size = 13",
             // ANSI palette: Riven curates the six chromatic pairs; the
             // achromatic slots (0/7/8/15) keep ghostty's defaults.
             "palette = 1=\(a.red.hex)",
