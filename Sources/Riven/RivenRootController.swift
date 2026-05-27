@@ -565,6 +565,11 @@ You can rename or delete this tab — it's a regular file at
             await workspace.updatePaneGraph(graph)
         }
         self.state.paneGraph = graph
+        // Evict cached terminal surfaces for panes that no longer exist
+        // so a closed tab/surface frees its in-process shell rather than
+        // leaking a running one. Surfaces for still-present panes are
+        // kept, so splits / rebuilds reuse them (no shell restart).
+        GhosttyApp.shared.retainOnly(Self.terminalPaneIDs(in: graph))
         // Capture the values the off-thread sync needs while we're
         // still on the main actor; PaneGraph is a value type, so the
         // closure gets its own copy.
@@ -692,6 +697,21 @@ You can rename or delete this tab — it's a regular file at
     /// peek see current content. Cheap to skip a pane with no live
     /// surface (closed tab from a restored snapshot) — it just keeps
     /// whatever was last written.
+    /// Every terminal pane id present anywhere in the graph. Used to
+    /// evict cached surface views for panes that have been closed.
+    private static func terminalPaneIDs(in graph: PaneGraph) -> Set<PaneID> {
+        var ids: Set<PaneID> = []
+        for pane in graph.panes.values {
+            guard let workspace = pane.workspace else { continue }
+            for tab in workspace.tabs {
+                for surface in tab.surfaces {
+                    if case let .terminal(paneID, _) = surface.kind { ids.insert(paneID) }
+                }
+            }
+        }
+        return ids
+    }
+
     private func syncScrollbackFromLiveSurfaces() {
         for pane in state.paneGraph.panes.values {
             guard let workspace = pane.workspace else { continue }

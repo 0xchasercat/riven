@@ -114,7 +114,9 @@ final class SurfacePaneView: NSView {
         // deliberate double-click. (ghostty focus = cursor style; AppKit
         // first-responder = where keystrokes go.)
         ghostty_surface_set_focus(surface, true)
-        if let paneID { GhosttyApp.shared.register(self, for: paneID) }
+        // Caching is owned by GhosttyApp.surfaceView(for:…) (called from
+        // TerminalPaneView.makeNSView), so the view + its surface survive
+        // SwiftUI rebuilds. Nothing to register here.
     }
 
     /// Called from the app's RENDER action → drive the Metal draw.
@@ -378,10 +380,9 @@ final class SurfacePaneView: NSView {
         if let paneID {
             let pid = paneID
             DispatchQueue.main.async {
-                GhosttyApp.shared.unregister(pid)
-                // This pane's view is gone (tab switch / close). If it
-                // held the explicit terminal focus, drop the intent so
-                // the command bar resumes being the default writer.
+                // The view only deallocates once it's been evicted from
+                // the cache (pane closed). Drop the explicit-focus intent
+                // if it pointed here so the command bar resumes default.
                 if GhosttyApp.shared.explicitlyFocusedPaneID == pid {
                     GhosttyApp.shared.explicitlyFocusedPaneID = nil
                 }

@@ -75,13 +75,15 @@ final class GhosttyApp: @unchecked Sendable {
     private var config: ghostty_config_t!
     private var lastAppliedThemeID: String?
 
-    /// paneID → live SurfacePaneView. Weak so a closed pane's view can
-    /// deallocate; dead entries are pruned lazily on access + register.
-    private final class WeakSurfaceRef {
-        weak var value: SurfacePaneView?
-        init(_ v: SurfacePaneView) { value = v }
-    }
-    private var registry: [PaneID: WeakSurfaceRef] = [:]
+    /// paneID → its live SurfacePaneView. STRONG so the surface (and its
+    /// in-process PTY / shell) survives SwiftUI rebuilds. Splitting a tab
+    /// restructures the view tree (TabLayoutView wraps leaves in nested
+    /// stacks), which would otherwise recreate the representable's NSView
+    /// and restart the shell — and clobber the command-bar registry. By
+    /// caching the view here and having `TerminalPaneView` reuse it, the
+    /// same NSView (and its surface) is re-parented across rebuilds.
+    /// `retainOnly` evicts panes removed from the workspace.
+    private var surfaces: [PaneID: SurfacePaneView] = [:]
 
     /// The pane the user DELIBERATELY double-clicked into, if any. This
     /// is the single source of truth for "the terminal owns input." The
@@ -121,22 +123,36 @@ final class GhosttyApp: @unchecked Sendable {
         ghostty_app_tick(app)
     }
 
-    // MARK: - Surface registry
+    // MARK: - Surface cache
 
+    /// Return the cached view for `paneID`, or create + cache one with
+    /// the given config. Reuse is what lets a surface (and its shell)
+    /// survive SwiftUI rebuilds — `TerminalPaneView.makeNSView` calls
+    /// this so a split/restructure re-parents the existing NSView rather
+    /// than spawning a fresh one.
     @MainActor
-    func register(_ view: SurfacePaneView, for paneID: PaneID) {
-        registry = registry.filter { $0.value.value != nil }
-        registry[paneID] = WeakSurfaceRef(view)
-    }
-
-    @MainActor
-    func unregister(_ paneID: PaneID) {
-        registry[paneID] = nil
+    func surfaceView(for paneID: PaneID, cwd: String, command: String?, env: [String: String]) -> SurfacePaneView {
+        if let existing = surfaces[paneID] { return existing }
+        let view = SurfacePaneView(paneID: paneID, cwd: cwd, command: command, env: env)
+        surfaces[paneID] = view
+        return view
     }
 
     @MainActor
     func view(for paneID: PaneID) -> SurfacePaneView? {
-        registry[paneID]?.value
+        surfaces[paneID]
+    }
+
+    /// Evict cached surface views whose pane is no longer present in the
+    /// workspace (tab / surface closed). Dropping the cache's strong ref
+    /// lets the view deallocate once SwiftUI also releases it, freeing
+    /// the ghostty surface (the shell exits). Called after every
+    /// pane-graph change so closed panes don't leak a running shell.
+    @MainActor
+    func retainOnly(_ livePaneIDs: Set<PaneID>) {
+        for id in surfaces.keys where !livePaneIDs.contains(id) {
+            surfaces[id] = nil
+        }
     }
 
     /// Command-bar path: send text straight to the PTY of the given pane.
@@ -185,7 +201,7 @@ final class GhosttyApp: @unchecked Sendable {
         lastAppliedThemeID = theme.id
         let newConfig = Self.makeConfig(theme: theme)
         ghostty_app_update_config(app, newConfig)
-        for ref in registry.values { ref.value?.applyConfig(newConfig) }
+        for view in surfaces.values { view.applyConfig(newConfig) }
         config = newConfig
     }
 

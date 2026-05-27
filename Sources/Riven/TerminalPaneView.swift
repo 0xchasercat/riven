@@ -50,7 +50,11 @@ struct TerminalPaneView: NSViewRepresentable {
             env["LANG"] = "en_US.UTF-8"
         }
 
-        let view = SurfacePaneView(paneID: paneID, cwd: cwd, command: command, env: env)
+        // Reuse the cached surface view for this pane if one exists, so
+        // the surface (and its in-process shell) survives SwiftUI
+        // rebuilds — e.g. splitting the tab restructures the view tree.
+        // Only a brand-new pane spawns a fresh surface.
+        let view = GhosttyApp.shared.surfaceView(for: paneID, cwd: cwd, command: command, env: env)
         view.onCwdChanged = onCwdChanged
         return view
     }
