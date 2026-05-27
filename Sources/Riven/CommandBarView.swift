@@ -631,7 +631,11 @@ private struct CommandBarTextView: NSViewRepresentable {
         fileprivate func hasAcceptableGhost() -> Bool {
             guard let textView,
                   let storage = textView.textStorage else { return false }
-            let typed = textView.string
+            // The TYPED portion only — `textView.string` includes the
+            // ghost suffix (it's appended to storage), so comparing that
+            // to storage.length is always equal and would never detect a
+            // ghost. currentTypedString() strips the ghost-flagged run.
+            let typed = currentTypedString()
             let typedNS = typed as NSString
             // Ghost text is always at the end of storage. If the
             // string length matches typed length, there's no ghost.
@@ -649,7 +653,10 @@ private struct CommandBarTextView: NSViewRepresentable {
         fileprivate func acceptGhostText() -> Bool {
             guard let textView,
                   let storage = textView.textStorage else { return false }
-            let typed = textView.string
+            // Typed portion only (see hasAcceptableGhost) — using
+            // textView.string here would include the ghost, making the
+            // guard below always fail and the accept a no-op.
+            let typed = currentTypedString()
             let typedLen = (typed as NSString).length
             guard storage.length > typedLen else { return false }
             isAdjustingGhostText = true
@@ -752,6 +759,17 @@ private struct CommandBarTextView: NSViewRepresentable {
                 // caret is parked at the typed/ghost boundary.
                 // Bare Right Arrow only — modifier combos fall
                 // through to native NSTextView word/line nav.
+                guard !isShift, !isCommand, !isOption, !isControl else { return false }
+                if hasAcceptableGhost() {
+                    _ = acceptGhostText()
+                    return true
+                }
+                return false
+
+            case 48: // tab
+                // Tab also accepts the autosuggestion (shell-style
+                // completion). If there's no ghost to accept, fall
+                // through so Tab inserts a literal "\t" as before.
                 guard !isShift, !isCommand, !isOption, !isControl else { return false }
                 if hasAcceptableGhost() {
                     _ = acceptGhostText()
